@@ -113,7 +113,7 @@ def extract_meta_from_table(table: dict):
 
 
 def parse_contact(text: str):
-    """'* 조직기획과 주무관 김일표 (044-205-2315) / 정부조직관리정보시스템(www.org.go.kr)'"""
+    """'* OO과 주무관 OOO (044-205-OOOO) / 정부조직관리정보시스템(www.org.go.kr)'"""
     t = text.lstrip('*').strip()
     phone = norm_phone(t)
     source_system = source_url = None
