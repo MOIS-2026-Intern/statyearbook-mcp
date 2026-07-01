@@ -4,16 +4,25 @@
 load_to_postgres.py
 parse_yearbook.py 가 만든 parsed_yearbook.json 을 schema.sql 스키마에 적재한다.
 
-두 가지 모드:
-  1) 실서버 적재 :  python load_to_postgres.py parsed_yearbook.json --dsn "postgresql://user:pw@host/db"
-  2) SQL 파일 생성:  python load_to_postgres.py parsed_yearbook.json --emit-sql load.sql
-                     -> psql -f schema.sql && psql -f load.sql 로 수동 적재 가능
+기본 동작(옵션 없이 실행):
+  python load_to_postgres.py parsed_yearbook.json
+  -> ① db/seeds/load_all.sql 로 DML 을 저장하고
+     ② .env 의 STATYEARBOOK_DSN(없으면 DATABASE_URL)이 있으면 실 DB 에도 적재한다.
 
+옵션:
+  --emit-sql PATH  : DML 저장 경로 변경(기본 db/seeds/load_all.sql). ''(빈값)이면 미저장.
+  --dsn DSN        : 적재 대상 DSN 직접 지정(미지정 시 .env 의 STATYEARBOOK_DSN 사용).
+  --no-db          : 실 DB 적재를 건너뛰고 SQL 파일만 생성.
+
+적재는 항상 기존 데이터를 전부 비우고(TRUNCATE ... RESTART IDENTITY CASCADE) 다시 넣는다.
 PK(stat_id 등)는 파이썬에서 명시적으로 부여하여 FK 연결을 결정적으로 만든다.
 끝에서 시퀀스를 setval 로 맞추고, search_doc(tsvector)를 채운다.
-embedding(vector)은 임베딩 모델이 필요하므로 --embed 옵션으로 별도 처리(기본 NULL).
+embedding(vector)은 임베딩 모델이 필요하므로 별도 스크립트로 처리(기본 NULL).
 """
-import json, argparse, sys
+import json, argparse, sys, os
+from dotenv import load_dotenv
+
+load_dotenv()  # .env 의 STATYEARBOOK_DSN 등을 환경변수로 로드
 
 
 # ── parsed json -> 각 테이블의 행(tuple) 리스트로 평탄화 ──────────────
@@ -83,6 +92,8 @@ SEQ = {  # 시퀀스 setval 대상 (테이블, PK컬럼)
 ORDER = ['publications', 'statistics', 'stat_tables', 'footnotes',
          'contacts', 'statistic_images']
 
+TRUNCATE_SQL = 'TRUNCATE ' + ', '.join(ORDER) + ' RESTART IDENTITY CASCADE;'
+
 SEARCH_DOC_SQL = (
     "UPDATE statistics SET search_doc = to_tsvector('simple', "
     "coalesce(title_ko,'')||' '||coalesce(title_en,'')||' '||"
@@ -95,6 +106,7 @@ def load_live(rows, dsn):
     import psycopg
     from psycopg.types.json import Jsonb
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(TRUNCATE_SQL)          # 기존 데이터 전부 삭제 후 재적재
         for tbl in ORDER:
             data = rows[tbl]
             if not data:
@@ -133,6 +145,8 @@ def sql_lit(v):
 def emit_sql(rows, path):
     with open(path, 'w', encoding='utf-8') as f:
         f.write('BEGIN;\n')
+        f.write('\n-- 기존 데이터 전부 삭제 후 재적재\n')
+        f.write(TRUNCATE_SQL + '\n')
         for tbl in ORDER:
             data = rows[tbl]
             if not data:
@@ -159,11 +173,21 @@ def emit_sql(rows, path):
     print(f'-> {path}')
 
 
+DEFAULT_SEED = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            '..', 'db', 'seeds', 'load_all.sql')
+
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('parsed_json')
-    ap.add_argument('--dsn', help='postgresql://user:pw@host:port/db (실서버 적재)')
-    ap.add_argument('--emit-sql', help='INSERT문 .sql 파일로 출력')
+    ap.add_argument('--dsn',
+                    default=os.environ.get('STATYEARBOOK_DSN')
+                    or os.environ.get('DATABASE_URL'),
+                    help='postgresql://user:pw@host:port/db '
+                         '(미지정 시 .env 의 STATYEARBOOK_DSN, 없으면 DATABASE_URL 사용)')
+    ap.add_argument('--emit-sql', default=DEFAULT_SEED,
+                    help='INSERT문 .sql 저장 경로(기본 db/seeds/load_all.sql, 빈값이면 미저장)')
+    ap.add_argument('--no-db', action='store_true',
+                    help='실 DB 적재를 건너뛰고 SQL 파일만 생성')
     args = ap.parse_args()
 
     data = json.load(open(args.parsed_json, encoding='utf-8'))
@@ -172,8 +196,13 @@ if __name__ == '__main__':
     print('적재 대상:', counts)
 
     if args.emit_sql:
+        os.makedirs(os.path.dirname(os.path.abspath(args.emit_sql)), exist_ok=True)
         emit_sql(rows, args.emit_sql)
-    if args.dsn:
+
+    if args.no_db:
+        print('--no-db: 실 DB 적재를 건너뜁니다.')
+    elif args.dsn:
         load_live(rows, args.dsn)
-    if not args.dsn and not args.emit_sql:
-        print('\n--dsn 또는 --emit-sql 중 하나를 지정하세요.', file=sys.stderr)
+    else:
+        print('\nDSN 미지정: 실 DB 적재를 건너뜁니다. '
+              '.env 의 STATYEARBOOK_DSN 또는 --dsn 을 지정하세요.', file=sys.stderr)
