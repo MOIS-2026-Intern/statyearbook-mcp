@@ -2,3 +2,4 @@ ijson
 psycopg[binary]
 mcp
 python-dotenv
+openai
