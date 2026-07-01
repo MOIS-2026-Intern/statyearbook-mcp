@@ -7,9 +7,10 @@ statyearbook MCP server
 첫 번째 도구: search_statistics
   - 자연어 질의와 관련 있는 통계표를 검색해 제목/식별자 목록을 돌려준다.
   - SQL은 서버에 고정되어 있고, LLM은 검색어(query)만 파라미터로 넘긴다.
-  - 질의를 공백으로 토큰화한 뒤 각 토큰을 title_ko/title_en 등에 ILIKE(부분일치)로
-    OR 매칭하고, "몇 개의 토큰이 걸렸는가"를 점수로 매겨 정렬한다.
-    → 문장에 검색어가 많아도 실제 제목에 일부만 들어있으면 상위에 뜬다.
+  - 의미 검색(semantic search): 질의를 임베딩 적재 때와 동일한 OpenAI 모델로
+    임베딩한 뒤, statistics.embedding 과 코사인 거리(<=>)로 비교해 가까운 순으로 정렬한다.
+    → "폭염"으로 검색해도 "온열질환"처럼 표현이 달라도 의미가 가까우면 상위에 뜬다.
+  - 참고용으로 질의 토큰이 제목에 실제로 들어있는지(matched_tokens)도 함께 돌려준다.
 
 실행:
     pip install -r requirements.txt
@@ -26,6 +27,7 @@ import re
 import psycopg
 from psycopg.rows import dict_row
 from dotenv import load_dotenv
+from openai import OpenAI
 from mcp.server.fastmcp import FastMCP
 
 # 같은 폴더의 .env 파일에서 환경변수를 읽어들인다(있으면).
@@ -38,6 +40,28 @@ if not DSN:
         "STATYEARBOOK_DSN 이 설정되지 않았습니다. "
         ".env.example 를 .env 로 복사한 뒤 접속 정보를 채워 주세요."
     )
+
+# 의미 검색용 임베딩 모델. load/embedding.py 로 저장한 것과 반드시 동일해야
+# 벡터 공간이 일치한다(text-embedding-3-small = 1536차원, 스키마 vector(1536)).
+EMBED_MODEL = os.environ.get("STATYEARBOOK_EMBED_MODEL", "text-embedding-3-small")
+
+# OpenAI 클라이언트는 처음 검색할 때 한 번만 만든다(모듈 로드 시 키가 없어도 서버는 뜨게).
+_openai_client: OpenAI | None = None
+
+
+def _embed_query(text: str) -> str:
+    """질의를 임베딩해 pgvector 리터럴 '[0.1,0.2,...]' 로 돌려준다."""
+    global _openai_client
+    if _openai_client is None:
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise RuntimeError(
+                "OPENAI_API_KEY 미설정: 의미 검색을 하려면 .env 에 키를 넣어 주세요."
+            )
+        _openai_client = OpenAI()
+    resp = _openai_client.embeddings.create(model=EMBED_MODEL, input=text)
+    vec = resp.data[0].embedding
+    return "[" + ",".join(repr(float(x)) for x in vec) + "]"
+
 
 mcp = FastMCP("statyearbook")
 
@@ -78,39 +102,34 @@ def search_statistics(query: str, year: int | None = None, limit: int = 5) -> di
         dict: {"query", "tokens", "count", "results": [...]}
               results 각 항목은 stat_id/year/title_ko/chapter/section/unit/
               base_date/matched_tokens/score 를 포함한다.
+              score 는 코사인 유사도(1=의미상 완전 일치, 클수록 관련도 높음)다.
     """
-    tokens = _tokenize(query)
-    if not tokens:
+    if not query or not query.strip():
         return {"query": query, "tokens": [], "count": 0, "results": []}
 
-    # 검색 대상 텍스트: 제목(국/영) + 장/절. NULL은 빈 문자열로.
-    doc = (
-        "coalesce(title_ko,'') || ' ' || coalesce(title_en,'') || ' ' || "
-        "coalesce(chapter,'') || ' ' || coalesce(section,'')"
-    )
+    tokens = _tokenize(query)
 
-    # 토큰마다 매칭 여부(0/1)를 합산해 score 로 사용.
-    score_terms = " + ".join(
-        [f"(CASE WHEN {doc} ILIKE %s THEN 1 ELSE 0 END)" for _ in tokens]
-    )
-    params: list = [f"%{t}%" for t in tokens]  # score 계산용
+    # 질의를 임베딩해 저장된 제목 벡터와 코사인 거리로 비교한다.
+    # <=> 는 pgvector 의 코사인 거리(0=완전 일치 ~ 2=정반대). 작을수록 가깝다.
+    query_vec = _embed_query(query)
 
-    where = [f"({doc}) ILIKE ANY(%s)"]  # 최소 한 토큰은 매칭
-    params.append([f"%{t}%" for t in tokens])
+    where = ["embedding IS NOT NULL"]  # 아직 임베딩 안 된 행은 제외
+    params: list = [query_vec]  # SELECT 절의 distance 계산용
 
     if year is not None:
         where.append("year = %s")
         params.append(year)
 
-    params.append(limit)  # LIMIT
+    params.append(query_vec)  # ORDER BY 절의 거리
+    params.append(limit)      # LIMIT
 
     sql = f"""
         SELECT stat_id, year, ref_id, chapter, section,
                title_ko, title_en, unit, base_date, page_start,
-               ({score_terms}) AS score
+               (embedding <=> %s::vector) AS distance
         FROM statistics
         WHERE {" AND ".join(where)}
-        ORDER BY score DESC, year DESC, stat_id ASC
+        ORDER BY embedding <=> %s::vector, year DESC, stat_id ASC
         LIMIT %s
     """
 
@@ -125,6 +144,8 @@ def search_statistics(query: str, year: int | None = None, limit: int = 5) -> di
             str(r.get(k) or "") for k in ("title_ko", "title_en", "chapter", "section")
         ).lower()
         matched = [t for t, lt in zip(tokens, lowered_tokens) if lt in hay]
+        # score: 코사인 유사도(1=완전 일치). LLM이 관련도를 가늠하기 쉽게 거리에서 변환.
+        similarity = round(1.0 - float(r["distance"]), 4)
         results.append(
             {
                 "stat_id": r["stat_id"],
@@ -138,7 +159,7 @@ def search_statistics(query: str, year: int | None = None, limit: int = 5) -> di
                 "base_date": r["base_date"],
                 "page_start": r["page_start"],
                 "matched_tokens": matched,
-                "score": r["score"],
+                "score": similarity,
             }
         )
 
