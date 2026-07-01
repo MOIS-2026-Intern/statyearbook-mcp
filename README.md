@@ -10,4 +10,5 @@
 ```bash
 > python load/parse_yearbook.py 통계연보.json
 > python load/load_to_postgres.py load/parsed_yearbook.json
+> python load/embedding.py
 ```
