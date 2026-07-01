@@ -7,6 +7,6 @@
 
 
 ```bash
-> python parser/parse_yearbook.py 통계연보.json
-> python parser/load_to_postgres.py parser/parsed_yearbook.json
+> python load/parse_yearbook.py 통계연보.json
+> python load/load_to_postgres.py load/parsed_yearbook.json
 ```

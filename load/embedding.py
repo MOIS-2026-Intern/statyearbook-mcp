@@ -10,13 +10,13 @@ statistics 테이블의 제목을 OpenAI 임베딩으로 변환해 embedding(vec
 
 전제:
   - db/migrations/0001_init.sql 로 스키마가 만들어져 있고
-  - parser/load_to_postgres.py 로 데이터가 적재된 상태(embedding 은 NULL)
+  - load/load_to_postgres.py 로 데이터가 적재된 상태(embedding 은 NULL)
   - .env 에 STATYEARBOOK_DSN, OPENAI_API_KEY 가 설정돼 있음
 
 사용법:
-  python parser/embedding.py            # embedding 이 비어있는 행만 채움
-  python parser/embedding.py --all      # 전부 다시 임베딩(제목이 바뀐 경우)
-  python parser/embedding.py --model text-embedding-3-small --batch 100
+  python load/embedding.py            # embedding 이 비어있는 행만 채움
+  python load/embedding.py --all      # 전부 다시 임베딩(제목이 바뀐 경우)
+  python load/embedding.py --model text-embedding-3-small --batch 100
 
 주의:
   스키마는 vector(1536) 이므로 임베딩 차원이 1536 인 모델을 써야 한다.

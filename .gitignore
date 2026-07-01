@@ -14,5 +14,5 @@ __pycache__/
 # db
 /db/seeds/*.sql
 
-#parser
-/parser/parsed_yearbook.json
+#load
+/load/parsed_yearbook.json

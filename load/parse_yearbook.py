@@ -263,7 +263,7 @@ def parse(json_path: str, image_dir: str = None):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('json_path')
-    ap.add_argument('-o', '--out', default='parser/parsed_yearbook.json')
+    ap.add_argument('-o', '--out', default='load/parsed_yearbook.json')
     ap.add_argument('--image-dir', default=None,
                     help='지정 시 이미지 base64를 파일로 저장')
     args = ap.parse_args()
