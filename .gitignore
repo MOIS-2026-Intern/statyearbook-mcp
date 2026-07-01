@@ -1,3 +1,11 @@
-통계연보.hwpx
-통계연보2.json
-통계연보2.md
+/data/*
+
+# secrets / local env
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.pyc
+.venv/
