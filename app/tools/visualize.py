@@ -122,6 +122,7 @@ def _caption_row_indexes(body: dict) -> set[int]:
     return skip
 
 
+# 라벨 비교에 쓰도록 공백을 정리한다.
 def _clean_label(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
@@ -138,11 +139,13 @@ def _unique_headers(header: list[str]) -> list[str]:
     return names
 
 
+# 데이터 중간에 반복된 헤더 행인지 판단한다.
 def _looks_like_repeated_header(row: list[str], headers: list[str]) -> bool:
     cleaned = [_clean_label(value) for value in row]
     return cleaned == headers or sum(1 for left, right in zip(cleaned, headers) if left == right) >= 2
 
 
+# 행에 숫자나 연도 값이 있어 데이터 행으로 볼 수 있는지 판단한다.
 def _looks_like_data_row(row: list[str]) -> bool:
     nonempty = [_clean_label(value) for value in row if _clean_label(value)]
     if not nonempty:
@@ -154,6 +157,7 @@ def _looks_like_data_row(row: list[str]) -> bool:
     return numeric_like >= 1
 
 
+# 여러 헤더 행을 컬럼별로 합쳐 최종 헤더를 만든다.
 def _combine_header_rows(header_rows: list[list[str]], width: int) -> list[str]:
     headers: list[str] = []
     for col_idx in range(width):
@@ -203,6 +207,7 @@ def _body_to_rows(body: dict) -> tuple[list[str], list[dict[str, str]], list[str
     return headers, rows, warnings
 
 
+# 문자열 숫자 표기를 float 값으로 변환한다.
 def _parse_number(value: Any) -> float | None:
     text = _clean_label(value)
     if not text or text in {"-", "－", "—", "–"}:
@@ -223,6 +228,7 @@ def _parse_number(value: Any) -> float | None:
     return float(normalized)
 
 
+# 값 앞부분에서 연도를 추출한다.
 def _parse_year(value: Any) -> int | None:
     match = re.match(r"^\s*((?:18|19|20)\d{2})", str(value or ""))
     if not match:
@@ -230,6 +236,7 @@ def _parse_year(value: Any) -> int | None:
     return int(match.group(1))
 
 
+# 헤더 문자열 안에서 연도를 추출한다.
 def _parse_header_year(value: Any) -> int | None:
     match = re.search(r"((?:18|19|20)\d{2})", str(value or ""))
     if not match:
@@ -237,15 +244,18 @@ def _parse_header_year(value: Any) -> int | None:
     return int(match.group(1))
 
 
+# 컬럼명/질의어 비교용 키로 정규화한다.
 def _normalize_key(value: Any) -> str:
     return re.sub(r"[^\w가-힣]+", "", str(value or "").lower())
 
 
+# 한국어 라벨 내부의 불필요한 띄어쓰기를 줄인다.
 def _compact_korean_spacing(value: Any) -> str:
     text = _clean_label(value)
     return re.sub(r"(?<=[가-힣])\s+(?=[가-힣])", "", text)
 
 
+# 차트에 표시할 범주 라벨을 보기 좋게 다듬는다.
 def _display_category_label(value: Any) -> str:
     text = _compact_korean_spacing(value)
     match = re.match(r"([가-힣･·ㆍ\s]+)", text)
@@ -256,6 +266,7 @@ def _display_category_label(value: Any) -> str:
     return text
 
 
+# 각 컬럼의 숫자형/연도형 여부를 계산한다.
 def _profile_columns(columns: list[str], rows: list[dict[str, str]]) -> list[dict[str, Any]]:
     profiles: list[dict[str, Any]] = []
     for column in columns:
@@ -280,10 +291,12 @@ def _profile_columns(columns: list[str], rows: list[dict[str, str]]) -> list[dic
     return profiles
 
 
+# 컬럼 프로필을 이름으로 빠르게 찾는 맵으로 바꾼다.
 def _profile_by_name(profiles: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {profile["name"]: profile for profile in profiles}
 
 
+# 요청한 별칭이 컬럼 프로필과 맞는지 확인한다.
 def _matches_alias(requested: str, profile: dict[str, Any]) -> bool:
     label = _normalize_key(profile["name"])
     key = _normalize_key(requested)
@@ -296,6 +309,7 @@ def _matches_alias(requested: str, profile: dict[str, Any]) -> bool:
     return False
 
 
+# 요청한 컬럼명을 실제 표 컬럼명으로 해석한다.
 def _resolve_column(requested: str | None, profiles: list[dict[str, Any]]) -> str | None:
     if not requested:
         return None
@@ -314,6 +328,7 @@ def _resolve_column(requested: str | None, profiles: list[dict[str, Any]]) -> st
     return None
 
 
+# 라벨에서 질의 매칭에 쓸 토큰을 뽑는다.
 def _label_tokens(label: str) -> list[str]:
     return [
         token.lower()
@@ -322,6 +337,7 @@ def _label_tokens(label: str) -> list[str]:
     ]
 
 
+# 질의어와 가장 잘 맞는 후보 컬럼을 고른다.
 def _pick_column_from_query(query: str | None, candidates: list[str]) -> str | None:
     if not query:
         return None
@@ -339,15 +355,18 @@ def _pick_column_from_query(query: str | None, candidates: list[str]) -> str | N
     return scored[0][1]
 
 
+# 여러 요청 텍스트를 하나의 검색 문자열로 합친다.
 def _query_text(*values: str | None) -> str:
     return " ".join(value for value in values if value)
 
 
+# 텍스트에 지정한 키워드가 포함됐는지 확인한다.
 def _contains_any(text: str | None, words: tuple[str, ...]) -> bool:
     lowered = (text or "").lower()
     return any(word in lowered for word in words)
 
 
+# 요청이 추이형 차트를 의도하는지 판단한다.
 def _wants_trend_chart(query: str | None, chart_type: str, x: str | None) -> bool:
     if chart_type in {"line", "area"}:
         return True
@@ -356,10 +375,12 @@ def _wants_trend_chart(query: str | None, chart_type: str, x: str | None) -> boo
     return _contains_any(query, TREND_WORDS)
 
 
+# 요청이 증감/변화량 차트를 의도하는지 판단한다.
 def _wants_delta_chart(query: str | None) -> bool:
     return _contains_any(query, DELTA_WORDS)
 
 
+# 연도가 들어간 숫자 컬럼들을 연도순으로 찾는다.
 def _year_value_columns(profiles: list[dict[str, Any]]) -> list[tuple[int, str]]:
     columns = []
     for profile in profiles:
@@ -369,6 +390,7 @@ def _year_value_columns(profiles: list[dict[str, Any]]) -> list[tuple[int, str]]
     return sorted(columns, key=lambda item: item[0])
 
 
+# 행 라벨과 질의어를 비교할 검색어 후보를 만든다.
 def _label_match_terms(value: Any) -> list[str]:
     label = _compact_korean_spacing(value)
     terms = {_normalize_key(label)}
@@ -381,6 +403,7 @@ def _label_match_terms(value: Any) -> list[str]:
     return [term for term in terms if term]
 
 
+# 행 라벨이 질의어와 얼마나 맞는지 점수화한다.
 def _row_match_score(row_label: str, query_text: str) -> int:
     query_key = _normalize_key(query_text)
     if not query_key:
@@ -393,6 +416,7 @@ def _row_match_score(row_label: str, query_text: str) -> int:
     return score
 
 
+# wide 연도 표에서 질의 대상이 되는 행을 고른다.
 def _pick_focus_row(
     rows: list[dict[str, str]],
     category_column: str,
@@ -414,6 +438,7 @@ def _pick_focus_row(
     return scored[0][2]
 
 
+# x축으로 쓸 컬럼을 연도/범주 우선순위로 고른다.
 def _pick_x_column(profiles: list[dict[str, Any]], query: str | None) -> str | None:
     year_columns = [profile["name"] for profile in profiles if profile["is_year"]]
     query_match = _pick_column_from_query(query, year_columns)
@@ -433,11 +458,13 @@ def _pick_x_column(profiles: list[dict[str, Any]], query: str | None) -> str | N
     return categorical_columns[0] if categorical_columns else (profiles[0]["name"] if profiles else None)
 
 
+# 라벨이 합계/총계 행인지 확인한다.
 def _is_total_label(value: Any) -> bool:
     text = _clean_label(value).lower()
     return any(text == word or text.startswith(f"{word} ") for word in TOTAL_WORDS)
 
 
+# 행에서 x축 값을 꺼내 축 타입에 맞게 변환한다.
 def _row_x_value(row: dict[str, str], x_column: str | None, profile: dict[str, Any] | None) -> Any:
     if not x_column:
         return ""
@@ -448,6 +475,7 @@ def _row_x_value(row: dict[str, str], x_column: str | None, profile: dict[str, A
     return parsed if parsed is not None else raw
 
 
+# 너무 많은 계열은 값 합계 기준 상위 계열만 남긴다.
 def _limit_series(records: list[dict[str, Any]], warnings: list[str]) -> list[dict[str, Any]]:
     series_names = []
     for record in records:
@@ -469,6 +497,7 @@ def _limit_series(records: list[dict[str, Any]], warnings: list[str]) -> list[di
     return [record for record in records if record.get("series") in keep]
 
 
+# 너무 많은 범주는 값 합계 기준 상위 범주만 남긴다.
 def _limit_categories(
     records: list[dict[str, Any]],
     chart_type: str,
@@ -499,11 +528,13 @@ def _limit_categories(
     return [record for record in records if record["x"] in keep]
 
 
+# 요청이 비중/구성비 차트를 의도하는지 판단한다.
 def _wants_share_chart(query: str | None) -> bool:
     text = (query or "").lower()
     return any(word in text for word in SHARE_WORDS)
 
 
+# 표 메타데이터와 선택 범주로 차트 제목을 만든다.
 def _chart_title(table: dict, subtitle: str | None = None) -> str:
     title = table["title_ko"]
     if subtitle:
@@ -513,6 +544,7 @@ def _chart_title(table: dict, subtitle: str | None = None) -> str:
     return title
 
 
+# 요청과 데이터 구조를 바탕으로 최종 차트 타입을 결정한다.
 def _select_chart(
     requested: str,
     query: str | None,
@@ -554,6 +586,7 @@ def _select_chart(
     return requested_type, "client_spec_validated", "클라이언트가 지정한 차트 타입을 데이터 구조 검증 후 사용했습니다."
 
 
+# 차트 타입에 맞게 레코드 표시 순서를 정한다.
 def _sort_records(records: list[dict[str, Any]], x_is_year: bool, chart_type: str) -> list[dict[str, Any]]:
     if x_is_year or chart_type in {"line", "area", "scatter"}:
         return sorted(records, key=lambda record: (record.get("x") is None, record.get("x"), str(record.get("series", ""))))
@@ -562,6 +595,7 @@ def _sort_records(records: list[dict[str, Any]], x_is_year: bool, chart_type: st
     return records
 
 
+# 행은 범주, 열은 연도인 표를 시계열 차트 spec으로 변환한다.
 def _wide_year_time_series_spec(
     table: dict,
     query: str | None,
@@ -697,6 +731,7 @@ def _wide_year_time_series_spec(
     }
 
 
+# 표 데이터와 요청값을 차트 렌더링용 spec으로 만든다.
 def _build_plot_spec(
     table: dict,
     query: str | None,
@@ -841,6 +876,7 @@ def _build_plot_spec(
     }
 
 
+# matplotlib, pandas, seaborn을 지연 로드한다.
 def _load_plotting():
     try:
         cache_dir = Path(os.environ.get("MPLCONFIGDIR", Path(os.environ.get("TMPDIR", "/tmp")) / "statyearbook-matplotlib"))
@@ -859,6 +895,7 @@ def _load_plotting():
     return plt, pd, sns
 
 
+# 차트 테마와 한글 폰트 설정을 적용한다.
 def _configure_plot(plt: Any, sns: Any) -> None:
     from matplotlib import font_manager
 
@@ -871,12 +908,14 @@ def _configure_plot(plt: Any, sns: Any) -> None:
     plt.rcParams["axes.unicode_minus"] = False
 
 
+# 단위 메타데이터로 y축 라벨을 만든다.
 def _value_axis_label(unit: str | None) -> str:
     if unit:
         return f"{unit} 수"
     return "값"
 
 
+# 선그래프 y축 범위에 여백을 더한다.
 def _line_ylim(values: list[float]) -> tuple[float, float]:
     if not values:
         return 0.0, 1.0
@@ -893,6 +932,7 @@ def _line_ylim(values: list[float]) -> tuple[float, float]:
     return lower, upper
 
 
+# 공통 축 제목, 라벨, 눈금 회전을 적용한다.
 def _finish_axes(ax: Any, title: str, unit: str | None) -> None:
     ax.set_title(title, pad=14)
     ax.set_xlabel("")
@@ -904,6 +944,7 @@ def _finish_axes(ax: Any, title: str, unit: str | None) -> None:
             label.set_horizontalalignment("right")
 
 
+# 표 미리보기를 PNG 표 이미지로 렌더링한다.
 def _render_table_image(spec: dict[str, Any], plt: Any) -> bytes:
     rows = spec["data"]["table_preview"][:12]
     columns = [profile["name"] for profile in spec["columns"]][:6]
@@ -919,6 +960,7 @@ def _render_table_image(spec: dict[str, Any], plt: Any) -> bytes:
     return _fig_to_png(fig, plt)
 
 
+# 단일 시계열과 선택적 증감 보조 차트를 PNG로 렌더링한다.
 def _render_single_line_image(spec: dict[str, Any], plt: Any, pd: Any) -> bytes:
     records = spec["data"]["records"]
     df = pd.DataFrame(records)
@@ -972,6 +1014,7 @@ def _render_single_line_image(spec: dict[str, Any], plt: Any, pd: Any) -> bytes:
     return _fig_to_png(fig, plt)
 
 
+# matplotlib figure를 PNG 바이트로 변환하고 닫는다.
 def _fig_to_png(fig: Any, plt: Any) -> bytes:
     buffer = BytesIO()
     fig.savefig(buffer, format="png", dpi=160, bbox_inches="tight", facecolor="white")
@@ -979,6 +1022,7 @@ def _fig_to_png(fig: Any, plt: Any) -> bytes:
     return buffer.getvalue()
 
 
+# 파일명에 안전하게 넣을 수 있는 문자열로 바꾼다.
 def _safe_filename_part(value: Any) -> str:
     text = re.sub(r"[^0-9A-Za-z가-힣_-]+", "_", str(value or "")).strip("_")
     return text[:60] or "chart"
@@ -1013,6 +1057,7 @@ def _write_png_asset(spec: dict[str, Any], png_bytes: bytes) -> dict[str, Any] |
     }
 
 
+# 차트 spec을 실제 PNG 이미지로 렌더링한다.
 def _render_png(spec: dict[str, Any]) -> bytes:
     plt, pd, sns = _load_plotting()
     _configure_plot(plt, sns)
@@ -1180,6 +1225,7 @@ def _vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
     return root
 
 
+# 도구 응답에 넣을 요약 문구를 만든다.
 def _summary_text(spec: dict[str, Any]) -> str:
     chart = spec["chart"]
     lines = [
@@ -1201,6 +1247,7 @@ def _summary_text(spec: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# MCP 오류 응답 객체를 만든다.
 def _error_result(message: str, stat_id: int, table_seq: int) -> CallToolResult:
     return CallToolResult(
         isError=True,
