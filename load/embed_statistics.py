@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-embedding.py
+embed_statistics.py
 statistics 테이블의 제목을 OpenAI 임베딩으로 변환해 embedding(vector) 컬럼을 채운다.
 
 임베딩은 "한 번만" 만들어 저장하면 된다. 이후 검색 시에는 사용자 질의만 그때그때
@@ -14,9 +14,9 @@ statistics 테이블의 제목을 OpenAI 임베딩으로 변환해 embedding(vec
   - .env 에 STATYEARBOOK_DSN, OPENAI_API_KEY 가 설정돼 있음
 
 사용법:
-  python load/embedding.py            # embedding 이 비어있는 행만 채움
-  python load/embedding.py --all      # 전부 다시 임베딩(제목이 바뀐 경우)
-  python load/embedding.py --model text-embedding-3-small --batch 100
+  python load/embed_statistics.py            # embedding 이 비어있는 행만 채움
+  python load/embed_statistics.py --all      # 전부 다시 임베딩(제목이 바뀐 경우)
+  python load/embed_statistics.py --model text-embedding-3-small --batch 100
 
 주의:
   스키마는 vector(1536) 이므로 임베딩 차원이 1536 인 모델을 써야 한다.
