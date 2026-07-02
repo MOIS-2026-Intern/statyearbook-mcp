@@ -2,6 +2,7 @@
 from mcp.server.fastmcp import FastMCP
 
 from app.db import connect
+from app.tool_descriptions import SEARCH_TABLES
 
 
 STAT_SQL = """
@@ -99,9 +100,8 @@ def build_response(stat: dict, tables: list, footnotes: list, source: list) -> d
 # search_tables MCP 도구를 등록한다.
 def register(mcp: FastMCP) -> None:
     # stat_id에 해당하는 표 본문과 메타데이터를 가져온다.
-    @mcp.tool()
+    @mcp.tool(description=SEARCH_TABLES)
     def search_tables(stat_id: int) -> dict:
-        """통계표의 표 본문과 메타데이터를 가져온다."""
         stat, tables, footnotes, source = fetch_table_data(stat_id)
         if stat is None:
             return {"found": False, "stat_id": stat_id, "tables": []}

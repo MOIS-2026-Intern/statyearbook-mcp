@@ -5,6 +5,7 @@ from mcp.server.fastmcp import FastMCP
 
 from app.db import connect
 from app.query_embedding import embed_query
+from app.tool_descriptions import SEARCH_STATISTICS
 
 SEARCH_TEXT_COLUMNS = ("title_ko", "title_en", "chapter", "section")
 
@@ -103,9 +104,8 @@ def _empty_response(query: str) -> dict:
 # search_statistics MCP 도구를 등록한다.
 def register(mcp: FastMCP) -> None:
     # 자연어 질의로 관련 통계표 목록을 찾는다.
-    @mcp.tool()
+    @mcp.tool(description=SEARCH_STATISTICS)
     def search_statistics(query: str, year: int | None = None, limit: int = 5) -> dict:
-        """자연어 질의와 관련 있는 통계표를 검색한다."""
         if not query or not query.strip():
             return _empty_response(query)
 
