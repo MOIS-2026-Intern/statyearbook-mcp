@@ -1,74 +1,146 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-load_to_postgres.py
-parse_yearbook.py 가 만든 parsed_yearbook.json 을 schema.sql 스키마에 적재한다.
+import argparse
+import json
+import os
+import sys
+from itertools import count
 
-기본 동작(옵션 없이 실행):
-  python load_to_postgres.py parsed_yearbook.json
-  -> ① db/seeds/load_all.sql 로 DML 을 저장하고
-     ② .env 의 STATYEARBOOK_DSN(없으면 DATABASE_URL)이 있으면 실 DB 에도 적재한다.
-
-옵션:
-  --emit-sql PATH  : DML 저장 경로 변경(기본 db/seeds/load_all.sql). ''(빈값)이면 미저장.
-  --dsn DSN        : 적재 대상 DSN 직접 지정(미지정 시 .env 의 STATYEARBOOK_DSN 사용).
-  --no-db          : 실 DB 적재를 건너뛰고 SQL 파일만 생성.
-
-적재는 항상 기존 데이터를 전부 비우고(TRUNCATE ... RESTART IDENTITY CASCADE) 다시 넣는다.
-PK(stat_id 등)는 파이썬에서 명시적으로 부여하여 FK 연결을 결정적으로 만든다.
-끝에서 시퀀스를 setval 로 맞추고, search_doc(tsvector)를 채운다.
-embedding(vector)은 임베딩 모델이 필요하므로 별도 스크립트로 처리(기본 NULL).
-"""
-import json, argparse, sys, os
 from dotenv import load_dotenv
 
 load_dotenv()  # .env 의 STATYEARBOOK_DSN 등을 환경변수로 로드
 
 
-# ── parsed json -> 각 테이블의 행(tuple) 리스트로 평탄화 ──────────────
+# 빈 테이블별 행 목록을 만든다.
+def empty_rows() -> dict:
+    return {
+        'publications': [],
+        'statistics': [],
+        'stat_tables': [],
+        'footnotes': [],
+        'contacts': [],
+        'statistic_images': [],
+    }
+
+
+# 발간물 행을 만든다.
+def publication_row(pub: dict, pub_id: int) -> tuple:
+    return (
+        pub_id,
+        pub['year'],
+        pub.get('pub_no'),
+        pub['title'],
+        pub.get('page_count'),
+    )
+
+
+# 통계 단위 행을 만든다.
+def statistic_row(unit: dict, stat_id: int, pub_id: int, year: int) -> tuple:
+    return (
+        stat_id,
+        pub_id,
+        year,
+        unit.get('ref_id'),
+        unit.get('chapter_no'),
+        unit.get('section_no'),
+        unit.get('chapter'),
+        unit.get('section'),
+        unit['title_ko'],
+        unit.get('title_en'),
+        unit.get('unit'),
+        unit.get('base_date'),
+        unit.get('page_start'),
+    )
+
+
+# 통계표 행을 만든다.
+def stat_table_row(table: dict, table_id: int, stat_id: int) -> tuple:
+    body_json = json.dumps(table['body'], ensure_ascii=False)
+    return (
+        table_id,
+        stat_id,
+        table.get('seq'),
+        table.get('caption'),
+        table.get('n_rows'),
+        table.get('n_cols'),
+        body_json,
+        table.get('table_md'),
+    )
+
+
+# 주석 행을 만든다.
+def footnote_row(footnote: dict, note_id: int, stat_id: int) -> tuple:
+    return (
+        note_id,
+        stat_id,
+        footnote.get('seq'),
+        footnote.get('note_no'),
+        footnote.get('content'),
+    )
+
+
+# 담당자/출처 행을 만든다.
+def contact_row(contact: dict, contact_id: int, stat_id: int) -> tuple:
+    return (
+        contact_id,
+        stat_id,
+        contact.get('dept'),
+        contact.get('officer'),
+        contact.get('phone'),
+        contact.get('source_system'),
+        contact.get('source_url'),
+    )
+
+
+# 이미지 행을 만든다.
+def image_row(image: dict, image_id: int, stat_id: int) -> tuple:
+    return (
+        image_id,
+        stat_id,
+        image.get('filename'),
+        image.get('page'),
+        image.get('uri'),
+        image.get('caption'),
+    )
+
+
+# 통계 단위 하나를 테이블별 행 목록에 추가한다.
+def add_statistic_rows(rows: dict, unit: dict, ids: dict, pub_id: int, year: int) -> None:
+    stat_id = next(ids['statistics'])
+    rows['statistics'].append(statistic_row(unit, stat_id, pub_id, year))
+
+    for table in unit['tables']:
+        table_id = next(ids['stat_tables'])
+        rows['stat_tables'].append(stat_table_row(table, table_id, stat_id))
+    for footnote in unit['footnotes']:
+        note_id = next(ids['footnotes'])
+        rows['footnotes'].append(footnote_row(footnote, note_id, stat_id))
+    for contact in unit['contacts']:
+        contact_id = next(ids['contacts'])
+        rows['contacts'].append(contact_row(contact, contact_id, stat_id))
+    for image in unit['images']:
+        image_id = next(ids['statistic_images'])
+        rows['statistic_images'].append(image_row(image, image_id, stat_id))
+
+
+# parsed json을 각 테이블의 행 튜플로 평탄화한다.
 def build_rows(data):
     pub = data['publication']
     pub_id = 1
-    publications = [(pub_id, pub['year'], pub.get('pub_no'),
-                     pub['title'], pub.get('page_count'))]
+    rows = empty_rows()
+    ids = {
+        'statistics': count(1),
+        'stat_tables': count(1),
+        'footnotes': count(1),
+        'contacts': count(1),
+        'statistic_images': count(1),
+    }
 
-    statistics, stat_tables, footnotes, contacts, images = [], [], [], [], []
-    sid = tid = nid = cid = iid = 0
+    rows['publications'].append(publication_row(pub, pub_id))
+    for unit in data['statistics']:
+        add_statistic_rows(rows, unit, ids, pub_id, pub['year'])
 
-    for u in data['statistics']:
-        sid += 1
-        statistics.append((
-            sid, pub_id, pub['year'], u.get('ref_id'),
-            u.get('chapter_no'), u.get('section_no'),
-            u.get('chapter'), u.get('section'),
-            u['title_ko'], u.get('title_en'),
-            u.get('unit'), u.get('base_date'), u.get('page_start'),
-        ))
-        for t in u['tables']:
-            tid += 1
-            stat_tables.append((
-                tid, sid, t.get('seq'), t.get('caption'),
-                t.get('n_rows'), t.get('n_cols'),
-                json.dumps(t['body'], ensure_ascii=False),   # -> ::jsonb
-                t.get('table_md'),
-            ))
-        for f in u['footnotes']:
-            nid += 1
-            footnotes.append((nid, sid, f.get('seq'),
-                              f.get('note_no'), f.get('content')))
-        for c in u['contacts']:
-            cid += 1
-            contacts.append((cid, sid, c.get('dept'), c.get('officer'),
-                             c.get('phone'), c.get('source_system'),
-                             c.get('source_url')))
-        for im in u['images']:
-            iid += 1
-            images.append((iid, sid, im.get('filename'), im.get('page'),
-                           im.get('uri'), im.get('caption')))
-
-    return {'publications': publications, 'statistics': statistics,
-            'stat_tables': stat_tables, 'footnotes': footnotes,
-            'contacts': contacts, 'statistic_images': images}
+    return rows
 
 
 COLS = {
@@ -92,19 +164,59 @@ SEQ = {  # 시퀀스 setval 대상 (테이블, PK컬럼)
 ORDER = ['publications', 'statistics', 'stat_tables', 'footnotes',
          'contacts', 'statistic_images']
 
-TRUNCATE_SQL = 'TRUNCATE ' + ', '.join(ORDER) + ' RESTART IDENTITY CASCADE;'
+TABLE_LIST_SQL = ", ".join(ORDER)
+TRUNCATE_SQL = f'TRUNCATE {TABLE_LIST_SQL} RESTART IDENTITY CASCADE;'
 
-SEARCH_DOC_SQL = (
-    "UPDATE statistics SET search_doc = to_tsvector('simple', "
-    "coalesce(title_ko,'')||' '||coalesce(title_en,'')||' '||"
-    "coalesce(chapter,'')||' '||coalesce(ref_id,''));"
-)
+SEARCH_DOC_SQL = """
+UPDATE statistics SET search_doc = to_tsvector(
+    'simple',
+    coalesce(title_ko,'') || ' ' ||
+    coalesce(title_en,'') || ' ' ||
+    coalesce(chapter,'') || ' ' ||
+    coalesce(ref_id,'')
+);
+""".strip()
+
+
+def insert_sql(table: str, columns: list[str]) -> str:
+    column_sql = ", ".join(columns)
+    placeholders = ", ".join("%s" for _ in columns)
+    return f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders})"
+
+
+def setval_sql(table: str, pk: str) -> str:
+    max_id_sql = f"COALESCE((SELECT MAX({pk}) FROM {table}),1)"
+    sequence_sql = f"pg_get_serial_sequence('{table}','{pk}')"
+    return f"SELECT setval({sequence_sql}, {max_id_sql});"
+
+
+# jsonb 캐스팅이 필요한 컬럼 위치를 찾는다.
+def jsonb_index(table: str, columns: list[str]) -> int | None:
+    if table not in JSONB_COL:
+        return None
+    return columns.index(JSONB_COL[table])
+
+
+# 실 DB 적재용 레코드로 변환한다.
+def live_record(row: tuple, jsonb_idx: int | None, jsonb_type) -> tuple:
+    values = list(row)
+    if jsonb_idx is not None and values[jsonb_idx] is not None:
+        values[jsonb_idx] = jsonb_type(json.loads(values[jsonb_idx]))
+    return tuple(values)
+
+
+# 테이블 행 목록을 실 DB 적재용 레코드 목록으로 변환한다.
+def live_records(table: str, data: list, jsonb_type) -> list[tuple]:
+    columns = COLS[table]
+    idx = jsonb_index(table, columns)
+    return [live_record(row, idx, jsonb_type) for row in data]
 
 
 # ── (1) 실서버 적재 ─────────────────────────────────────────────
 def load_live(rows, dsn):
     import psycopg
     from psycopg.types.json import Jsonb
+
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(TRUNCATE_SQL)          # 기존 데이터 전부 삭제 후 재적재
         for tbl in ORDER:
@@ -112,22 +224,12 @@ def load_live(rows, dsn):
             if not data:
                 continue
             cols = COLS[tbl]
-            ji = cols.index(JSONB_COL[tbl]) if tbl in JSONB_COL else None
-            recs = []
-            for r in data:
-                r = list(r)
-                if ji is not None and r[ji] is not None:
-                    r[ji] = Jsonb(json.loads(r[ji]))
-                recs.append(tuple(r))
-            ph = ', '.join(['%s'] * len(cols))
-            cur.executemany(
-                f'INSERT INTO {tbl} ({", ".join(cols)}) VALUES ({ph})', recs)
+            recs = live_records(tbl, data, Jsonb)
+            cur.executemany(insert_sql(tbl, cols), recs)
             print(f'  {tbl:18} {len(recs):>5} rows')
         # 시퀀스 보정 + tsvector
         for tbl, pk in SEQ.items():
-            cur.execute(
-                f"SELECT setval(pg_get_serial_sequence('{tbl}','{pk}'), "
-                f"COALESCE((SELECT MAX({pk}) FROM {tbl}),1));")
+            cur.execute(setval_sql(tbl, pk))
         cur.execute(SEARCH_DOC_SQL)
         conn.commit()
     print('완료(commit).  embedding은 --embed 또는 별도 스크립트로 채우세요.')
@@ -139,44 +241,73 @@ def sql_lit(v):
         return 'NULL'
     if isinstance(v, (int, float)):
         return str(v)
-    return "'" + str(v).replace("'", "''") + "'"
+    escaped = str(v).replace("'", "''")
+    return f"'{escaped}'"
+
+
+# SQL 파일용 값 목록을 만든다.
+def sql_values(row: tuple, jsonb_idx: int | None) -> list[str]:
+    values = []
+    for index, value in enumerate(row):
+        literal = sql_lit(value)
+        if index == jsonb_idx and value is not None:
+            literal = f'{literal}::jsonb'
+        values.append(literal)
+    return values
+
+
+# INSERT 문 한 줄을 만든다.
+def insert_row_sql(table: str, column_sql: str, values: list[str]) -> str:
+    value_sql = ", ".join(values)
+    return f'INSERT INTO {table} ({column_sql}) VALUES ({value_sql});'
+
+
+# 한 테이블의 INSERT 문들을 파일에 쓴다.
+def write_table_sql(file, table: str, data: list) -> None:
+    columns = COLS[table]
+    column_sql = ", ".join(columns)
+    idx = jsonb_index(table, columns)
+
+    file.write(f'\n-- {table} ({len(data)} rows)\n')
+    for row in data:
+        values = sql_values(row, idx)
+        file.write(f'{insert_row_sql(table, column_sql, values)}\n')
+
+
+# 시퀀스 보정 SQL을 파일에 쓴다.
+def write_setval_sql(file) -> None:
+    file.write('\n-- 시퀀스 보정\n')
+    for table, pk in SEQ.items():
+        file.write(f'{setval_sql(table, pk)}\n')
+
+
+# 전문검색 컬럼 갱신 SQL을 파일에 쓴다.
+def write_search_doc_sql(file) -> None:
+    file.write('\n-- 전문검색 컬럼\n')
+    file.write(f'{SEARCH_DOC_SQL}\n')
 
 
 def emit_sql(rows, path):
     with open(path, 'w', encoding='utf-8') as f:
         f.write('BEGIN;\n')
         f.write('\n-- 기존 데이터 전부 삭제 후 재적재\n')
-        f.write(TRUNCATE_SQL + '\n')
+        f.write(f'{TRUNCATE_SQL}\n')
         for tbl in ORDER:
             data = rows[tbl]
             if not data:
                 continue
-            cols = COLS[tbl]
-            ji = cols.index(JSONB_COL[tbl]) if tbl in JSONB_COL else None
-            f.write(f'\n-- {tbl} ({len(data)} rows)\n')
-            for r in data:
-                vals = []
-                for k, v in enumerate(r):
-                    if k == ji and v is not None:
-                        vals.append(sql_lit(v) + '::jsonb')
-                    else:
-                        vals.append(sql_lit(v))
-                f.write(f'INSERT INTO {tbl} ({", ".join(cols)}) '
-                        f'VALUES ({", ".join(vals)});\n')
-        f.write('\n-- 시퀀스 보정\n')
-        for tbl, pk in SEQ.items():
-            f.write(f"SELECT setval(pg_get_serial_sequence('{tbl}','{pk}'), "
-                    f"COALESCE((SELECT MAX({pk}) FROM {tbl}),1));\n")
-        f.write('\n-- 전문검색 컬럼\n')
-        f.write(SEARCH_DOC_SQL + '\n')
+            write_table_sql(f, tbl, data)
+        write_setval_sql(f)
+        write_search_doc_sql(f)
         f.write('COMMIT;\n')
     print(f'-> {path}')
 
 
-DEFAULT_SEED = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            '..', 'db', 'seeds', 'load_all.sql')
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_SEED = os.path.join(ROOT_DIR, 'db', 'seeds', 'load_all.sql')
 
-if __name__ == '__main__':
+
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument('parsed_json')
     ap.add_argument('--dsn',
@@ -188,16 +319,36 @@ if __name__ == '__main__':
                     help='INSERT문 .sql 저장 경로(기본 db/seeds/load_all.sql, 빈값이면 미저장)')
     ap.add_argument('--no-db', action='store_true',
                     help='실 DB 적재를 건너뛰고 SQL 파일만 생성')
-    args = ap.parse_args()
+    return ap
 
-    data = json.load(open(args.parsed_json, encoding='utf-8'))
+
+def load_json(path: str) -> dict:
+    with open(path, encoding='utf-8') as f:
+        return json.load(f)
+
+
+def row_counts(rows: dict) -> dict:
+    return {table: len(data) for table, data in rows.items()}
+
+
+def ensure_parent_dir(path: str) -> None:
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+
+
+def maybe_emit_sql(rows: dict, path: str) -> None:
+    if not path:
+        return
+    ensure_parent_dir(path)
+    emit_sql(rows, path)
+
+
+def run(args) -> None:
+    data = load_json(args.parsed_json)
     rows = build_rows(data)
-    counts = {k: len(v) for k, v in rows.items()}
-    print('적재 대상:', counts)
+    print('적재 대상:', row_counts(rows))
 
-    if args.emit_sql:
-        os.makedirs(os.path.dirname(os.path.abspath(args.emit_sql)), exist_ok=True)
-        emit_sql(rows, args.emit_sql)
+    maybe_emit_sql(rows, args.emit_sql)
 
     if args.no_db:
         print('--no-db: 실 DB 적재를 건너뜁니다.')
@@ -206,3 +357,12 @@ if __name__ == '__main__':
     else:
         print('\nDSN 미지정: 실 DB 적재를 건너뜁니다. '
               '.env 의 STATYEARBOOK_DSN 또는 --dsn 을 지정하세요.', file=sys.stderr)
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    run(args)
+
+
+if __name__ == '__main__':
+    main()

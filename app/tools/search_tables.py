@@ -4,74 +4,105 @@ from mcp.server.fastmcp import FastMCP
 from app.db import connect
 
 
+STAT_SQL = """
+    SELECT stat_id, year, title_ko, title_en, unit, base_date, ref_id
+    FROM statistics
+    WHERE stat_id = %s
+"""
+TABLES_SQL = """
+    SELECT seq, caption, n_rows, n_cols, table_md
+    FROM stat_tables
+    WHERE stat_id = %s
+    ORDER BY seq
+"""
+FOOTNOTES_SQL = """
+    SELECT seq, note_no, content
+    FROM footnotes
+    WHERE stat_id = %s
+    ORDER BY seq
+"""
+SOURCE_SQL = """
+    SELECT dept, officer, phone, source_system, source_url
+    FROM contacts
+    WHERE stat_id = %s
+"""
+
+
+# stat_id에 해당하는 통계표 원천 데이터를 조회한다.
+def fetch_table_data(stat_id: int) -> tuple[dict | None, list, list, list]:
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(STAT_SQL, (stat_id,))
+        stat = cur.fetchone()
+        if stat is None:
+            return None, [], [], []
+
+        cur.execute(TABLES_SQL, (stat_id,))
+        tables = cur.fetchall()
+
+        cur.execute(FOOTNOTES_SQL, (stat_id,))
+        footnotes = cur.fetchall()
+
+        cur.execute(SOURCE_SQL, (stat_id,))
+        source = cur.fetchall()
+
+    return stat, tables, footnotes, source
+
+
+# 표 행을 API 응답 형태로 바꾼다.
+def table_result(row: dict) -> dict:
+    return {
+        "seq": row["seq"],
+        "caption": row["caption"],
+        "n_rows": row["n_rows"],
+        "n_cols": row["n_cols"],
+        "table_md": row["table_md"],
+    }
+
+
+# 주석 행을 API 응답 형태로 바꾼다.
+def footnote_result(row: dict) -> dict:
+    return {
+        "seq": row["seq"],
+        "note_no": row["note_no"],
+        "content": row["content"],
+    }
+
+
+# 출처 행을 API 응답 형태로 바꾼다.
+def source_result(row: dict) -> dict:
+    return {
+        "dept": row["dept"],
+        "officer": row["officer"],
+        "phone": row["phone"],
+        "source_system": row["source_system"],
+        "source_url": row["source_url"],
+    }
+
+
+# 통계표 조회 결과를 MCP 응답 dict로 만든다.
+def build_response(stat: dict, tables: list, footnotes: list, source: list) -> dict:
+    return {
+        "found": True,
+        "stat_id": stat["stat_id"],
+        "ref_id": stat["ref_id"],
+        "year": stat["year"],
+        "title_ko": stat["title_ko"],
+        "title_en": stat["title_en"],
+        "unit": stat["unit"],
+        "base_date": stat["base_date"],
+        "tables": [table_result(row) for row in tables],
+        "footnotes": [footnote_result(row) for row in footnotes],
+        "source": [source_result(row) for row in source],
+    }
+
+
 # search_tables MCP 도구를 등록한다.
 def register(mcp: FastMCP) -> None:
     # stat_id에 해당하는 표 본문과 메타데이터를 가져온다.
     @mcp.tool()
     def search_tables(stat_id: int) -> dict:
         """통계표의 표 본문과 메타데이터를 가져온다."""
-        with connect() as conn, conn.cursor() as cur:
-            cur.execute(
-                """SELECT stat_id, year, title_ko, title_en, unit, base_date, ref_id
-                   FROM statistics WHERE stat_id = %s""",
-                (stat_id,),
-            )
-            stat = cur.fetchone()
-            if stat is None:
-                return {"found": False, "stat_id": stat_id, "tables": []}
-
-            cur.execute(
-                """SELECT seq, caption, n_rows, n_cols, table_md
-                   FROM stat_tables WHERE stat_id = %s ORDER BY seq""",
-                (stat_id,),
-            )
-            tables = cur.fetchall()
-
-            cur.execute(
-                """SELECT seq, note_no, content
-                   FROM footnotes WHERE stat_id = %s ORDER BY seq""",
-                (stat_id,),
-            )
-            footnotes = cur.fetchall()
-
-            cur.execute(
-                """SELECT dept, officer, phone, source_system, source_url
-                   FROM contacts WHERE stat_id = %s""",
-                (stat_id,),
-            )
-            source = cur.fetchall()
-
-        return {
-            "found": True,
-            "stat_id": stat["stat_id"],
-            "ref_id": stat["ref_id"],
-            "year": stat["year"],
-            "title_ko": stat["title_ko"],
-            "title_en": stat["title_en"],
-            "unit": stat["unit"],
-            "base_date": stat["base_date"],
-            "tables": [
-                {
-                    "seq": t["seq"],
-                    "caption": t["caption"],
-                    "n_rows": t["n_rows"],
-                    "n_cols": t["n_cols"],
-                    "table_md": t["table_md"],
-                }
-                for t in tables
-            ],
-            "footnotes": [
-                {"seq": f["seq"], "note_no": f["note_no"], "content": f["content"]}
-                for f in footnotes
-            ],
-            "source": [
-                {
-                    "dept": s["dept"],
-                    "officer": s["officer"],
-                    "phone": s["phone"],
-                    "source_system": s["source_system"],
-                    "source_url": s["source_url"],
-                }
-                for s in source
-            ],
-        }
+        stat, tables, footnotes, source = fetch_table_data(stat_id)
+        if stat is None:
+            return {"found": False, "stat_id": stat_id, "tables": []}
+        return build_response(stat, tables, footnotes, source)
