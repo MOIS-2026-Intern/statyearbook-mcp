@@ -3,6 +3,8 @@ psycopg[binary]
 mcp
 python-dotenv
 openai
+fastapi
+uvicorn
 pandas
 matplotlib
 seaborn

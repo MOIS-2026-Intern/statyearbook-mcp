@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import threading
+from errno import EADDRINUSE
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,6 +28,15 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         pass
 
 
+def _handler():
+    directory = str(visualization_dir())
+    return partial(_QuietHandler, directory=directory)
+
+
+def _bind_server(host: str, port: int) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer((host, port), _handler())
+
+
 # PNG 정적 서버를 한 번만 띄우고 base URL을 돌려준다.
 def ensure_asset_server() -> str | None:
     global _base_url
@@ -40,14 +50,12 @@ def ensure_asset_server() -> str | None:
             _base_url = config.PUBLIC_BASE_URL.rstrip("/")
             return _base_url
 
-        directory = str(visualization_dir())
         host = config.ASSET_SERVER_HOST
-        handler = partial(_QuietHandler, directory=directory)
         try:
-            httpd = ThreadingHTTPServer((host, config.ASSET_SERVER_PORT), handler)
+            httpd = _bind_server(host, config.ASSET_SERVER_PORT)
         except OSError:
             # 포트 충돌 시 임시 포트로 다시 바인딩한다.
-            httpd = ThreadingHTTPServer((host, 0), handler)
+            httpd = _bind_server(host, 0)
 
         port = httpd.server_address[1]
         threading.Thread(
@@ -65,3 +73,31 @@ def build_asset_url(filename: str) -> str | None:
     if not base:
         return None
     return f"{base}/{filename}"
+
+
+# PNG 정적 서버를 단독 프로세스로 실행한다.
+def main() -> None:
+    host = config.ASSET_SERVER_HOST
+    port = config.ASSET_SERVER_PORT
+    try:
+        httpd = _bind_server(host, port)
+    except OSError as exc:
+        if exc.errno == EADDRINUSE:
+            print(f"Port already in use: http://{host}:{port}")
+            print(f"Check the process with: lsof -nP -iTCP:{port} -sTCP:LISTEN")
+            return
+        raise
+
+    url = f"http://{host}:{httpd.server_address[1]}"
+    print(f"Serving statyearbook visualization assets at {url}")
+    print(f"Directory: {visualization_dir()}")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopping statyearbook visualization asset server.")
+    finally:
+        httpd.server_close()
+
+
+if __name__ == "__main__":
+    main()
