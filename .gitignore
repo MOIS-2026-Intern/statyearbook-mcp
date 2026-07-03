@@ -11,6 +11,10 @@ __pycache__/
 *.pyc
 .venv/
 
+# frontend
+node_modules/
+dist/
+*.tsbuildinfo
 
 # db
 /db/seeds/*.sql
