@@ -53,9 +53,12 @@ def ensure_asset_server() -> str | None:
         host = config.ASSET_SERVER_HOST
         try:
             httpd = _bind_server(host, config.ASSET_SERVER_PORT)
-        except OSError:
-            # 포트 충돌 시 임시 포트로 다시 바인딩한다.
-            httpd = _bind_server(host, 0)
+        except OSError as exc:
+            if exc.errno == EADDRINUSE:
+                # 이미 같은 고정 포트에서 asset server가 떠 있으면 그 URL을 그대로 사용한다.
+                _base_url = f"http://{host}:{config.ASSET_SERVER_PORT}"
+                return _base_url
+            raise
 
         port = httpd.server_address[1]
         threading.Thread(
