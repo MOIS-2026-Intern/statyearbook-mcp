@@ -43,11 +43,3 @@ class ChatMessage(BaseModel):
 class ChatResponse(BaseModel):
     message: ChatMessage
     traces: list[McpTrace]
-
-
-class HealthResponse(BaseModel):
-    status: str
-    app: str
-    openaiModel: str
-    openaiConfigured: bool
-    mcp: dict[str, Any]

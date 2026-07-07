@@ -8,11 +8,11 @@ from typing import Any
 from uuid import uuid4
 
 from backend.config import Settings
-from backend.models import ChatMessage, ChatRequest, ChatResponse, McpTrace
+from backend.gateways.mcp_gateway import McpGateway, describe_tool, openai_tool_from_mcp
+from backend.gateways.openai_gateway import OpenAIGateway
+from backend.models.chat import ChatMessage, ChatRequest, ChatResponse, McpTrace
 from backend.prompts import SYSTEM_PROMPT
-from backend.services.mcp_host import McpHost, describe_tool, openai_tool_from_mcp
-from backend.services.openai_responses import OpenAIResponsesClient
-from backend.services.serialization import (
+from backend.serializers.mcp_result_serializer import (
     json_dumps,
     parse_json_object,
     to_jsonable,
@@ -24,13 +24,13 @@ from backend.services.serialization import (
 class ChatService:
     def __init__(self, settings: Settings):
         self._settings = settings
-        self._openai = OpenAIResponsesClient(settings)
+        self._openai = OpenAIGateway(settings)
 
     async def respond(self, request: ChatRequest) -> ChatResponse:
         traces: list[McpTrace] = []
         input_items: list[Any] = [{"role": "user", "content": request.message}]
 
-        async with McpHost(self._settings) as mcp:
+        async with McpGateway(self._settings) as mcp:
             mcp_tools = await self._list_tools(mcp, traces)
             openai_tools = [openai_tool_from_mcp(tool) for tool in mcp_tools]
 
@@ -56,7 +56,7 @@ class ChatService:
             traces=returned_traces,
         )
 
-    async def _list_tools(self, mcp: McpHost, traces: list[McpTrace]) -> list[Any]:
+    async def _list_tools(self, mcp: McpGateway, traces: list[McpTrace]) -> list[Any]:
         started = time.perf_counter()
         trace_id = str(uuid4())
         try:
@@ -98,7 +98,7 @@ class ChatService:
         self,
         *,
         request: ChatRequest,
-        mcp: McpHost,
+        mcp: McpGateway,
         traces: list[McpTrace],
         input_items: list[Any],
         openai_tools: list[dict[str, Any]],
@@ -106,7 +106,7 @@ class ChatService:
         tools_for_turn = openai_tools
 
         for _ in range(self._settings.max_tool_rounds):
-            response = await self._openai.create(
+            response = await self._openai.create_response(
                 instructions=SYSTEM_PROMPT,
                 input_items=input_items,
                 tools=tools_for_turn,
@@ -122,7 +122,7 @@ class ChatService:
                 tool_output = await self._execute_tool_call(mcp, call, traces)
                 input_items.append(tool_output)
 
-        final_response = await self._openai.create(
+        final_response = await self._openai.create_response(
             instructions=(
                 SYSTEM_PROMPT
                 + "\n\n도구 호출 횟수 제한에 도달했습니다. 지금까지 받은 도구 결과만 사용해 답하세요."
@@ -133,7 +133,7 @@ class ChatService:
         )
         return _response_text(final_response)
 
-    async def _execute_tool_call(self, mcp: McpHost, call: Any, traces: list[McpTrace]) -> dict[str, Any]:
+    async def _execute_tool_call(self, mcp: McpGateway, call: Any, traces: list[McpTrace]) -> dict[str, Any]:
         call_id = _get(call, "call_id")
         tool_name = _get(call, "name")
         raw_arguments = _get(call, "arguments")

@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
-from backend.models import ChatRequest, ChatResponse, HealthResponse
-from backend.services.chat_service import ChatService
-from backend.services.openai_responses import OpenAIConfigurationError
+from backend.controllers import chat_controller, health_controller
 
 
 def create_app() -> FastAPI:
@@ -22,30 +20,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    @app.get("/health", response_model=HealthResponse)
-    async def health() -> HealthResponse:
-        return HealthResponse(
-            status="ok",
-            app=settings.app_name,
-            openaiModel=settings.openai_model,
-            openaiConfigured=settings.has_openai_key,
-            mcp={
-                "transport": "stdio",
-                "serverLabel": settings.mcp_server_label,
-                "command": settings.mcp_command,
-                "args": settings.mcp_args,
-                "cwd": settings.mcp_cwd,
-            },
-        )
-
-    @app.post("/api/chat", response_model=ChatResponse)
-    async def chat(request: ChatRequest) -> ChatResponse:
-        try:
-            return await ChatService(settings).respond(request)
-        except OpenAIConfigurationError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+    app.include_router(health_controller.router)
+    app.include_router(chat_controller.router)
 
     return app
 

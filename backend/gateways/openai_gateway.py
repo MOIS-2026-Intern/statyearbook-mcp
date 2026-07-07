@@ -12,7 +12,7 @@ class OpenAIConfigurationError(RuntimeError):
     pass
 
 
-class OpenAIResponsesClient:
+class OpenAIGateway:
     def __init__(self, settings: Settings):
         if not settings.openai_api_key:
             raise OpenAIConfigurationError("OPENAI_API_KEY is not configured")
@@ -23,7 +23,7 @@ class OpenAIResponsesClient:
             timeout=settings.openai_timeout_seconds,
         )
 
-    async def create(
+    async def create_response(
         self,
         *,
         instructions: str,

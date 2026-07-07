@@ -9,20 +9,20 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from backend.config import Settings
-from backend.services.serialization import sanitize_mcp_result, to_jsonable
+from backend.serializers.mcp_result_serializer import sanitize_mcp_result, to_jsonable
 
 
-class McpHostError(RuntimeError):
+class McpGatewayError(RuntimeError):
     pass
 
 
-class McpHost:
+class McpGateway:
     def __init__(self, settings: Settings):
         self._settings = settings
         self._stack: AsyncExitStack | None = None
         self._session: ClientSession | None = None
 
-    async def __aenter__(self) -> "McpHost":
+    async def __aenter__(self) -> "McpGateway":
         server = StdioServerParameters(
             command=self._settings.mcp_command,
             args=self._settings.mcp_args,
@@ -44,7 +44,7 @@ class McpHost:
     @property
     def session(self) -> ClientSession:
         if self._session is None:
-            raise McpHostError("MCP session is not initialized")
+            raise McpGatewayError("MCP session is not initialized")
         return self._session
 
     async def list_tools(self) -> list[Any]:
