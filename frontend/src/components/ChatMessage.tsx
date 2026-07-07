@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { Bot, ChevronDown, ChevronRight, UserRound } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { ChatMessage as ChatMessageType, McpTrace } from "../types/chat";
 import { McpTraceCard } from "./McpTraceCard";
 
@@ -23,7 +25,25 @@ export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessagePr
       ) : null}
 
       <div className={`message ${isUser ? "message--user" : "message--assistant"}`}>
-        <div className="message__content">{message.content}</div>
+        <div className={`message__content ${isUser ? "message__content--plain" : "message__content--markdown"}`}>
+          {isUser ? (
+            message.content
+          ) : (
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+                table: ({ node: _node, ...props }) => (
+                  <div className="markdown-table-scroll">
+                    <table {...props} />
+                  </div>
+                ),
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          )}
+        </div>
 
         {!isUser && showMcpTrace && traces.length > 0 ? (
           <div className="message__trace">
