@@ -43,7 +43,7 @@ class Settings:
     openai_api_key: str | None = os.environ.get("OPENAI_API_KEY")
     openai_model: str = os.environ.get("STATYEARBOOK_CHAT_MODEL", "gpt-5.5")
     openai_timeout_seconds: float = float(os.environ.get("STATYEARBOOK_OPENAI_TIMEOUT_SECONDS", "60"))
-    max_tool_rounds: int = int(os.environ.get("STATYEARBOOK_MAX_TOOL_ROUNDS", "4"))
+    max_tool_rounds: int = int(os.environ.get("STATYEARBOOK_MAX_TOOL_ROUNDS", "10"))
     tool_output_max_chars: int = int(os.environ.get("STATYEARBOOK_TOOL_OUTPUT_MAX_CHARS", "60000"))
 
     mcp_server_label: str = os.environ.get("STATYEARBOOK_MCP_SERVER_LABEL", "statyearbook")
