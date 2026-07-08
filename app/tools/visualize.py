@@ -173,6 +173,15 @@ def _combine_header_rows(header_rows: list[list[str]], width: int) -> list[str]:
 # 표 그리드를 dict row 목록으로 변환한다.
 def _body_to_rows(body: dict) -> tuple[list[str], list[dict[str, str]], list[str]]:
     warnings: list[str] = []
+    columns = body.get("columns") or []
+    records = body.get("records") or []
+    if columns and records:
+        source_rows = [
+            {column: _clean_label(row.get(column, "")) for column in columns}
+            for row in records
+        ]
+        return columns, source_rows, warnings
+
     grid = _cells_to_grid(body)
     caption_rows = _caption_row_indexes(body)
     usable_rows = [

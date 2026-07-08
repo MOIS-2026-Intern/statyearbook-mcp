@@ -375,13 +375,14 @@ def parse(json_path: str, image_dir: str | None = None) -> dict:
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument('json_path')
-    ap.add_argument('-o', '--out', default='load/parsed_yearbook.json')
+    ap.add_argument('-o', '--out', default='load/output/parsed_yearbook.json')
     ap.add_argument('--image-dir', default=None,
                     help='지정 시 이미지 base64를 파일로 저장')
     return ap
 
 
 def write_json(path: str, data: dict) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
