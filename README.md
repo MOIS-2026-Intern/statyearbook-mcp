@@ -5,10 +5,10 @@
 ## 채팅 실행 구조
 
 - `frontend/`: React 채팅 UI
-- `backend/`: FastAPI REST API, OpenAI API 호출, MCP host
+- `backend/`: FastAPI REST API, 채팅 모델 provider adapter, MCP host
 - `server.py`: 기존 statyearbook MCP server
 
-백엔드는 프론트의 `POST /api/chat` 요청을 받아 OpenAI Responses API를 호출하고, 모델이 필요하다고 판단한 MCP 도구를 로컬 `server.py`에 stdio로 연결해 실행합니다.
+백엔드는 프론트의 `POST /api/chat` 요청을 받아 `STATYEARBOOK_MODEL_PROVIDER`로 선택된 모델 host를 호출하고, 모델이 필요하다고 판단한 MCP 도구를 로컬 `server.py`에 stdio로 연결해 실행합니다. 기본 provider는 `openai`입니다.
 
 ```bash
 source .venv/bin/activate

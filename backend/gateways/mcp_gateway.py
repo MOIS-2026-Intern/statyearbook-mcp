@@ -9,6 +9,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from backend.config import Settings
+from backend.models.tooling import ToolSpec
 from backend.serializers.mcp_result_serializer import sanitize_mcp_result, to_jsonable
 
 
@@ -51,10 +52,11 @@ class McpGateway:
         result = await self.session.list_tools()
         return list(result.tools)
 
+    async def list_tool_specs(self) -> list[ToolSpec]:
+        return [tool_spec_from_mcp(tool) for tool in await self.list_tools()]
+
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        args = dict(arguments)
-        if self._settings.force_visualize_without_inline_image and name == "visualize":
-            args["include_image"] = False
+        args = self.prepare_tool_arguments(name, arguments)
 
         result = await self.session.call_tool(
             name,
@@ -62,6 +64,12 @@ class McpGateway:
             read_timeout_seconds=timedelta(seconds=self._settings.mcp_call_timeout_seconds),
         )
         return sanitize_mcp_result(result)
+
+    def prepare_tool_arguments(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        args = dict(arguments)
+        if self._settings.force_visualize_without_inline_image and name == "visualize":
+            args["include_image"] = False
+        return args
 
 
 def _tool_schema(tool: Any) -> dict[str, Any]:
@@ -72,19 +80,18 @@ def _tool_schema(tool: Any) -> dict[str, Any]:
     return payload
 
 
-def openai_tool_from_mcp(tool: Any) -> dict[str, Any]:
-    return {
-        "type": "function",
-        "name": getattr(tool, "name"),
-        "description": getattr(tool, "description", None) or f"MCP tool {getattr(tool, 'name')}",
-        "parameters": _tool_schema(tool),
-        "strict": False,
-    }
+def tool_spec_from_mcp(tool: Any) -> ToolSpec:
+    name = str(getattr(tool, "name", ""))
+    return ToolSpec(
+        name=name,
+        description=getattr(tool, "description", None) or f"MCP tool {name}",
+        input_schema=_tool_schema(tool),
+    )
 
 
-def describe_tool(tool: Any) -> dict[str, Any]:
+def describe_tool(tool: ToolSpec) -> dict[str, Any]:
     return {
-        "name": getattr(tool, "name", ""),
-        "description": getattr(tool, "description", None),
-        "input_schema": _tool_schema(tool),
+        "name": tool.name,
+        "description": tool.description,
+        "input_schema": tool.input_schema,
     }
