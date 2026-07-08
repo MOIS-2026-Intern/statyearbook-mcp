@@ -15,6 +15,9 @@ async def health() -> HealthResponse:
     return HealthResponse(
         status="ok",
         app=settings.app_name,
+        modelProvider=settings.model_provider,
+        chatModel=settings.chat_model,
+        modelConfigured=settings.model_configured,
         openaiModel=settings.openai_model,
         openaiConfigured=settings.has_openai_key,
         mcp={

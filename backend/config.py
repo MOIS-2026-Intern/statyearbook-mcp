@@ -40,9 +40,16 @@ class Settings:
     port: int = int(os.environ.get("STATYEARBOOK_BACKEND_PORT", "8000"))
     cors_origins: list[str] = None  # type: ignore[assignment]
 
+    model_provider: str = os.environ.get("STATYEARBOOK_MODEL_PROVIDER", "openai").strip().lower()
+    chat_model: str = os.environ.get("STATYEARBOOK_CHAT_MODEL", "gpt-5.5")
+    model_timeout_seconds: float = float(
+        os.environ.get(
+            "STATYEARBOOK_MODEL_TIMEOUT_SECONDS",
+            os.environ.get("STATYEARBOOK_OPENAI_TIMEOUT_SECONDS", "60"),
+        )
+    )
+
     openai_api_key: str | None = os.environ.get("OPENAI_API_KEY")
-    openai_model: str = os.environ.get("STATYEARBOOK_CHAT_MODEL", "gpt-5.5")
-    openai_timeout_seconds: float = float(os.environ.get("STATYEARBOOK_OPENAI_TIMEOUT_SECONDS", "60"))
     max_tool_rounds: int = int(os.environ.get("STATYEARBOOK_MAX_TOOL_ROUNDS", "10"))
     tool_output_max_chars: int = int(os.environ.get("STATYEARBOOK_TOOL_OUTPUT_MAX_CHARS", "60000"))
 
@@ -71,6 +78,22 @@ class Settings:
     @property
     def has_openai_key(self) -> bool:
         return bool(self.openai_api_key)
+
+    @property
+    def model_configured(self) -> bool:
+        if self.model_provider == "openai":
+            return self.has_openai_key
+        if self.model_provider == "local_gemma":
+            return False
+        return False
+
+    @property
+    def openai_model(self) -> str:
+        return self.chat_model
+
+    @property
+    def openai_timeout_seconds(self) -> float:
+        return self.model_timeout_seconds
 
 
 settings = Settings()
