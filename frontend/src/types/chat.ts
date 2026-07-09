@@ -44,6 +44,8 @@ export interface ChatRequest {
   message: string;
   modelProfile: string;
   includeMcpTrace: boolean;
+  history: ChatMessage[];
+  traces: McpTrace[];
 }
 
 export interface ChatResponse {
