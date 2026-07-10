@@ -75,8 +75,30 @@ function getTracesForMessages(messages: ChatMessageType[], traces: McpTrace[]): 
   return traces.filter((trace) => traceIds.has(trace.id));
 }
 
+function isEmptyConversation(conversation: Conversation) {
+  return conversation.messages.length === 0 && conversation.traces.length === 0;
+}
+
+function createInitialConversationState() {
+  const savedState = loadConversationState(seedConversations);
+  const firstConversation = savedState.conversations[0];
+
+  if (firstConversation && isEmptyConversation(firstConversation)) {
+    return {
+      conversations: savedState.conversations,
+      activeConversationId: firstConversation.id,
+    };
+  }
+
+  const nextConversation = createConversation();
+  return {
+    conversations: [nextConversation, ...savedState.conversations],
+    activeConversationId: nextConversation.id,
+  };
+}
+
 export default function App() {
-  const [initialConversationState] = useState(() => loadConversationState(seedConversations));
+  const [initialConversationState] = useState(createInitialConversationState);
   const [conversations, setConversations] = useState<Conversation[]>(initialConversationState.conversations);
   const [activeConversationId, setActiveConversationId] = useState(initialConversationState.activeConversationId);
   const [isSending, setIsSending] = useState(false);
