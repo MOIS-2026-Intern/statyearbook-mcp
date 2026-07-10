@@ -121,6 +121,19 @@ export default function App() {
     setActiveConversationId(next.id);
   };
 
+  const deleteConversation = (conversationId: string) => {
+    const deletedIndex = conversations.findIndex((conversation) => conversation.id === conversationId);
+    const remainingConversations = conversations.filter((conversation) => conversation.id !== conversationId);
+    const nextConversations = remainingConversations.length > 0 ? remainingConversations : [createConversation()];
+
+    setConversations(nextConversations);
+
+    if (activeConversationId === conversationId) {
+      const fallbackIndex = Math.min(Math.max(deletedIndex, 0), nextConversations.length - 1);
+      setActiveConversationId(nextConversations[fallbackIndex].id);
+    }
+  };
+
   const sendMessage = async (message: string) => {
     if (!activeConversation) {
       return;
@@ -198,6 +211,7 @@ export default function App() {
         activeConversationId={activeConversationId}
         conversations={conversations}
         onCreateConversation={createNewChat}
+        onDeleteConversation={deleteConversation}
         onSelectConversation={setActiveConversationId}
       />
 
