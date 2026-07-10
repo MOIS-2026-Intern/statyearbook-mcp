@@ -269,7 +269,7 @@ export default function App() {
         </header>
 
         {showConversationLimitNotice ? (
-          <div className="conversation-limit-notice" role="status">
+          <div className="conversation-limit-notice" key={activeConversationId} role="status">
             <div>
               <strong>질문 제한 도달</strong>
               <span>
