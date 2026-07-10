@@ -126,7 +126,7 @@ button {
 }
 
 .nav-button:hover,
-.conversation-item:hover {
+.conversation-row:hover {
   background: #eceff2;
 }
 
@@ -147,25 +147,105 @@ button {
   padding: 10px 6px 6px;
 }
 
-.conversation-item {
+.conversation-row {
+  position: relative;
+  display: flex;
+  align-items: center;
   width: 100%;
   min-height: 36px;
-  justify-content: flex-start;
   border-radius: 8px;
-  padding: 0 10px;
   color: #313d49;
+}
+
+.conversation-item {
+  min-width: 0;
+  flex: 1;
+  min-height: 36px;
+  justify-content: flex-start;
+  padding: 0 8px 0 10px;
+  color: inherit;
+  font: inherit;
   text-align: left;
 }
 
 .conversation-item span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.conversation-item--active {
+.conversation-row--active {
   background: #e9ecef;
   font-weight: 700;
+}
+
+.conversation-menu-trigger {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  margin-right: 4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #5c6670;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.conversation-row:hover .conversation-menu-trigger,
+.conversation-row:focus-within .conversation-menu-trigger,
+.conversation-row--menu-open .conversation-menu-trigger {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.conversation-menu-trigger:hover,
+.conversation-menu-trigger:focus-visible,
+.conversation-row--menu-open .conversation-menu-trigger {
+  background: #dde3e7;
+  color: #1f2933;
+}
+
+.conversation-menu {
+  position: absolute;
+  top: 32px;
+  right: 4px;
+  z-index: 20;
+  min-width: 112px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 32px rgba(22, 34, 45, 0.18);
+  padding: 4px;
+}
+
+.conversation-menu__item {
+  display: inline-flex;
+  width: 100%;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.conversation-menu__item--danger {
+  color: #a33a3a;
+}
+
+.conversation-menu__item:hover,
+.conversation-menu__item:focus-visible {
+  background: #f8e9e9;
 }
 
 .sidebar__footer {

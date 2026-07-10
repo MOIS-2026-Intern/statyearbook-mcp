@@ -1,10 +1,12 @@
 import { MessageSquarePlus, Search, Database, BarChart3, Settings2 } from "lucide-react";
 import type { Conversation } from "../types/chat";
+import { ConversationListItem } from "./ConversationListItem";
 
 interface SidebarProps {
   conversations: Conversation[];
   activeConversationId: string;
   onCreateConversation: () => void;
+  onDeleteConversation: (conversationId: string) => void;
   onSelectConversation: (conversationId: string) => void;
 }
 
@@ -12,6 +14,7 @@ export function Sidebar({
   conversations,
   activeConversationId,
   onCreateConversation,
+  onDeleteConversation,
   onSelectConversation,
 }: SidebarProps) {
   return (
@@ -48,16 +51,13 @@ export function Sidebar({
       <div className="conversation-list">
         <div className="section-label">최근 대화</div>
         {conversations.map((conversation) => (
-          <button
-            className={`conversation-item ${
-              conversation.id === activeConversationId ? "conversation-item--active" : ""
-            }`}
+          <ConversationListItem
+            conversation={conversation}
+            isActive={conversation.id === activeConversationId}
             key={conversation.id}
-            type="button"
-            onClick={() => onSelectConversation(conversation.id)}
-          >
-            <span>{conversation.title}</span>
-          </button>
+            onDelete={onDeleteConversation}
+            onSelect={onSelectConversation}
+          />
         ))}
       </div>
 
