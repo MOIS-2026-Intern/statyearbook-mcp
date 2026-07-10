@@ -291,6 +291,7 @@ button {
 }
 
 .chat-layout {
+  position: relative;
   display: grid;
   min-width: 0;
   height: 100vh;
@@ -317,6 +318,82 @@ button {
   letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.conversation-limit-notice {
+  position: absolute;
+  top: 80px;
+  left: 50%;
+  z-index: 30;
+  display: grid;
+  width: min(560px, calc(100% - 48px));
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid #d9dee5;
+  border-radius: 18px;
+  background: rgba(248, 250, 252, 0.96);
+  box-shadow: 0 18px 48px rgba(31, 41, 51, 0.18);
+  padding: 14px 14px 14px 18px;
+  transform: translateX(-50%);
+  animation: conversation-limit-drop 520ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.conversation-limit-notice strong,
+.conversation-limit-notice span {
+  display: block;
+}
+
+.conversation-limit-notice strong {
+  color: #1f2933;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.conversation-limit-notice span {
+  margin-top: 3px;
+  color: #59636f;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.conversation-limit-notice__close {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #68727d;
+  cursor: pointer;
+}
+
+.conversation-limit-notice__close:hover,
+.conversation-limit-notice__close:focus-visible {
+  background: #e7ebef;
+  color: #1f2933;
+}
+
+@keyframes conversation-limit-drop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -18px);
+  }
+  65% {
+    opacity: 1;
+    transform: translate(-50%, 3px);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-limit-notice {
+    animation: none;
+  }
 }
 
 .chat-header__actions {

@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { MoreHorizontal, PanelRightOpen, Share2, Sparkles } from "lucide-react";
+import { MoreHorizontal, PanelRightOpen, Share2, Sparkles, X } from "lucide-react";
 import { sendChatMessage } from "./api/chat";
 import { ChatMessage } from "./components/ChatMessage";
 import { Composer } from "./components/Composer";
 import { McpInspector } from "./components/McpInspector";
 import { Sidebar } from "./components/Sidebar";
+import { MAX_USER_MESSAGES_PER_CONVERSATION, RECENT_HISTORY_TURN_LIMIT } from "./config/chatLimits";
 import { seedConversations } from "./data/mockChat";
-import { loadConversationState, saveConversationState } from "./storage/conversationStore";
+import { limitConversationState, loadConversationState, saveConversationState } from "./storage/conversationStore";
 import type { ChatMessage as ChatMessageType, Conversation, McpTrace } from "./types/chat";
-
-const RECENT_HISTORY_TURN_LIMIT = 5;
 
 function createConversation(): Conversation {
   const timestamp = new Date().toISOString();
@@ -75,6 +74,10 @@ function getTracesForMessages(messages: ChatMessageType[], traces: McpTrace[]): 
   return traces.filter((trace) => traceIds.has(trace.id));
 }
 
+function countUserMessages(messages: ChatMessageType[]) {
+  return messages.filter((message) => message.role === "user").length;
+}
+
 function isEmptyConversation(conversation: Conversation) {
   return conversation.messages.length === 0 && conversation.traces.length === 0;
 }
@@ -91,25 +94,33 @@ function createInitialConversationState() {
   }
 
   const nextConversation = createConversation();
-  return {
-    conversations: [nextConversation, ...savedState.conversations],
-    activeConversationId: nextConversation.id,
-  };
+  return limitConversationState([nextConversation, ...savedState.conversations], nextConversation.id);
 }
 
 export default function App() {
   const [initialConversationState] = useState(createInitialConversationState);
   const [conversations, setConversations] = useState<Conversation[]>(initialConversationState.conversations);
   const [activeConversationId, setActiveConversationId] = useState(initialConversationState.activeConversationId);
-  const [isSending, setIsSending] = useState(false);
+  const [sendingConversationId, setSendingConversationId] = useState<string | null>(null);
   const [showMcpTrace, setShowMcpTrace] = useState(true);
   const [modelProfile, setModelProfile] = useState("balanced");
+  const [limitNoticeDismissed, setLimitNoticeDismissed] = useState(false);
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
+  const activeConversationIsSending = sendingConversationId === activeConversationId;
+  const activeConversationUserMessageCount = activeConversation ? countUserMessages(activeConversation.messages) : 0;
+  const conversationMessageLimitReached =
+    activeConversationUserMessageCount >= MAX_USER_MESSAGES_PER_CONVERSATION;
+  const showConversationLimitNotice =
+    conversationMessageLimitReached && !activeConversationIsSending && !limitNoticeDismissed;
 
   useEffect(() => {
     saveConversationState(conversations, activeConversationId);
   }, [activeConversationId, conversations]);
+
+  useEffect(() => {
+    setLimitNoticeDismissed(false);
+  }, [activeConversationId]);
 
   const tracesById = useMemo<Record<string, McpTrace>>(() => {
     return Object.fromEntries((activeConversation?.traces ?? []).map((trace) => [trace.id, trace]));
@@ -117,7 +128,7 @@ export default function App() {
 
   const createNewChat = () => {
     const next = createConversation();
-    setConversations((current) => [next, ...current]);
+    setConversations((current) => limitConversationState([next, ...current], next.id).conversations);
     setActiveConversationId(next.id);
   };
 
@@ -134,8 +145,15 @@ export default function App() {
     }
   };
 
+  const dismissConversationLimitNotice = () => {
+    setLimitNoticeDismissed(true);
+  };
+
   const sendMessage = async (message: string) => {
     if (!activeConversation) {
+      return;
+    }
+    if (conversationMessageLimitReached) {
       return;
     }
 
@@ -158,7 +176,7 @@ export default function App() {
       ),
     );
 
-    setIsSending(true);
+    setSendingConversationId(conversationId);
 
     try {
       const response = await sendChatMessage({
@@ -197,7 +215,7 @@ export default function App() {
         ),
       );
     } finally {
-      setIsSending(false);
+      setSendingConversationId((current) => (current === conversationId ? null : current));
     }
   };
 
@@ -250,6 +268,26 @@ export default function App() {
           </div>
         </header>
 
+        {showConversationLimitNotice ? (
+          <div className="conversation-limit-notice" key={activeConversationId} role="status">
+            <div>
+              <strong>질문 제한 도달</strong>
+              <span>
+                이 대화창은 질문 {MAX_USER_MESSAGES_PER_CONVERSATION}개 제한에 도달했습니다. 새 채팅창을 열어
+                이어서 질문하세요.
+              </span>
+            </div>
+            <button
+              aria-label="질문 제한 안내 닫기"
+              className="conversation-limit-notice__close"
+              onClick={dismissConversationLimitNotice}
+              type="button"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        ) : null}
+
         <section className="chat-scroll" aria-live="polite">
           {activeConversation.messages.length > 0 ? (
             <div className="message-stack">
@@ -261,7 +299,7 @@ export default function App() {
                   tracesById={tracesById}
                 />
               ))}
-              {isSending ? (
+              {activeConversationIsSending ? (
                 <div className="thinking-row">
                   <span />
                   <p>GPT API 호스트가 MCP 도구 흐름을 구성하는 중입니다.</p>
@@ -290,7 +328,7 @@ export default function App() {
 
         <footer className="composer-wrap">
           <Composer
-            disabled={isSending}
+            disabled={activeConversationIsSending || conversationMessageLimitReached}
             modelProfile={modelProfile}
             onModelProfileChange={setModelProfile}
             onSendMessage={sendMessage}
