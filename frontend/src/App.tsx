@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MoreHorizontal, PanelRightOpen, Share2, Sparkles } from "lucide-react";
 import { sendChatMessage } from "./api/chat";
 import { ChatMessage } from "./components/ChatMessage";
@@ -6,7 +6,10 @@ import { Composer } from "./components/Composer";
 import { McpInspector } from "./components/McpInspector";
 import { Sidebar } from "./components/Sidebar";
 import { seedConversations } from "./data/mockChat";
+import { loadConversationState, saveConversationState } from "./storage/conversationStore";
 import type { ChatMessage as ChatMessageType, Conversation, McpTrace } from "./types/chat";
+
+const RECENT_HISTORY_TURN_LIMIT = 5;
 
 function createConversation(): Conversation {
   const timestamp = new Date().toISOString();
@@ -44,14 +47,47 @@ function summarizeTitle(message: string) {
   return message.length > 28 ? `${message.slice(0, 28)}...` : message;
 }
 
+function getRecentTurnMessages(messages: ChatMessageType[], maxTurns: number): ChatMessageType[] {
+  if (maxTurns <= 0) {
+    return [];
+  }
+
+  let seenUserTurns = 0;
+  let startIndex = 0;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role !== "user") {
+      continue;
+    }
+
+    seenUserTurns += 1;
+    if (seenUserTurns === maxTurns) {
+      startIndex = index;
+      break;
+    }
+  }
+
+  return messages.slice(startIndex);
+}
+
+function getTracesForMessages(messages: ChatMessageType[], traces: McpTrace[]): McpTrace[] {
+  const traceIds = new Set(messages.flatMap((message) => message.traceIds ?? []));
+  return traces.filter((trace) => traceIds.has(trace.id));
+}
+
 export default function App() {
-  const [conversations, setConversations] = useState<Conversation[]>(seedConversations);
-  const [activeConversationId, setActiveConversationId] = useState(seedConversations[0].id);
+  const [initialConversationState] = useState(() => loadConversationState(seedConversations));
+  const [conversations, setConversations] = useState<Conversation[]>(initialConversationState.conversations);
+  const [activeConversationId, setActiveConversationId] = useState(initialConversationState.activeConversationId);
   const [isSending, setIsSending] = useState(false);
   const [showMcpTrace, setShowMcpTrace] = useState(true);
   const [modelProfile, setModelProfile] = useState("balanced");
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
+
+  useEffect(() => {
+    saveConversationState(conversations, activeConversationId);
+  }, [activeConversationId, conversations]);
 
   const tracesById = useMemo<Record<string, McpTrace>>(() => {
     return Object.fromEntries((activeConversation?.traces ?? []).map((trace) => [trace.id, trace]));
@@ -71,6 +107,8 @@ export default function App() {
     const userMessage = createUserMessage(message);
     const conversationId = activeConversation.id;
     const shouldRename = activeConversation.messages.length === 0;
+    const history = getRecentTurnMessages(activeConversation.messages, RECENT_HISTORY_TURN_LIMIT);
+    const historyTraces = getTracesForMessages(history, activeConversation.traces);
 
     setConversations((current) =>
       current.map((conversation) =>
@@ -92,7 +130,9 @@ export default function App() {
         conversationId,
         message,
         modelProfile,
-        includeMcpTrace: showMcpTrace,
+        includeMcpTrace: true,
+        history,
+        traces: historyTraces,
       });
 
       setConversations((current) =>

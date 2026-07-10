@@ -11,13 +11,6 @@ McpTraceKind = Literal["tool_discovery", "tool_call", "tool_result", "resource_r
 McpTraceStatus = Literal["queued", "running", "success", "error"]
 
 
-class ChatRequest(BaseModel):
-    conversationId: str
-    message: str = Field(min_length=1)
-    modelProfile: str = "balanced"
-    includeMcpTrace: bool = True
-
-
 class McpTrace(BaseModel):
     id: str
     kind: McpTraceKind
@@ -38,6 +31,15 @@ class ChatMessage(BaseModel):
     content: str
     createdAt: str
     traceIds: list[str] | None = None
+
+
+class ChatRequest(BaseModel):
+    conversationId: str
+    message: str = Field(min_length=1)
+    modelProfile: str = "balanced"
+    includeMcpTrace: bool = True
+    history: list[ChatMessage] = Field(default_factory=list)
+    traces: list[McpTrace] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):

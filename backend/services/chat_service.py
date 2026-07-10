@@ -14,6 +14,7 @@ from backend.models.chat import ChatMessage, ChatRequest, ChatResponse, McpTrace
 from backend.models.tooling import ModelMessage, ToolCall, ToolResult, ToolSpec
 from backend.prompts import SYSTEM_PROMPT
 from backend.serializers.mcp_result_serializer import (
+    json_dumps,
     truncate_jsonable,
     truncate_text,
 )
@@ -26,7 +27,7 @@ class ChatService:
 
     async def respond(self, request: ChatRequest) -> ChatResponse:
         traces: list[McpTrace] = []
-        messages = [ModelMessage(role="user", content=request.message)]
+        messages = _model_messages_from_request(request, self._settings.tool_output_max_chars)
 
         async with McpGateway(self._settings) as mcp:
             tools = await self._list_tools(mcp, traces)
@@ -236,6 +237,53 @@ def _tool_summary(result: dict[str, Any]) -> str:
     if result.get("isError"):
         return "MCP 도구가 오류를 반환했습니다."
     return "MCP 도구 호출 완료"
+
+
+def _model_messages_from_request(request: ChatRequest, max_trace_chars: int) -> list[ModelMessage]:
+    trace_by_id = {trace.id: trace for trace in request.traces}
+    messages: list[ModelMessage] = []
+
+    for history_message in request.history:
+        content = history_message.content.strip()
+        if history_message.role == "assistant":
+            trace_context = _trace_context_for_message(history_message, trace_by_id)
+            if trace_context:
+                trace_text = truncate_text(json_dumps(trace_context), max_trace_chars)
+                content = (
+                    f"{content}\n\n"
+                    "[이전 MCP 요청/응답]\n"
+                    f"{trace_text}"
+                )
+
+        if content:
+            messages.append(ModelMessage(role=history_message.role, content=content))
+
+    messages.append(ModelMessage(role="user", content=request.message))
+    return messages
+
+
+def _trace_context_for_message(
+    message: ChatMessage,
+    trace_by_id: dict[str, McpTrace],
+) -> list[dict[str, Any]]:
+    context: list[dict[str, Any]] = []
+    for trace_id in message.traceIds or []:
+        trace = trace_by_id.get(trace_id)
+        if trace is None:
+            continue
+
+        payload: dict[str, Any] = {
+            "kind": trace.kind,
+            "status": trace.status,
+            "title": trace.title,
+            "server": trace.server,
+            "tool": trace.tool,
+            "summary": trace.summary,
+            "request": trace.request,
+            "response": trace.response,
+        }
+        context.append({key: value for key, value in payload.items() if value is not None})
+    return context
 
 
 def _now_iso() -> str:

@@ -6,6 +6,7 @@ sequenceDiagram
 
     actor User as 사용자
     participant Frontend as "Frontend<br/>React 채팅 UI"
+    participant Store as "Browser<br/>localStorage"
     participant Backend as "Backend<br/>FastAPI / MCP Host"
     participant Model as "Model Adapter<br/>OpenAI / local_gemma"
     participant OpenAI as "OpenAI<br/>Responses API"
@@ -14,14 +15,15 @@ sequenceDiagram
     participant Embed as "OpenAI<br/>Embeddings API"
     participant DB as "PostgreSQL<br/>statistics + pgvector"
 
+    Frontend->>Store: 저장된 conversations 복원
     User->>Frontend: 채팅 메시지 입력
-    Frontend->>Backend: POST /api/chat
+    Frontend->>Backend: POST /api/chat<br/>현재 질문 + 최근 5턴 history + MCP traces
 
     Backend->>MCP: stdio 세션 시작 및 initialize
     Backend->>MCP: list_tools()
     MCP-->>Backend: 사용 가능한 MCP 도구 목록 반환
 
-    Backend->>Model: create_turn()<br/>사용자 질문 + ToolSpec 목록
+    Backend->>Model: create_turn()<br/>대화 이력 + 현재 질문 + ToolSpec 목록
     Model->>OpenAI: responses.create()<br/>provider=openai인 경우
     OpenAI-->>Model: function_call 반환
     Model-->>Backend: ToolCall 반환<br/>search_statistics 호출 요청
@@ -44,5 +46,6 @@ sequenceDiagram
     Model-->>Backend: assistant text 반환
 
     Backend-->>Frontend: ChatResponse 반환<br/>message + traces
+    Frontend->>Store: conversations 저장
     Frontend-->>User: 답변 및 MCP trace 표시
 ```

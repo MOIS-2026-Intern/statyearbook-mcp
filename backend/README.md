@@ -79,11 +79,41 @@ STATYEARBOOK_PUBLIC_BASE_URL=http://127.0.0.1:8899
   "conversationId": "conv-1",
   "message": "경기도 새마을금고 회원 수 연도별 추이를 시각화해줘.",
   "modelProfile": "balanced",
-  "includeMcpTrace": true
+  "includeMcpTrace": true,
+  "history": [
+    {
+      "id": "msg-user-1",
+      "role": "user",
+      "content": "경기도 새마을금고 회원 수 연도별 추이를 찾아줘.",
+      "createdAt": "2026-07-09T09:00:00.000Z"
+    },
+    {
+      "id": "msg-assistant-1",
+      "role": "assistant",
+      "content": "관련 통계표 후보를 찾았습니다.",
+      "createdAt": "2026-07-09T09:00:05.000Z",
+      "traceIds": ["trace-search-1"]
+    }
+  ],
+  "traces": [
+    {
+      "id": "trace-search-1",
+      "kind": "tool_call",
+      "status": "success",
+      "title": "search_statistics 호출",
+      "timestamp": "2026-07-09T09:00:03.000Z",
+      "server": "statyearbook",
+      "tool": "search_statistics",
+      "request": {"query": "경기도 새마을금고 회원 수"},
+      "response": {"count": 1}
+    }
+  ]
 }
 ```
 
-응답은 프론트엔드가 사용하는 `message`와 `traces` 형식입니다. `traces`에는 MCP 도구 목록 조회, 도구 이름, 요청 인자, 응답 JSON, 실행 시간이 포함됩니다.
+프론트엔드는 같은 대화창의 최근 대화 5턴과 해당 메시지에 연결된 MCP trace를 `history`, `traces`로 보냅니다. 응답은 프론트엔드가 사용하는 `message`와 `traces` 형식입니다. `traces`에는 MCP 도구 목록 조회, 도구 이름, 요청 인자, 응답 JSON, 실행 시간이 포함됩니다.
+
+백엔드는 HTTP middleware에서 최소 access log를 표준 로거에 남깁니다. 대화 본문, MCP request, MCP response는 운영 로그에 저장하지 않고, 상태 복원은 프론트엔드 저장소가 담당합니다.
 
 ## 환경변수
 
