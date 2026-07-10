@@ -113,6 +113,8 @@ STATYEARBOOK_PUBLIC_BASE_URL=http://127.0.0.1:8899
 
 프론트엔드는 같은 대화창의 최근 대화 5턴과 해당 메시지에 연결된 MCP trace를 `history`, `traces`로 보냅니다. 응답은 프론트엔드가 사용하는 `message`와 `traces` 형식입니다. `traces`에는 MCP 도구 목록 조회, 도구 이름, 요청 인자, 응답 JSON, 실행 시간이 포함됩니다.
 
+백엔드는 HTTP middleware에서 최소 access log를 표준 로거에 남깁니다. 대화 본문, MCP request, MCP response는 운영 로그에 저장하지 않고, 상태 복원은 프론트엔드 저장소가 담당합니다.
+
 ## 환경변수
 
 - `STATYEARBOOK_MODEL_PROVIDER`: 채팅 모델 provider, 기본값 `openai`. 현재 값은 `openai`, `local_gemma`를 인식합니다.

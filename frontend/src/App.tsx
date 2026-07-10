@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MoreHorizontal, PanelRightOpen, Share2, Sparkles } from "lucide-react";
 import { sendChatMessage } from "./api/chat";
 import { ChatMessage } from "./components/ChatMessage";
@@ -6,6 +6,7 @@ import { Composer } from "./components/Composer";
 import { McpInspector } from "./components/McpInspector";
 import { Sidebar } from "./components/Sidebar";
 import { seedConversations } from "./data/mockChat";
+import { loadConversationState, saveConversationState } from "./storage/conversationStore";
 import type { ChatMessage as ChatMessageType, Conversation, McpTrace } from "./types/chat";
 
 const RECENT_HISTORY_TURN_LIMIT = 5;
@@ -75,13 +76,18 @@ function getTracesForMessages(messages: ChatMessageType[], traces: McpTrace[]): 
 }
 
 export default function App() {
-  const [conversations, setConversations] = useState<Conversation[]>(seedConversations);
-  const [activeConversationId, setActiveConversationId] = useState(seedConversations[0].id);
+  const [initialConversationState] = useState(() => loadConversationState(seedConversations));
+  const [conversations, setConversations] = useState<Conversation[]>(initialConversationState.conversations);
+  const [activeConversationId, setActiveConversationId] = useState(initialConversationState.activeConversationId);
   const [isSending, setIsSending] = useState(false);
   const [showMcpTrace, setShowMcpTrace] = useState(true);
   const [modelProfile, setModelProfile] = useState("balanced");
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
+
+  useEffect(() => {
+    saveConversationState(conversations, activeConversationId);
+  }, [activeConversationId, conversations]);
 
   const tracesById = useMemo<Record<string, McpTrace>>(() => {
     return Object.fromEntries((activeConversation?.traces ?? []).map((trace) => [trace.id, trace]));
