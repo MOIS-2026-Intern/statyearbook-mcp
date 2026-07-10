@@ -1,4 +1,5 @@
 import type { Conversation } from "../types/chat";
+import { MAX_STORED_CONVERSATIONS } from "../config/chatLimits";
 
 const STORAGE_KEY = "statyearbook.chat.conversations.v1";
 
@@ -41,10 +42,7 @@ export function loadConversationState(fallbackConversations: Conversation[]): Co
         ? parsed.activeConversationId
         : conversations[0].id;
 
-    return {
-      activeConversationId,
-      conversations,
-    };
+    return limitConversationState(conversations, activeConversationId);
   } catch (error) {
     console.warn("Failed to load saved conversations", error);
     return fallback;
@@ -57,10 +55,11 @@ export function saveConversationState(conversations: Conversation[], activeConve
   }
 
   try {
+    const limitedState = limitConversationState(conversations, activeConversationId);
     const state: StoredConversationState = {
       version: 1,
-      activeConversationId,
-      conversations,
+      activeConversationId: limitedState.activeConversationId,
+      conversations: limitedState.conversations,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (error) {
@@ -68,11 +67,36 @@ export function saveConversationState(conversations: Conversation[], activeConve
   }
 }
 
-function createFallbackState(conversations: Conversation[]): ConversationState {
+export function limitConversationState(conversations: Conversation[], activeConversationId: string): ConversationState {
+  if (conversations.length <= MAX_STORED_CONVERSATIONS) {
+    return {
+      activeConversationId,
+      conversations,
+    };
+  }
+
+  const deleteCount = conversations.length - MAX_STORED_CONVERSATIONS;
+  const idsToDelete = new Set(
+    [...conversations]
+      .sort((left, right) => toTimestamp(left.updatedAt) - toTimestamp(right.updatedAt))
+      .slice(0, deleteCount)
+      .map((conversation) => conversation.id),
+  );
+  const limitedConversations = conversations.filter((conversation) => !idsToDelete.has(conversation.id));
+  const nextActiveConversationId = limitedConversations.some(
+    (conversation) => conversation.id === activeConversationId,
+  )
+    ? activeConversationId
+    : limitedConversations[0]?.id ?? "";
+
   return {
-    activeConversationId: conversations[0]?.id ?? "",
-    conversations,
+    activeConversationId: nextActiveConversationId,
+    conversations: limitedConversations,
   };
+}
+
+function createFallbackState(conversations: Conversation[]): ConversationState {
+  return limitConversationState(conversations, conversations[0]?.id ?? "");
 }
 
 function canUseLocalStorage() {
@@ -95,4 +119,9 @@ function isConversation(value: unknown): value is Conversation {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function toTimestamp(value: string) {
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
