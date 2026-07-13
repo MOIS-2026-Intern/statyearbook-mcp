@@ -16,7 +16,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function vegaLiteSpec(trace: McpTrace): Record<string, unknown> | null {
+interface ChartResult {
+  key: string;
+  spec: Record<string, unknown>;
+}
+
+function vegaLiteSpec(trace: McpTrace): ChartResult | null {
   if (trace.tool !== "visualize" || !isRecord(trace.response)) {
     return null;
   }
@@ -24,7 +29,19 @@ function vegaLiteSpec(trace: McpTrace): Record<string, unknown> | null {
   if (!isRecord(structured) || !isRecord(structured.vega_lite)) {
     return null;
   }
-  return structured.vega_lite;
+  const stat = isRecord(structured.stat) ? structured.stat : {};
+  const request = isRecord(structured.request) ? structured.request : {};
+  const chart = isRecord(structured.chart) ? structured.chart : {};
+  const key = JSON.stringify({
+    statId: stat.stat_id,
+    tableSeq: stat.table_seq,
+    chartType: chart.type,
+    x: request.x,
+    y: request.y,
+    group: request.group,
+    totalMode: request.total_mode,
+  });
+  return { key, spec: structured.vega_lite };
 }
 
 export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessageProps) {
@@ -33,13 +50,12 @@ export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessagePr
   const chartKeys = new Set<string>();
   const charts = traces
     .map(vegaLiteSpec)
-    .filter((spec): spec is Record<string, unknown> => spec !== null)
-    .filter((spec) => {
-      const key = JSON.stringify(spec);
-      if (chartKeys.has(key)) {
+    .filter((chart): chart is ChartResult => chart !== null)
+    .filter((chart) => {
+      if (chartKeys.has(chart.key)) {
         return false;
       }
-      chartKeys.add(key);
+      chartKeys.add(chart.key);
       return true;
     });
   const isUser = message.role === "user";
@@ -74,7 +90,7 @@ export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessagePr
         </div>
 
         {!isUser
-          ? charts.map((spec, index) => <VegaLiteChart key={`${message.id}-chart-${index}`} spec={spec} />)
+          ? charts.map((chart, index) => <VegaLiteChart key={`${message.id}-chart-${index}`} spec={chart.spec} />)
           : null}
 
         {!isUser && showMcpTrace && traces.length > 0 ? (

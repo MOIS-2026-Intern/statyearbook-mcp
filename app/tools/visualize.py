@@ -409,7 +409,11 @@ def _column_family(requested: str | None, profiles: list[dict[str, Any]]) -> lis
 # 상위 헤더를 제거해 차트에 표시할 하위 범주 라벨을 만든다.
 def _family_category_label(column: str) -> str:
     suffix = column.rsplit("_", 1)[-1]
-    korean = re.match(r"([가-힣･·ㆍ\s]+)", _clean_label(suffix))
+    cleaned = _clean_label(suffix)
+    bilingual = re.match(r"^(.+?)\s+(?=[A-Za-z]+(?:\s|$)|\d+s\b)", cleaned)
+    if bilingual:
+        return _clean_label(bilingual.group(1))
+    korean = re.match(r"([가-힣･·ㆍ\s]+)", cleaned)
     if korean and len(re.sub(r"[^가-힣]", "", korean.group(1))) >= 2:
         return _clean_label(korean.group(1))
     return _display_category_label(suffix)
@@ -784,7 +788,7 @@ def _wide_year_time_series_spec(
     }
 
 
-# 특정 연도의 한 행에서 같은 상위 헤더 아래 지표들을 범주형 레코드로 펼친다.
+# 특정 행에서 같은 상위 헤더 아래 지표들을 범주형 레코드로 펼친다.
 def _wide_row_category_spec(
     table: dict,
     query: str | None,
@@ -798,31 +802,45 @@ def _wide_row_category_spec(
     profiles: list[dict[str, Any]],
     warnings: list[str],
 ) -> dict[str, Any] | None:
-    target_year = _query_year(query)
     requested_type = chart_type if chart_type in VALID_CHART_TYPES else "auto"
-    if target_year is None or not (requested_type == "donut" or _wants_share_chart(query)):
-        return None
-
+    target_year = _query_year(query)
     year_profile = next((profile for profile in profiles if profile["is_year"]), None)
-    family_columns = _column_family(x, profiles)
-    if year_profile is None or len(family_columns) < 2:
+    family_columns = _column_family(x, profiles) or _column_family(y, profiles)
+    category_profiles = [
+        profile for profile in profiles if not profile["is_numeric"] and not profile["is_year"]
+    ]
+    category_profile = next(
+        (
+            profile for profile in category_profiles
+            if _resolve_column(group, [profile]) or _resolve_column(x, [profile])
+        ),
+        category_profiles[0] if category_profiles else None,
+    )
+    if len(family_columns) < 2 or (target_year is None and category_profile is None):
         return None
 
-    year_column = year_profile["name"]
-    selected_row = next(
-        (row for row in source_rows if _parse_year(row.get(year_column)) == target_year),
-        None,
-    )
+    if target_year is not None and year_profile is not None:
+        target_column = year_profile["name"]
+        selected_row = next(
+            (row for row in source_rows if _parse_year(row.get(target_column)) == target_year),
+            None,
+        )
+        target_label = f"{target_year}년"
+    else:
+        target_column = category_profile["name"]
+        selected_row = _pick_focus_row(source_rows, target_column, query, x, y, group)
+        target_label = _display_category_label(selected_row.get(target_column)) if selected_row else ""
     if selected_row is None:
-        warnings.append(f"표에서 {target_year}년 행을 찾지 못했습니다.")
+        if target_year is not None:
+            warnings.append(f"표에서 {target_year}년 행을 찾지 못했습니다.")
+        elif group:
+            warnings.append(f"표에서 '{group}'에 해당하는 행을 찾지 못했습니다.")
         return None
 
     resolved_total_mode = _resolve_total_mode(total_mode, query)
     aggregate_columns = [column for column in family_columns if _is_total_column(column)]
     # 구성비 차트에서 집계 범주는 분모와 하위 범주를 중복 계산하므로 auto에서도 제외한다.
-    applied_total_mode: TotalMode = (
-        "include" if resolved_total_mode == "include" else "exclude" if aggregate_columns else "include"
-    )
+    applied_total_mode = "include" if resolved_total_mode == "include" else "exclude" if aggregate_columns else "not_applicable"
     excluded_columns = aggregate_columns if applied_total_mode == "exclude" else []
 
     aggregate_values = [
@@ -855,10 +873,12 @@ def _wide_row_category_spec(
     if len(records) < 2:
         return None
 
-    selected_type = "donut" if requested_type in {"auto", "donut"} else requested_type
+    selected_type = "donut" if requested_type == "donut" else "bar" if requested_type == "auto" else requested_type
     records = _limit_categories(records, selected_type, False, top_n, warnings)
     records = _sort_records(records, False, selected_type)
-    if applied_total_mode == "exclude" and resolved_total_mode == "auto":
+    if applied_total_mode == "not_applicable":
+        total_reason = "선택한 범주에서 집계 범주를 찾지 못했습니다."
+    elif applied_total_mode == "exclude" and resolved_total_mode == "auto":
         total_reason = "구성비 차트에서 집계 범주를 자동 제외했습니다."
     elif applied_total_mode == "exclude":
         total_reason = "total_mode=exclude 요청에 따라 집계 범주를 제외했습니다."
@@ -894,10 +914,10 @@ def _wide_row_category_spec(
             "requested_type": chart_type,
             "decision_source": "server_wide_row",
             "reason": (
-                f"{target_year}년 행을 선택하고 같은 소속별 헤더의 지표들을 범주로 변환했습니다. "
+                f"{target_label} 행을 선택하고 같은 상위 헤더의 지표들을 범주로 변환했습니다. "
                 f"{total_reason}"
             ),
-            "title": _chart_title(table, f"{target_year}년"),
+            "title": _chart_title(table, target_label or None),
             "x": "category",
             "y": "value",
             "group": None,
@@ -906,7 +926,8 @@ def _wide_row_category_spec(
         "columns": profiles,
         "transform": {
             "type": "wide_row_to_categories",
-            "year_column": year_column,
+            "target_column": target_column,
+            "target_value": selected_row.get(target_column),
             "selected_year": target_year,
             "selected_columns": selected_columns,
             "requested_total_mode": total_mode,
