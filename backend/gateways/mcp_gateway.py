@@ -66,10 +66,7 @@ class McpGateway:
         return sanitize_mcp_result(result)
 
     def prepare_tool_arguments(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        args = dict(arguments)
-        if self._settings.force_visualize_without_inline_image and name == "visualize":
-            args["include_image"] = False
-        return args
+        return dict(arguments)
 
 
 def _tool_schema(tool: Any) -> dict[str, Any]:

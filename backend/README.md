@@ -46,23 +46,9 @@ cd frontend
 npm run dev
 ```
 
-## 시각화 이미지 포트
+## 시각화
 
-`visualize` 도구가 만든 PNG는 `STATYEARBOOK_VISUALIZATION_DIR` 디렉터리에 저장됩니다. 브라우저에서 이미지 URL을 계속 열려면 asset server를 별도 터미널에서 실행합니다.
-
-```bash
-cd /Users/song/dev/mois/statyearbook-mcp
-source .venv/bin/activate
-python -m app.asset_server
-```
-
-기본 URL은 `http://127.0.0.1:8899`입니다. MCP가 이 고정 URL을 응답에 넣도록 `.env`에 아래 값을 추가합니다.
-
-```bash
-STATYEARBOOK_PUBLIC_BASE_URL=http://127.0.0.1:8899
-```
-
-이 값을 바꾼 뒤에는 백엔드를 재시작해야 합니다.
+`visualize` 도구는 `structuredContent.vega_lite`에 Vega-Lite JSON spec을 반환합니다. 프론트엔드는 로컬에 번들된 Vega 라이브러리로 차트를 렌더링하며 PNG 내보내기를 제공합니다. 별도 이미지 저장소나 asset server는 사용하지 않습니다.
 
 ## API
 
@@ -126,6 +112,5 @@ STATYEARBOOK_PUBLIC_BASE_URL=http://127.0.0.1:8899
 - `STATYEARBOOK_MCP_COMMAND`: MCP 서버 실행 Python 명령
 - `STATYEARBOOK_MCP_ARGS`: MCP 서버 인자, 기본값 `server.py`
 - `STATYEARBOOK_MCP_CWD`: MCP 서버 실행 디렉터리
-- `STATYEARBOOK_FORCE_VISUALIZE_NO_INLINE_IMAGE`: `visualize` 호출 시 인라인 이미지 생략
 
 `local_gemma` provider는 adapter 경계가 준비되어 있지만, Ollama, llama.cpp, vLLM 등 실제 로컬 런타임 프로토콜을 정한 뒤 `backend/gateways/local_gemma_gateway.py`에 연결해야 합니다.

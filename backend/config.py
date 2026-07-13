@@ -26,13 +26,6 @@ def _split_args(value: str | None, default: list[str]) -> list[str]:
     return shlex.split(value)
 
 
-def _bool_env(name: str, default: bool) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.lower() in {"1", "true", "yes", "y", "on"}
-
-
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "statyearbook-backend"
@@ -58,8 +51,6 @@ class Settings:
     mcp_args: list[str] = None  # type: ignore[assignment]
     mcp_cwd: str = os.environ.get("STATYEARBOOK_MCP_CWD", str(ROOT_DIR))
     mcp_call_timeout_seconds: float = float(os.environ.get("STATYEARBOOK_MCP_CALL_TIMEOUT_SECONDS", "90"))
-    force_visualize_without_inline_image: bool = _bool_env("STATYEARBOOK_FORCE_VISUALIZE_NO_INLINE_IMAGE", True)
-
     def __post_init__(self) -> None:
         object.__setattr__(
             self,

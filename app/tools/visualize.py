@@ -1,16 +1,11 @@
 # -*- coding: utf-8 -*-
 import json
-import os
 import re
-from hashlib import sha1
-from io import BytesIO
-from pathlib import Path
 from typing import Any, Literal
 
-from mcp.server.fastmcp import FastMCP, Image
-from mcp.types import CallToolResult, ResourceLink, TextContent
+from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, TextContent
 
-from app.asset_server import build_asset_url, visualization_dir
 from app.db import connect
 from app.tool_descriptions import VISUALIZE
 
@@ -700,8 +695,8 @@ def _wide_year_time_series_spec(
     return {
         "ok": True,
         "version": "0.1",
-        "library": "seaborn",
-        "renderer": "matplotlib",
+        "library": "vega-lite",
+        "renderer": "client",
         "stat": {
             "stat_id": table["stat_id"],
             "ref_id": table["ref_id"],
@@ -842,8 +837,8 @@ def _build_plot_spec(
     return {
         "ok": True,
         "version": "0.1",
-        "library": "seaborn",
-        "renderer": "matplotlib",
+        "library": "vega-lite",
+        "renderer": "client",
         "stat": {
             "stat_id": table["stat_id"],
             "ref_id": table["ref_id"],
@@ -883,258 +878,6 @@ def _build_plot_spec(
         },
         "warnings": warnings,
     }
-
-
-# matplotlib, pandas, seaborn을 지연 로드한다.
-def _load_plotting():
-    try:
-        cache_dir = Path(os.environ.get("MPLCONFIGDIR", Path(os.environ.get("TMPDIR", "/tmp")) / "statyearbook-matplotlib"))
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        os.environ.setdefault("MPLCONFIGDIR", str(cache_dir))
-
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import pandas as pd
-        import seaborn as sns
-    except ModuleNotFoundError as exc:
-        missing = exc.name or "시각화 라이브러리"
-        raise RuntimeError(f"{missing} 패키지가 설치되어 있지 않습니다. requirements.txt 설치가 필요합니다.") from exc
-
-    return plt, pd, sns
-
-
-# 차트 테마와 한글 폰트 설정을 적용한다.
-def _configure_plot(plt: Any, sns: Any) -> None:
-    from matplotlib import font_manager
-
-    sns.set_theme(style="whitegrid")
-    installed = {font.name for font in font_manager.fontManager.ttflist}
-    for candidate in ("AppleGothic", "Malgun Gothic", "NanumGothic", "Noto Sans CJK KR", "Noto Sans KR"):
-        if candidate in installed:
-            plt.rcParams["font.family"] = candidate
-            break
-    plt.rcParams["axes.unicode_minus"] = False
-
-
-# 단위 메타데이터로 y축 라벨을 만든다.
-def _value_axis_label(unit: str | None) -> str:
-    if unit:
-        return f"{unit} 수"
-    return "값"
-
-
-# 선그래프 y축 범위에 여백을 더한다.
-def _line_ylim(values: list[float]) -> tuple[float, float]:
-    if not values:
-        return 0.0, 1.0
-    min_value = min(values)
-    max_value = max(values)
-    if min_value == max_value:
-        pad = max(abs(min_value) * 0.05, 1.0)
-    else:
-        pad = max((max_value - min_value) * 0.2, 1.0)
-    lower = min_value - pad
-    upper = max_value + pad
-    if min_value >= 0:
-        lower = max(0.0, lower)
-    return lower, upper
-
-
-# 공통 축 제목, 라벨, 눈금 회전을 적용한다.
-def _finish_axes(ax: Any, title: str, unit: str | None) -> None:
-    ax.set_title(title, pad=14)
-    ax.set_xlabel("")
-    ax.set_ylabel(unit or "value")
-    labels = [label.get_text() for label in ax.get_xticklabels()]
-    if len(labels) > 6 or any(len(label) > 10 for label in labels):
-        ax.tick_params(axis="x", labelrotation=35)
-        for label in ax.get_xticklabels():
-            label.set_horizontalalignment("right")
-
-
-# 표 미리보기를 PNG 표 이미지로 렌더링한다.
-def _render_table_image(spec: dict[str, Any], plt: Any) -> bytes:
-    rows = spec["data"]["table_preview"][:12]
-    columns = [profile["name"] for profile in spec["columns"]][:6]
-    cell_text = [[row.get(column, "") for column in columns] for row in rows]
-    fig_height = max(3.0, 1.0 + len(cell_text) * 0.35)
-    fig, ax = plt.subplots(figsize=(11, fig_height))
-    ax.axis("off")
-    ax.set_title(spec["chart"]["title"], pad=14)
-    table = ax.table(cellText=cell_text, colLabels=columns, loc="center", cellLoc="center")
-    table.auto_set_font_size(False)
-    table.set_fontsize(8)
-    table.scale(1, 1.35)
-    return _fig_to_png(fig, plt)
-
-
-# 단일 시계열과 선택적 증감 보조 차트를 PNG로 렌더링한다.
-def _render_single_line_image(spec: dict[str, Any], plt: Any, pd: Any) -> bytes:
-    records = spec["data"]["records"]
-    df = pd.DataFrame(records)
-    labels = [str(value) for value in df["x"].tolist()]
-    values = [float(value) for value in df["value"].tolist()]
-    delta_records = spec["data"].get("delta_records") or []
-    title = spec["chart"]["title"]
-    unit = spec["chart"].get("unit")
-    value_label = _value_axis_label(unit)
-
-    if delta_records:
-        fig, (ax1, ax2) = plt.subplots(
-            2,
-            1,
-            figsize=(10, 7),
-            gridspec_kw={"height_ratios": [3, 2]},
-        )
-    else:
-        fig, ax1 = plt.subplots(figsize=(10, 5.5))
-        ax2 = None
-
-    positions = list(range(len(labels)))
-    ax1.plot(positions, values, color="#2a78d6", linewidth=2, marker="o", markersize=6)
-    ax1.set_xticks(positions)
-    ax1.set_xticklabels(labels)
-    ax1.set_ylim(*_line_ylim(values))
-    ax1.set_title(f"{title} 연도별 {value_label}", fontsize=13, pad=12)
-    ax1.set_xlabel("")
-    ax1.set_ylabel(unit or "value")
-    ax1.grid(axis="y", color="#e1e0d9")
-    for x_value, y_value in zip(positions, values):
-        label = f"{y_value:g}"
-        ax1.annotate(label, (x_value, y_value), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=9)
-
-    if ax2 is not None:
-        delta_df = pd.DataFrame(delta_records)
-        delta_labels = [str(value) for value in delta_df["x"].tolist()]
-        deltas = [float(value) for value in delta_df["value"].tolist()]
-        delta_positions = list(range(len(delta_labels)))
-        colors = ["#e34948" if value < 0 else "#2a78d6" if value > 0 else "#9a9a9a" for value in deltas]
-        ax2.bar(delta_positions, deltas, color=colors, width=0.6)
-        ax2.set_xticks(delta_positions)
-        ax2.set_xticklabels(delta_labels)
-        ax2.axhline(0, color="#c3c2b7", linewidth=0.8)
-        ax2.set_title(f"전년 대비 증감 ({unit or '값'})", fontsize=13, pad=10)
-        ax2.set_xlabel("")
-        ax2.set_ylabel(unit or "value")
-        ax2.grid(axis="y", color="#e1e0d9")
-
-    fig.tight_layout()
-    return _fig_to_png(fig, plt)
-
-
-# matplotlib figure를 PNG 바이트로 변환하고 닫는다.
-def _fig_to_png(fig: Any, plt: Any) -> bytes:
-    buffer = BytesIO()
-    fig.savefig(buffer, format="png", dpi=160, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
-    return buffer.getvalue()
-
-
-# 파일명에 안전하게 넣을 수 있는 문자열로 바꾼다.
-def _safe_filename_part(value: Any) -> str:
-    text = re.sub(r"[^0-9A-Za-z가-힣_-]+", "_", str(value or "")).strip("_")
-    return text[:60] or "chart"
-
-
-# PNG를 서빙 디렉터리에 쓰고 HTTP URL을 만든다. 실패하면 None을 돌려준다.
-def _write_png_asset(spec: dict[str, Any], png_bytes: bytes) -> dict[str, Any] | None:
-    chart = spec["chart"]
-    digest = sha1(png_bytes).hexdigest()[:12]
-    filename = "_".join([
-        "statyearbook",
-        str(spec["stat"]["stat_id"]),
-        str(spec["stat"]["table_seq"]),
-        _safe_filename_part(chart["type"]),
-        digest,
-    ]) + ".png"
-
-    try:
-        path = visualization_dir() / filename
-        path.write_bytes(png_bytes)
-    except OSError as exc:
-        spec["warnings"].append(f"PNG 파일 저장에 실패했습니다: {exc}")
-        return None
-
-    url = build_asset_url(filename)
-    title = _safe_filename_part(chart["title"])
-    return {
-        "image_path": str(path.resolve()),
-        "image_url": url,
-        "mime_type": "image/png",
-        "markdown": f"![{title}]({url})" if url else None,
-    }
-
-
-# 차트 spec을 실제 PNG 이미지로 렌더링한다.
-def _render_png(spec: dict[str, Any]) -> bytes:
-    plt, pd, sns = _load_plotting()
-    _configure_plot(plt, sns)
-
-    chart_type = spec["chart"]["type"]
-    title = spec["chart"]["title"]
-    unit = spec["chart"].get("unit")
-
-    if chart_type == "table" or not spec["data"]["records"]:
-        return _render_table_image(spec, plt)
-
-    df = pd.DataFrame(spec["data"]["records"])
-    has_series = "series" in df.columns and df["series"].notna().any()
-    if chart_type == "line" and not has_series:
-        return _render_single_line_image(spec, plt, pd)
-
-    width = 11
-    height = 5.5 if len(df) <= 30 else 6.5
-    fig, ax = plt.subplots(figsize=(width, height))
-
-    if chart_type in {"bar", "grouped_bar"}:
-        sns.barplot(data=df, x="x", y="value", hue="series" if has_series else None, ax=ax)
-        _finish_axes(ax, title, unit)
-    elif chart_type == "stacked_bar":
-        pivot = df.pivot_table(index="x", columns="series", values="value", aggfunc="sum", fill_value=0)
-        pivot.plot(kind="bar", stacked=True, ax=ax)
-        _finish_axes(ax, title, unit)
-    elif chart_type == "line":
-        sns.lineplot(data=df, x="x", y="value", hue="series" if has_series else None, marker="o", ax=ax)
-        _finish_axes(ax, title, unit)
-    elif chart_type == "area":
-        if has_series:
-            pivot = df.pivot_table(index="x", columns="series", values="value", aggfunc="sum", fill_value=0)
-            pivot.plot.area(ax=ax)
-        else:
-            positions = list(range(len(df)))
-            ax.plot(positions, df["value"], marker="o")
-            ax.fill_between(positions, df["value"], alpha=0.25)
-            ax.set_xticks(positions)
-            ax.set_xticklabels(df["x"])
-        _finish_axes(ax, title, unit)
-    elif chart_type == "scatter":
-        sns.scatterplot(data=df, x="x", y="value", hue="series" if has_series else None, s=80, ax=ax)
-        _finish_axes(ax, title, unit)
-    elif chart_type == "heatmap":
-        pivot = df.pivot_table(index="series", columns="x", values="value", aggfunc="sum", fill_value=0)
-        sns.heatmap(pivot, annot=True, fmt=".0f", cmap="Blues", ax=ax)
-        ax.set_title(title, pad=14)
-        ax.set_xlabel("")
-        ax.set_ylabel("")
-    elif chart_type == "donut":
-        donut_df = df.groupby("x", as_index=False)["value"].sum()
-        ax.pie(
-            donut_df["value"],
-            labels=donut_df["x"],
-            autopct="%1.1f%%",
-            startangle=90,
-            wedgeprops={"width": 0.42, "edgecolor": "white"},
-        )
-        ax.set_title(title, pad=14)
-        ax.axis("equal")
-    else:
-        return _render_table_image(spec, plt)
-
-    if has_series and chart_type not in {"heatmap", "donut"}:
-        ax.legend(title="")
-    fig.tight_layout()
-    return _fig_to_png(fig, plt)
 
 
 # x축이 연도인지 판별한다(Vega 축 타입 결정용).
@@ -1243,14 +986,8 @@ def _summary_text(spec: dict[str, Any]) -> str:
         f"선택 이유: {chart['reason']}",
         f"데이터 포인트: {spec['data']['record_count']}개",
     ]
-    asset = spec.get("asset")
-    if asset and asset.get("image_url"):
-        lines.append(f"이미지 URL(클릭/임베드 가능): {asset['image_url']}")
     if spec.get("vega_lite"):
-        lines.append(
-            "structuredContent.vega_lite 에 표준 Vega-Lite spec이 있어 "
-            "위젯 렌더가 가능한 클라이언트는 인터랙티브 차트로 그릴 수 있습니다."
-        )
+        lines.append("structuredContent.vega_lite에 프론트엔드 렌더링용 Vega-Lite spec이 있습니다.")
     if spec["warnings"]:
         lines.append("경고: " + " / ".join(spec["warnings"]))
     return "\n".join(lines)
@@ -1272,7 +1009,7 @@ def _error_result(message: str, stat_id: int, table_seq: int) -> CallToolResult:
 
 # visualize MCP 도구를 등록한다.
 def register(mcp: FastMCP) -> None:
-    # 통계표를 PNG 이미지, HTTP 링크, Vega-Lite spec으로 반환한다.
+    # 통계표를 프론트엔드 렌더링용 Vega-Lite spec으로 반환한다.
     @mcp.tool(description=VISUALIZE)
     def visualize(
         stat_id: int,
@@ -1283,42 +1020,15 @@ def register(mcp: FastMCP) -> None:
         y: str | None = None,
         group: str | None = None,
         top_n: int | None = None,
-        include_image: bool = True,
     ) -> CallToolResult:
         table = _fetch_table(stat_id, table_seq)
         if table is None:
             return _error_result("해당 stat_id/table_seq 통계표를 찾지 못했습니다.", stat_id, table_seq)
 
         spec = _build_plot_spec(table, query, chart_type, x, y, group, top_n)
-        try:
-            png_bytes = _render_png(spec)
-        except RuntimeError as exc:
-            return _error_result(str(exc), stat_id, table_seq)
-
-        spec["asset"] = _write_png_asset(spec, png_bytes)
         spec["vega_lite"] = _vega_lite_spec(spec)
-        asset = spec["asset"]
-
-        content: list[Any] = []
-        # 컨텍스트가 작은 클라이언트(sLLM)를 위해 인라인 이미지는 선택적으로 넣는다.
-        if include_image:
-            content.append(Image(data=png_bytes, format="png").to_image_content())
-        content.append(TextContent(type="text", text=_summary_text(spec)))
-
-        if asset and asset.get("image_url"):
-            content.append(
-                ResourceLink(
-                    type="resource_link",
-                    name=Path(asset["image_path"]).name,
-                    title=spec["chart"]["title"],
-                    uri=asset["image_url"],
-                    description="렌더링된 통계 시각화 PNG (HTTP)",
-                    mimeType="image/png",
-                    size=len(png_bytes),
-                )
-            )
 
         return CallToolResult(
-            content=content,
+            content=[TextContent(type="text", text=_summary_text(spec))],
             structuredContent=spec,
         )

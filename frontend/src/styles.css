@@ -498,6 +498,45 @@ button {
   margin-bottom: 0;
 }
 
+.vega-chart {
+  width: 100%;
+  margin-top: 16px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fff;
+  padding: 16px;
+}
+
+.vega-chart__canvas {
+  min-width: 0;
+}
+
+.vega-chart__canvas .vega-embed {
+  width: 100%;
+}
+
+.vega-chart__canvas canvas {
+  max-width: 100%;
+  height: auto;
+}
+
+.vega-chart__canvas .vega-actions {
+  margin-top: 8px;
+}
+
+.vega-chart__canvas .vega-actions a {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.vega-chart__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
 .message__content--markdown p,
 .message__content--markdown blockquote,
 .message__content--markdown ul,

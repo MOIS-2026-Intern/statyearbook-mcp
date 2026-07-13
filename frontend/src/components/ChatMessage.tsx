@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage as ChatMessageType, McpTrace } from "../types/chat";
 import { McpTraceCard } from "./McpTraceCard";
+import { VegaLiteChart } from "./VegaLiteChart";
 
 interface ChatMessageProps {
   message: ChatMessageType;
@@ -11,9 +12,25 @@ interface ChatMessageProps {
   showMcpTrace: boolean;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function vegaLiteSpec(trace: McpTrace): Record<string, unknown> | null {
+  if (trace.tool !== "visualize" || !isRecord(trace.response)) {
+    return null;
+  }
+  const structured = trace.response.structuredContent;
+  if (!isRecord(structured) || !isRecord(structured.vega_lite)) {
+    return null;
+  }
+  return structured.vega_lite;
+}
+
 export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessageProps) {
   const [expanded, setExpanded] = useState(false);
   const traces = (message.traceIds ?? []).map((traceId) => tracesById[traceId]).filter(Boolean);
+  const charts = traces.map(vegaLiteSpec).filter((spec): spec is Record<string, unknown> => spec !== null);
   const isUser = message.role === "user";
 
   return (
@@ -44,6 +61,10 @@ export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessagePr
             </ReactMarkdown>
           )}
         </div>
+
+        {!isUser
+          ? charts.map((spec, index) => <VegaLiteChart key={`${message.id}-chart-${index}`} spec={spec} />)
+          : null}
 
         {!isUser && showMcpTrace && traces.length > 0 ? (
           <div className="message__trace">
