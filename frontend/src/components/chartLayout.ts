@@ -40,17 +40,23 @@ function valuesFrom(view: JsonRecord) {
 
 function categoryMetrics(view: JsonRecord) {
   const values = valuesFrom(view);
-  const labels = values.map((value) => (isRecord(value) ? String(value.x ?? "") : ""));
+  const labels = [...new Set(values.map((value) => (isRecord(value) ? String(value.x ?? "") : "")))];
+  const positiveValues = values
+    .map((value) => (isRecord(value) && typeof value.value === "number" ? Math.abs(value.value) : 0))
+    .filter((value) => value > 0);
+  const minimum = Math.min(...positiveValues);
+  const maximum = Math.max(...positiveValues);
   return {
     count: labels.length,
     maxLabelLength: Math.max(0, ...labels.map((label) => [...label].length)),
+    valueRatio: positiveValues.length > 1 && minimum > 0 ? maximum / minimum : 1,
   };
 }
 
 function styleBar(view: JsonRecord, width: number) {
   const encoding = isRecord(view.encoding) ? { ...view.encoding } : {};
-  const { count, maxLabelLength } = categoryMetrics(view);
-  const horizontal = count > 8 || maxLabelLength > 14;
+  const { count, maxLabelLength, valueRatio } = categoryMetrics(view);
+  const horizontal = count > 8 || maxLabelLength > 14 || valueRatio > 100;
 
   if (horizontal && isRecord(encoding.x) && isRecord(encoding.y)) {
     const x = encoding.x;
@@ -68,11 +74,21 @@ function styleBar(view: JsonRecord, width: number) {
     height: horizontal ? clamp(120 + count * 34, 300, 560) : 340,
     ...(Array.isArray(view.layer)
       ? {
-          layer: view.layer.map((layer) =>
-            isRecord(layer) && markType(layer.mark) === "bar"
-              ? { ...layer, mark: { type: "bar", cornerRadiusEnd: 3 } }
-              : layer,
-          ),
+          layer: view.layer.map((layer) => {
+            if (!isRecord(layer)) {
+              return layer;
+            }
+            if (markType(layer.mark) === "bar") {
+              return { ...layer, mark: { type: "bar", cornerRadiusEnd: 3 } };
+            }
+            if (horizontal && markType(layer.mark) === "text" && isRecord(layer.mark)) {
+              return {
+                ...layer,
+                mark: { ...layer.mark, dx: 8, dy: 0, align: "left", baseline: "middle" },
+              };
+            }
+            return layer;
+          }),
         }
       : { mark: { type: "bar", cornerRadiusEnd: 3 } }),
     encoding,

@@ -7,11 +7,17 @@ TotalMode = Literal["auto", "include", "exclude"]
 TREND_WORDS = ("추이", "연도별", "시계열", "변화", "trend", "yearly", "over time")
 DELTA_WORDS = ("증감", "전년", "증가", "감소", "변화량", "delta", "change")
 TOTAL_WORDS = ("계", "합계", "소계", "총계", "total", "subtotal")
+MISSING_VALUES = {"", "-", "－", "—", "–"}
 
 
 # 표 셀 텍스트를 정리한다.
 def clean_label(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+# 표에서 값 없음으로 사용하는 기호인지 확인한다.
+def is_missing_value(value: Any) -> bool:
+    return clean_label(value) in MISSING_VALUES
 
 
 # 표 셀의 텍스트를 읽는다.
@@ -108,7 +114,7 @@ def _combine_header_rows(header_rows: list[list[str]], width: int) -> list[str]:
             value = clean_label(row[col_idx]) if col_idx < len(row) else ""
             if value and value not in parts:
                 parts.append(value)
-        headers.append(" ".join(parts))
+        headers.append("_".join(parts))
     return _unique_headers(headers)
 
 
@@ -161,7 +167,7 @@ def body_to_rows(body: dict) -> tuple[list[str], list[dict[str, str]], list[str]
 # 문자열 숫자 표기를 float 값으로 변환한다.
 def parse_number(value: Any) -> float | None:
     text = clean_label(value)
-    if not text or text in {"-", "－", "—", "–"}:
+    if is_missing_value(text):
         return None
 
     normalized = (
@@ -222,7 +228,7 @@ def profile_columns(columns: list[str], rows: list[dict[str, str]]) -> list[dict
     profiles: list[dict[str, Any]] = []
     for column in columns:
         values = [row.get(column, "") for row in rows]
-        nonempty = [value for value in values if clean_label(value)]
+        nonempty = [value for value in values if not is_missing_value(value)]
         count = len(nonempty) or 1
         numeric_count = sum(1 for value in nonempty if parse_number(value) is not None)
         year_count = sum(1 for value in nonempty if parse_year(value) is not None)
@@ -231,6 +237,8 @@ def profile_columns(columns: list[str], rows: list[dict[str, str]]) -> list[dict
             "연도" in column or "년도" in column or "year" in normalized or year_count == len(nonempty)
         )
         is_numeric = numeric_count / count >= 0.6 and not is_year
+        is_missing_only = not nonempty
+        is_categorical = bool(nonempty) and not is_numeric and not is_year
         profiles.append({
             "name": column,
             "nonempty": len(nonempty),
@@ -238,6 +246,8 @@ def profile_columns(columns: list[str], rows: list[dict[str, str]]) -> list[dict
             "year_ratio": round(year_count / count, 3),
             "is_numeric": is_numeric,
             "is_year": is_year,
+            "is_categorical": is_categorical,
+            "is_missing_only": is_missing_only,
         })
     return profiles
 
@@ -254,7 +264,7 @@ def _matches_alias(requested: str, profile: dict[str, Any]) -> bool:
     if key in {"year", "date", "연도", "년도"}:
         return profile["is_year"]
     if key in {"category", "classification", "label", "name", "구분", "분류"}:
-        return not profile["is_numeric"] and not profile["is_year"]
+        return profile.get("is_categorical", False)
     if key in {"total", "sum", "계", "합계"}:
         return is_total_label(profile["name"]) or "total" in label
     return False
@@ -338,6 +348,104 @@ def query_year(query: str | None) -> int | None:
     return next(iter(years)) if len(years) == 1 else None
 
 
+# LLM이 명시적으로 추출한 연도를 우선하고 자연어 질의의 연도를 보조값으로 쓴다.
+def requested_year(year: int | None, query: str | None) -> int | None:
+    return year if year is not None else query_year(query)
+
+
+# 명시된 연도·도시와 질의에 포함된 행 라벨을 원본 표 행에 적용한다.
+def select_source_rows(
+    rows: list[dict[str, str]],
+    profiles: list[dict[str, Any]],
+    year: int | None,
+    city: str | None,
+    query: str | None,
+) -> tuple[list[dict[str, str]], dict[str, Any], list[str]]:
+    selected = list(rows)
+    warnings: list[str] = []
+    selection: dict[str, Any] = {
+        "requested_year": year,
+        "requested_city": city,
+        "year_column": None,
+        "city_column": None,
+        "city_value": None,
+        "query_row_value": None,
+    }
+
+    year_profile = next((profile for profile in profiles if profile["is_year"]), None)
+    if year is not None and year_profile is not None:
+        year_column = year_profile["name"]
+        matches = [row for row in selected if parse_year(row.get(year_column)) == year]
+        selection["year_column"] = year_column
+        if not matches:
+            warnings.append(f"표의 '{year_column}' 컬럼에서 {year}년 행을 찾지 못했습니다.")
+            return [], selection, warnings
+        selected = matches
+
+    categorical_columns = [
+        profile["name"] for profile in profiles if profile.get("is_categorical", False)
+    ]
+    if city:
+        city_key = normalize_key(city)
+        exact: list[tuple[str, str, dict[str, str]]] = []
+        partial: list[tuple[str, str, dict[str, str]]] = []
+        for row in selected:
+            for column in categorical_columns:
+                value = row.get(column, "")
+                value_key = normalize_key(value)
+                if not value_key:
+                    continue
+                item = (column, value, row)
+                if value_key == city_key:
+                    exact.append(item)
+                elif city_key and (city_key in value_key or value_key in city_key):
+                    partial.append(item)
+        matches = exact or partial
+        if not matches:
+            warnings.append(f"표에서 도시·지역 '{city}'에 해당하는 행을 찾지 못했습니다.")
+            return [], selection, warnings
+        distinct_matches = {(column, value) for column, value, _ in matches}
+        if not exact and len(distinct_matches) > 1:
+            labels = ", ".join(sorted({value for _, value in distinct_matches}))
+            warnings.append(f"도시·지역 '{city}'가 여러 행({labels})과 일치해 하나를 선택하지 않았습니다.")
+            return [], selection, warnings
+        matched_column, matched_value, _ = matches[0]
+        selected = [row for row in selected if row.get(matched_column) == matched_value]
+        selection["city_column"] = matched_column
+        selection["city_value"] = matched_value
+    elif query:
+        query_key = normalize_key(query)
+        candidates: list[tuple[int, str, str]] = []
+        for column in categorical_columns:
+            for row in selected:
+                value = row.get(column, "")
+                value_key = normalize_key(value)
+                if len(value_key) >= 2 and value_key in query_key:
+                    candidates.append((len(value_key), column, value))
+        if candidates:
+            candidates.sort(key=lambda item: -item[0])
+            _, matched_column, matched_value = candidates[0]
+            selected = [row for row in selected if row.get(matched_column) == matched_value]
+            selection["query_row_value"] = matched_value
+
+    selection["selected_row_count"] = len(selected)
+    return selected, selection, warnings
+
+
+# 평탄화된 헤더를 첫 '_' 앞의 최상위 헤더별 컬럼군으로 묶는다.
+def column_family_groups(profiles: list[dict[str, Any]]) -> dict[str, list[str]]:
+    groups: dict[str, list[str]] = {}
+    for profile in profiles:
+        name = profile["name"]
+        if "_" not in name:
+            continue
+        if not profile["is_numeric"] and not profile.get("is_missing_only", False):
+            continue
+        prefix = clean_label(name.split("_", 1)[0])
+        groups.setdefault(prefix, []).append(name)
+    return {prefix: columns for prefix, columns in groups.items() if len(columns) >= 2}
+
+
 # 평탄화된 다중 헤더에서 요청한 상위 헤더에 속하는 숫자 컬럼들을 찾는다.
 def column_family(requested: str | None, profiles: list[dict[str, Any]]) -> list[str]:
     if not requested:
@@ -345,26 +453,34 @@ def column_family(requested: str | None, profiles: list[dict[str, Any]]) -> list
     key = normalize_key(requested)
     if not key:
         return []
-    return [
-        profile["name"]
-        for profile in profiles
-        if profile["is_numeric"] and key in normalize_key(profile["name"])
+    groups = column_family_groups(profiles)
+    exact = [columns for prefix, columns in groups.items() if normalize_key(prefix) == key]
+    if exact:
+        return exact[0]
+    matches = [
+        columns
+        for prefix, columns in groups.items()
+        if key in normalize_key(prefix) or normalize_key(prefix) in key
     ]
+    return matches[0] if len(matches) == 1 else []
 
 
 # 상위 헤더를 제거해 차트에 표시할 하위 범주 라벨을 만든다.
 def family_category_label(column: str) -> str:
-    suffix = column.rsplit("_", 1)[-1]
-    cleaned = clean_label(suffix)
-    bilingual = re.match(r"^(.+?)\s+(?=[A-Za-z]+(?:\s|$)|\d+s\b)", cleaned)
-    if bilingual:
-        return clean_label(bilingual.group(1))
-    if re.fullmatch(r"[0-9가-힣･·ㆍ\s]+", cleaned) and re.search(r"[가-힣]", cleaned):
-        return cleaned
-    korean = re.match(r"([가-힣･·ㆍ\s]+)", cleaned)
-    if korean and len(re.sub(r"[^가-힣]", "", korean.group(1))) >= 2:
-        return clean_label(korean.group(1))
-    return display_category_label(suffix)
+    def part_label(part: str) -> str:
+        cleaned = clean_label(part)
+        bilingual = re.match(r"^(.+?)\s+(?=[A-Za-z]+(?:\s|$)|\d+s\b)", cleaned)
+        if bilingual:
+            return clean_label(bilingual.group(1))
+        if re.fullmatch(r"[0-9가-힣･·ㆍ\s]+", cleaned) and re.search(r"[가-힣]", cleaned):
+            return cleaned
+        korean = re.match(r"([가-힣･·ㆍ\s]+)", cleaned)
+        if korean and len(re.sub(r"[^가-힣]", "", korean.group(1))) >= 2:
+            return clean_label(korean.group(1))
+        return display_category_label(part)
+
+    parts = column.split("_")[1:]
+    return " / ".join(part_label(part) for part in parts) if parts else display_category_label(column)
 
 
 # 합계 컬럼인지 컬럼명과 하위 범주 라벨을 기준으로 판별한다.
@@ -454,7 +570,7 @@ def pick_x_column(profiles: list[dict[str, Any]], query: str | None) -> str | No
     categorical_columns = [
         profile["name"]
         for profile in profiles
-        if not profile["is_numeric"] and not profile["is_year"]
+        if profile.get("is_categorical", False)
     ]
     query_match = pick_column_from_query(query, categorical_columns)
     if query_match:
@@ -474,6 +590,7 @@ def filter_chart_records(
     records: list[dict[str, Any]],
     query: str | None,
     total_mode: TotalMode,
+    target_year: int | None = None,
 ) -> list[dict[str, Any]]:
     resolved_total_mode = resolve_total_mode(total_mode, query)
     filtered = records
@@ -484,7 +601,7 @@ def filter_chart_records(
             and not is_total_label(record.get("series"))
         ]
 
-    target_year = query_year(query)
+    target_year = target_year if target_year is not None else query_year(query)
     if target_year is not None:
         year_matches = [record for record in filtered if parse_year(record.get("x")) == target_year]
         if year_matches:

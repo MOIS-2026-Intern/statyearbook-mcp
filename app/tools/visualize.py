@@ -1,7 +1,9 @@
 import json
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, TextContent
+from pydantic import Field
 
 from app.db import connect
 from app.tool_descriptions import VISUALIZE
@@ -55,17 +57,32 @@ def register(mcp: FastMCP) -> None:
         table_seq: int = 1,
         query: str | None = None,
         chart_type: ChartType = "auto",
-        x: str | None = None,
-        y: str | None = None,
+        x: Annotated[str | None, Field(description="실제 x축 컬럼명 또는 연도·분류 같은 역할")] = None,
+        y: Annotated[str | None, Field(description="실제 y축 숫자 컬럼명 또는 값·정원 같은 역할")] = None,
         group: str | None = None,
         top_n: int | None = None,
         total_mode: TotalMode = "auto",
+        year: Annotated[
+            int | None,
+            Field(description="사용자가 특정한 데이터 행의 연도. 날짜가 있으면 연도 정수만 추출"),
+        ] = None,
+        city: Annotated[
+            str | None,
+            Field(description="사용자가 특정한 도시·시도·지역명. 표의 실제 행 값과 서버에서 대조"),
+        ] = None,
+        column_family: Annotated[
+            str | None,
+            Field(description="'상위 헤더_하위 헤더'로 평탄화된 컬럼 중 요청한 상위 헤더명"),
+        ] = None,
     ) -> CallToolResult:
         table = _fetch_table(stat_id, table_seq)
         if table is None:
             return _error_result("해당 stat_id/table_seq 통계표를 찾지 못했습니다.", stat_id, table_seq)
 
-        spec = build_plot_spec(table, query, chart_type, x, y, group, top_n, total_mode)
+        spec = build_plot_spec(
+            table, query, chart_type, x, y, group, top_n, total_mode,
+            year=year, city=city, column_family_name=column_family,
+        )
         spec["vega_lite"] = build_vega_lite_spec(spec)
 
         return CallToolResult(

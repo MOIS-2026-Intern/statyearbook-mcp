@@ -1,9 +1,11 @@
+import re
 from typing import Any, Literal
 
 from .table_interpreter import (
     TotalMode,
     body_to_rows,
     column_family,
+    column_family_groups,
     display_category_label,
     family_category_label,
     filter_chart_records,
@@ -17,10 +19,11 @@ from .table_interpreter import (
     pick_x_column,
     profile_by_name,
     profile_columns,
-    query_year,
+    requested_year,
     resolve_column,
     resolve_total_mode,
     row_x_value,
+    select_source_rows,
     wants_delta_chart,
     wants_trend_chart,
     year_value_columns,
@@ -55,6 +58,8 @@ VALID_CHART_TYPES = {
 SHARE_WORDS = ("비중", "구성", "구성비", "점유", "점유율", "분포", "share", "ratio", "composition")
 MAX_SERIES = 12
 _MISSING = object()
+CATEGORY_ALIASES = {"category", "classification", "label", "name", "구분", "분류"}
+VALUE_ALIASES = {"value", "count", "measure", "값", "수", "정원", "인원"}
 
 
 # 너무 많은 계열은 값 합계 기준 상위 계열만 남긴다.
@@ -126,6 +131,55 @@ def _chart_title(table: dict, subtitle: str | None = None) -> str:
     return title
 
 
+# 요청 힌트와 '_' 상위 헤더를 비교해 wide 표에서 사용할 컬럼군을 고른다.
+def _pick_column_family(
+    table: dict,
+    profiles: list[dict[str, Any]],
+    query: str | None,
+    x: str | None,
+    y: str | None,
+    requested_family: str | None,
+    warnings: list[str],
+) -> tuple[str | None, list[str]]:
+    groups = column_family_groups(profiles)
+    if requested_family:
+        columns = column_family(requested_family, profiles)
+        if columns:
+            prefix = next(prefix for prefix, values in groups.items() if values == columns)
+            return prefix, columns
+        warnings.append(f"표에서 요청한 컬럼군 '{requested_family}'을 찾지 못했습니다.")
+        return None, []
+
+    for hint in (x, y):
+        columns = column_family(hint, profiles)
+        if columns:
+            prefix = next(prefix for prefix, values in groups.items() if values == columns)
+            return prefix, columns
+
+    semantic_request = normalize_key(x) in CATEGORY_ALIASES and (
+        not y or normalize_key(y) in VALUE_ALIASES or resolve_column(y, profiles) is None
+    )
+    if not semantic_request or not groups:
+        return None, []
+    if len(groups) == 1:
+        return next(iter(groups.items()))
+
+    context = normalize_key(" ".join(
+        value for value in (query, table.get("title_ko"), table.get("caption")) if value
+    ))
+    scored: list[tuple[int, int, str, list[str]]] = []
+    for prefix, columns in groups.items():
+        compact_prefix = re.sub(r"(?<=[가-힣])\s+(?=[가-힣])", "", prefix)
+        tokens = [token for token in re.findall(r"[가-힣A-Za-z0-9]+", compact_prefix) if len(token) >= 2]
+        score = sum(len(token) for token in tokens if token.lower() in context)
+        scored.append((score, len(columns), prefix, columns))
+    scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    if len(scored) > 1 and scored[0][:2] == scored[1][:2]:
+        warnings.append("여러 컬럼군의 우선순위가 같아 column_family를 명시해야 합니다.")
+        return None, []
+    return scored[0][2], scored[0][3]
+
+
 # 요청과 데이터 구조를 바탕으로 최종 차트 타입을 결정한다.
 def _select_chart(
     requested: str,
@@ -143,7 +197,7 @@ def _select_chart(
     x_is_numeric = bool(x_profile and x_profile["is_numeric"])
 
     if not has_records:
-        return "table", "server_fallback", "시각화 가능한 숫자 데이터가 없어 표 이미지로 대체했습니다."
+        return "table", "server_fallback", "시각화 가능한 숫자 데이터가 없어 차트를 생성하지 않았습니다."
 
     if requested_type == "auto":
         if _wants_share_chart(query) and not x_is_year and not has_group:
@@ -193,6 +247,7 @@ def _build_response(
     source_rows: list[dict[str, str]],
     warnings: list[str],
     *,
+    request_hints: dict[str, Any] | None = None,
     transform: dict[str, Any] | None = None,
     delta_records: list[dict[str, Any]] | object = _MISSING,
 ) -> dict[str, Any]:
@@ -229,6 +284,7 @@ def _build_response(
             "group": group,
             "top_n": top_n,
             "total_mode": total_mode,
+            **(request_hints or {}),
         },
         "chart": chart,
         "columns": profiles,
@@ -258,6 +314,8 @@ def _wide_year_time_series_spec(
     source_rows: list[dict[str, str]],
     profiles: list[dict[str, Any]],
     warnings: list[str],
+    target_year: int | None,
+    request_hints: dict[str, Any],
 ) -> dict[str, Any] | None:
     requested_type = chart_type if chart_type in VALID_CHART_TYPES else "auto"
     if requested_type != chart_type:
@@ -273,7 +331,7 @@ def _wide_year_time_series_spec(
     category_columns = [
         profile["name"]
         for profile in profiles
-        if not profile["is_numeric"] and not profile["is_year"]
+        if profile.get("is_categorical", False)
     ]
     category_column = None
     if x and normalize_key(x) not in {"year", "date", "연도", "년도"}:
@@ -302,7 +360,7 @@ def _wide_year_time_series_spec(
     if len(records) < 2:
         return None
 
-    records = filter_chart_records(records, query, total_mode)
+    records = filter_chart_records(records, query, total_mode, target_year=target_year)
     if not records:
         return None
 
@@ -350,6 +408,7 @@ def _wide_year_time_series_spec(
     return _build_response(
         table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
         records, source_rows, warnings,
+        request_hints=request_hints,
         transform={
             "type": "wide_year_row_to_time_series",
             "category_column": category_column,
@@ -373,13 +432,19 @@ def _wide_row_category_spec(
     source_rows: list[dict[str, str]],
     profiles: list[dict[str, Any]],
     warnings: list[str],
+    target_year: int | None,
+    requested_family: str | None,
+    request_hints: dict[str, Any],
 ) -> dict[str, Any] | None:
     requested_type = chart_type if chart_type in VALID_CHART_TYPES else "auto"
-    target_year = query_year(query)
+    if not source_rows:
+        return None
     year_profile = next((profile for profile in profiles if profile["is_year"]), None)
-    family_columns = column_family(x, profiles) or column_family(y, profiles)
+    family_prefix, family_columns = _pick_column_family(
+        table, profiles, query, x, y, requested_family, warnings,
+    )
     category_profiles = [
-        profile for profile in profiles if not profile["is_numeric"] and not profile["is_year"]
+        profile for profile in profiles if profile.get("is_categorical", False)
     ]
     category_profile = next(
         (
@@ -400,8 +465,14 @@ def _wide_row_category_spec(
         target_label = f"{target_year}년"
     else:
         target_column = category_profile["name"]
-        selected_row = pick_focus_row(source_rows, target_column, query, x, y, group)
+        selected_row = source_rows[0] if len(source_rows) == 1 else pick_focus_row(
+            source_rows, target_column, query, x, y, group,
+        )
         target_label = display_category_label(selected_row.get(target_column)) if selected_row else ""
+    selection = request_hints.get("selection", {})
+    selected_place = selection.get("city_value") or selection.get("query_row_value")
+    if selected_place and normalize_key(selected_place) not in normalize_key(target_label):
+        target_label = f"{target_label} {display_category_label(selected_place)}".strip()
     if selected_row is None:
         if target_year is not None:
             warnings.append(f"표에서 {target_year}년 행을 찾지 못했습니다.")
@@ -452,7 +523,7 @@ def _wide_row_category_spec(
     if applied_total_mode == "not_applicable":
         total_reason = "선택한 범주에서 집계 범주를 찾지 못했습니다."
     elif applied_total_mode == "exclude" and resolved_total_mode == "auto":
-        total_reason = "구성비 차트에서 집계 범주를 자동 제외했습니다."
+        total_reason = "하위 범주와 중복되는 집계 범주를 자동 제외했습니다."
     elif applied_total_mode == "exclude":
         total_reason = "total_mode=exclude 요청에 따라 집계 범주를 제외했습니다."
     else:
@@ -475,11 +546,13 @@ def _wide_row_category_spec(
     return _build_response(
         table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
         records, source_rows, warnings,
+        request_hints=request_hints,
         transform={
             "type": "wide_row_to_categories",
             "target_column": target_column,
             "target_value": selected_row.get(target_column),
             "selected_year": target_year,
+            "column_family": family_prefix,
             "selected_columns": selected_columns,
             "requested_total_mode": total_mode,
             "resolved_total_mode": resolved_total_mode,
@@ -502,22 +575,45 @@ def build_plot_spec(
     group: str | None,
     top_n: int | None,
     total_mode: TotalMode = "auto",
+    year: int | None = None,
+    city: str | None = None,
+    column_family_name: str | None = None,
 ) -> dict[str, Any]:
-    columns, source_rows, warnings = body_to_rows(table["body"])
-    profiles = profile_columns(columns, source_rows)
+    columns, all_source_rows, warnings = body_to_rows(table["body"])
+    profiles = profile_columns(columns, all_source_rows)
     profile_map = profile_by_name(profiles)
+    target_year = requested_year(year, query)
+    source_rows, selection, selection_warnings = select_source_rows(
+        all_source_rows, profiles, target_year, city, query,
+    )
+    warnings.extend(selection_warnings)
+    request_hints = {
+        "year": year,
+        "city": city,
+        "column_family": column_family_name,
+        "resolved_year": target_year,
+        "selection": selection,
+    }
 
     wide_spec = _wide_year_time_series_spec(
         table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles, warnings,
+        target_year, request_hints,
     )
     if wide_spec is not None:
         return wide_spec
 
     wide_category_spec = _wide_row_category_spec(
         table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles, warnings,
+        target_year, column_family_name, request_hints,
     )
     if wide_category_spec is not None:
         return wide_category_spec
+
+    family_validation_failed = bool(
+        column_family_name and not column_family(column_family_name, profiles)
+    )
+    if family_validation_failed:
+        source_rows = []
 
     x_column = resolve_column(x, profiles) or pick_x_column(profiles, query)
     group_column = resolve_column(group, profiles)
@@ -576,7 +672,10 @@ def build_plot_spec(
     selected_type, decision_source, reason = _select_chart(
         chart_type, query, bool(records), x_profile, has_group, warnings,
     )
-    records = filter_chart_records(records, query, total_mode)
+    if not source_rows and (selection_warnings or family_validation_failed):
+        decision_source = "server_validation"
+        reason = "요청한 행 또는 컬럼군을 표에서 확인하지 못해 전체 데이터로 대체하지 않았습니다."
+    records = filter_chart_records(records, query, total_mode, target_year=target_year)
 
     x_is_year = bool(x_profile and x_profile["is_year"])
     records = _limit_categories(records, selected_type, x_is_year, top_n, warnings)
@@ -596,4 +695,5 @@ def build_plot_spec(
     return _build_response(
         table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
         records, source_rows, warnings,
+        request_hints=request_hints,
     )

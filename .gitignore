@@ -22,3 +22,6 @@ dist/
 #load
 /load/parsed_yearbook.json
 /load/output/
+
+#test
+tests/
