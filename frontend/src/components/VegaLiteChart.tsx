@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import embed from "vega-embed";
 import type { VisualizationSpec } from "vega-embed";
+import { applyChartLayout } from "./chartLayout";
 
 interface VegaLiteChartProps {
   spec: Record<string, unknown>;
@@ -9,6 +10,11 @@ interface VegaLiteChartProps {
 export function VegaLiteChart({ spec }: VegaLiteChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const layoutSpec = useMemo(
+    () => (containerWidth > 0 ? applyChartLayout(spec, containerWidth) : null),
+    [containerWidth, spec],
+  );
 
   useEffect(() => {
     const container = containerRef.current;
@@ -16,11 +22,25 @@ export function VegaLiteChart({ spec }: VegaLiteChartProps) {
       return;
     }
 
+    setContainerWidth(Math.floor(container.getBoundingClientRect().width));
+    const observer = new ResizeObserver(([entry]) => {
+      setContainerWidth(Math.floor(entry.contentRect.width));
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !layoutSpec) {
+      return;
+    }
+
     let disposed = false;
     let finalize: (() => void) | undefined;
     setError(null);
 
-    void embed(container, spec as VisualizationSpec, {
+    void embed(container, layoutSpec as VisualizationSpec, {
       actions: {
         export: { png: true, svg: false },
         source: false,
@@ -28,6 +48,7 @@ export function VegaLiteChart({ spec }: VegaLiteChartProps) {
         editor: false,
       },
       renderer: "canvas",
+      scaleFactor: 2,
     })
       .then((result) => {
         if (disposed) {
@@ -47,7 +68,7 @@ export function VegaLiteChart({ spec }: VegaLiteChartProps) {
       finalize?.();
       container.replaceChildren();
     };
-  }, [spec]);
+  }, [layoutSpec]);
 
   return (
     <section className="vega-chart" aria-label="통계 시각화">

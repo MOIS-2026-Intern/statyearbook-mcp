@@ -509,11 +509,14 @@ button {
 }
 
 .vega-chart__canvas {
+  display: flex;
+  justify-content: center;
   min-width: 0;
 }
 
 .vega-chart__canvas .vega-embed {
-  width: 100%;
+  flex: 0 1 auto;
+  max-width: 100%;
 }
 
 .vega-chart__canvas canvas {
