@@ -82,6 +82,18 @@ function isEmptyConversation(conversation: Conversation) {
   return conversation.messages.length === 0 && conversation.traces.length === 0;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasVegaLiteSpec(trace: McpTrace) {
+  if (trace.tool !== "visualize" || !isRecord(trace.response)) {
+    return false;
+  }
+  const structured = trace.response.structuredContent;
+  return isRecord(structured) && isRecord(structured.vega_lite);
+}
+
 function createInitialConversationState() {
   const savedState = loadConversationState(seedConversations);
   const firstConversation = savedState.conversations[0];
@@ -124,6 +136,10 @@ export default function App() {
 
   const tracesById = useMemo<Record<string, McpTrace>>(() => {
     return Object.fromEntries((activeConversation?.traces ?? []).map((trace) => [trace.id, trace]));
+  }, [activeConversation?.traces]);
+
+  const latestVisualizeTraceId = useMemo(() => {
+    return [...(activeConversation?.traces ?? [])].reverse().find(hasVegaLiteSpec)?.id;
   }, [activeConversation?.traces]);
 
   const createNewChat = () => {
@@ -297,6 +313,7 @@ export default function App() {
                   message={message}
                   showMcpTrace={showMcpTrace}
                   tracesById={tracesById}
+                  latestVisualizeTraceId={latestVisualizeTraceId}
                 />
               ))}
               {activeConversationIsSending ? (

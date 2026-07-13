@@ -10,6 +10,7 @@ interface ChatMessageProps {
   message: ChatMessageType;
   tracesById: Record<string, McpTrace>;
   showMcpTrace: boolean;
+  latestVisualizeTraceId?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -44,20 +45,11 @@ function vegaLiteSpec(trace: McpTrace): ChartResult | null {
   return { key, spec: structured.vega_lite };
 }
 
-export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessageProps) {
+export function ChatMessage({ message, tracesById, showMcpTrace, latestVisualizeTraceId }: ChatMessageProps) {
   const [expanded, setExpanded] = useState(false);
   const traces = (message.traceIds ?? []).map((traceId) => tracesById[traceId]).filter(Boolean);
-  const chartKeys = new Set<string>();
-  const charts = traces
-    .map(vegaLiteSpec)
-    .filter((chart): chart is ChartResult => chart !== null)
-    .filter((chart) => {
-      if (chartKeys.has(chart.key)) {
-        return false;
-      }
-      chartKeys.add(chart.key);
-      return true;
-    });
+  const latestChartTrace = traces.find((trace) => trace.id === latestVisualizeTraceId);
+  const latestChart = latestChartTrace ? vegaLiteSpec(latestChartTrace) : null;
   const isUser = message.role === "user";
 
   return (
@@ -89,9 +81,7 @@ export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessagePr
           )}
         </div>
 
-        {!isUser
-          ? charts.map((chart, index) => <VegaLiteChart key={`${message.id}-chart-${index}`} spec={chart.spec} />)
-          : null}
+        {!isUser && latestChart ? <VegaLiteChart key={latestChart.key} spec={latestChart.spec} /> : null}
 
         {!isUser && showMcpTrace && traces.length > 0 ? (
           <div className="message__trace">
