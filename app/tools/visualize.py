@@ -413,6 +413,8 @@ def _family_category_label(column: str) -> str:
     bilingual = re.match(r"^(.+?)\s+(?=[A-Za-z]+(?:\s|$)|\d+s\b)", cleaned)
     if bilingual:
         return _clean_label(bilingual.group(1))
+    if re.fullmatch(r"[0-9가-힣･·ㆍ\s]+", cleaned) and re.search(r"[가-힣]", cleaned):
+        return cleaned
     korean = re.match(r"([가-힣･·ㆍ\s]+)", cleaned)
     if korean and len(re.sub(r"[^가-힣]", "", korean.group(1))) >= 2:
         return _clean_label(korean.group(1))
@@ -660,8 +662,6 @@ def _wide_year_time_series_spec(
     x: str | None,
     y: str | None,
     group: str | None,
-    top_n: int | None,
-    columns: list[str],
     source_rows: list[dict[str, str]],
     profiles: list[dict[str, Any]],
     warnings: list[str],
@@ -677,7 +677,6 @@ def _wide_year_time_series_spec(
     if len(year_columns) < 2:
         return None
 
-    profile_map = _profile_by_name(profiles)
     category_columns = [
         profile["name"]
         for profile in profiles
@@ -970,8 +969,6 @@ def _build_plot_spec(
         x,
         y,
         group,
-        top_n,
-        columns,
         source_rows,
         profiles,
         warnings,
