@@ -21,6 +21,7 @@ ChartType = Literal[
     "donut",
     "table",
 ]
+TotalMode = Literal["auto", "include", "exclude"]
 
 VALID_CHART_TYPES = {
     "auto",
@@ -37,7 +38,7 @@ VALID_CHART_TYPES = {
 SHARE_WORDS = ("비중", "구성", "구성비", "점유", "점유율", "분포", "share", "ratio", "composition")
 TREND_WORDS = ("추이", "연도별", "시계열", "변화", "trend", "yearly", "over time")
 DELTA_WORDS = ("증감", "전년", "증가", "감소", "변화량", "delta", "change")
-TOTAL_WORDS = ("계", "합계", "총계", "total")
+TOTAL_WORDS = ("계", "합계", "소계", "총계", "total", "subtotal")
 MAX_SERIES = 12
 
 TABLE_SQL = """
@@ -416,9 +417,19 @@ def _family_category_label(column: str) -> str:
 
 # 합계 컬럼인지 컬럼명과 하위 범주 라벨을 기준으로 판별한다.
 def _is_total_column(column: str) -> bool:
-    suffix = column.rsplit("_", 1)[-1].lower()
-    tokens = set(re.findall(r"[가-힣A-Za-z]+", suffix))
-    return bool(tokens.intersection(TOTAL_WORDS))
+    return _is_total_label(column.rsplit("_", 1)[-1])
+
+
+# 요청 파라미터를 우선하되 auto일 때 질의의 명시적 포함/제외 표현을 반영한다.
+def _resolve_total_mode(total_mode: TotalMode, query: str | None) -> TotalMode:
+    if total_mode != "auto":
+        return total_mode
+    text = (query or "").lower()
+    if _contains_any(text, ("합계 포함", "계 포함", "소계 포함", "총계 포함", "include total")):
+        return "include"
+    if _contains_any(text, ("합계 제외", "계 제외", "소계 제외", "총계 제외", "exclude total")):
+        return "exclude"
+    return "auto"
 
 
 # 연도가 들어간 숫자 컬럼들을 연도순으로 찾는다.
@@ -502,7 +513,8 @@ def _pick_x_column(profiles: list[dict[str, Any]], query: str | None) -> str | N
 # 라벨이 합계/총계 행인지 확인한다.
 def _is_total_label(value: Any) -> bool:
     text = _clean_label(value).lower()
-    return any(text == word or text.startswith(f"{word} ") for word in TOTAL_WORDS)
+    tokens = set(re.findall(r"[가-힣A-Za-z]+", text))
+    return bool(tokens.intersection(TOTAL_WORDS))
 
 
 # 행에서 x축 값을 꺼내 축 타입에 맞게 변환한다.
@@ -781,6 +793,7 @@ def _wide_row_category_spec(
     y: str | None,
     group: str | None,
     top_n: int | None,
+    total_mode: TotalMode,
     source_rows: list[dict[str, str]],
     profiles: list[dict[str, Any]],
     warnings: list[str],
@@ -804,11 +817,34 @@ def _wide_row_category_spec(
         warnings.append(f"표에서 {target_year}년 행을 찾지 못했습니다.")
         return None
 
-    exclude_total = _contains_any(query, ("합계 제외", "계 제외", "총계 제외", "exclude total"))
+    resolved_total_mode = _resolve_total_mode(total_mode, query)
+    aggregate_columns = [column for column in family_columns if _is_total_column(column)]
+    # 구성비 차트에서 집계 범주는 분모와 하위 범주를 중복 계산하므로 auto에서도 제외한다.
+    applied_total_mode: TotalMode = (
+        "include" if resolved_total_mode == "include" else "exclude" if aggregate_columns else "include"
+    )
+    excluded_columns = aggregate_columns if applied_total_mode == "exclude" else []
+
+    aggregate_values = [
+        value
+        for column in aggregate_columns
+        if (value := _parse_number(selected_row.get(column))) is not None
+    ]
+    component_values = [
+        value
+        for column in family_columns
+        if column not in aggregate_columns
+        if (value := _parse_number(selected_row.get(column))) is not None
+    ]
+    component_sum = sum(component_values)
+    aggregate_matches_components = any(
+        abs(value - component_sum) <= max(1e-9, abs(value) * 1e-6)
+        for value in aggregate_values
+    )
     records: list[dict[str, Any]] = []
     selected_columns: list[str] = []
     for column in family_columns:
-        if exclude_total and _is_total_column(column):
+        if column in excluded_columns:
             continue
         value = _parse_number(selected_row.get(column))
         if value is None:
@@ -822,6 +858,12 @@ def _wide_row_category_spec(
     selected_type = "donut" if requested_type in {"auto", "donut"} else requested_type
     records = _limit_categories(records, selected_type, False, top_n, warnings)
     records = _sort_records(records, False, selected_type)
+    if applied_total_mode == "exclude" and resolved_total_mode == "auto":
+        total_reason = "구성비 차트에서 집계 범주를 자동 제외했습니다."
+    elif applied_total_mode == "exclude":
+        total_reason = "total_mode=exclude 요청에 따라 집계 범주를 제외했습니다."
+    else:
+        total_reason = "total_mode=include 요청에 따라 집계 범주를 유지했습니다."
     return {
         "ok": True,
         "version": "0.1",
@@ -845,12 +887,16 @@ def _wide_row_category_spec(
             "y": y,
             "group": group,
             "top_n": top_n,
+            "total_mode": total_mode,
         },
         "chart": {
             "type": selected_type,
             "requested_type": chart_type,
             "decision_source": "server_wide_row",
-            "reason": f"{target_year}년 행을 선택하고 같은 소속별 헤더의 지표들을 범주로 변환했습니다.",
+            "reason": (
+                f"{target_year}년 행을 선택하고 같은 소속별 헤더의 지표들을 범주로 변환했습니다. "
+                f"{total_reason}"
+            ),
             "title": _chart_title(table, f"{target_year}년"),
             "x": "category",
             "y": "value",
@@ -863,7 +909,13 @@ def _wide_row_category_spec(
             "year_column": year_column,
             "selected_year": target_year,
             "selected_columns": selected_columns,
-            "excluded_total": exclude_total,
+            "requested_total_mode": total_mode,
+            "resolved_total_mode": resolved_total_mode,
+            "applied_total_mode": applied_total_mode,
+            "excluded_total_columns": excluded_columns,
+            "aggregate_values": aggregate_values,
+            "component_sum": component_sum,
+            "aggregate_matches_components": aggregate_matches_components,
         },
         "data": {
             "records": records,
@@ -884,6 +936,7 @@ def _build_plot_spec(
     y: str | None,
     group: str | None,
     top_n: int | None,
+    total_mode: TotalMode = "auto",
 ) -> dict[str, Any]:
     columns, source_rows, warnings = _body_to_rows(table["body"])
     profiles = _profile_columns(columns, source_rows)
@@ -903,6 +956,7 @@ def _build_plot_spec(
         warnings,
     )
     if wide_spec is not None:
+        wide_spec["request"]["total_mode"] = total_mode
         return wide_spec
 
     wide_category_spec = _wide_row_category_spec(
@@ -913,6 +967,7 @@ def _build_plot_spec(
         y,
         group,
         top_n,
+        total_mode,
         source_rows,
         profiles,
         warnings,
@@ -982,7 +1037,8 @@ def _build_plot_spec(
         has_group,
         warnings,
     )
-    if selected_type == "donut":
+    resolved_total_mode = _resolve_total_mode(total_mode, query)
+    if selected_type == "donut" and resolved_total_mode != "include":
         records = [record for record in records if not _is_total_label(record.get("x"))]
 
     x_is_year = bool(x_profile and x_profile["is_year"])
@@ -1012,6 +1068,7 @@ def _build_plot_spec(
             "y": y,
             "group": group,
             "top_n": top_n,
+            "total_mode": total_mode,
         },
         "chart": {
             "type": selected_type,
@@ -1175,12 +1232,13 @@ def register(mcp: FastMCP) -> None:
         y: str | None = None,
         group: str | None = None,
         top_n: int | None = None,
+        total_mode: TotalMode = "auto",
     ) -> CallToolResult:
         table = _fetch_table(stat_id, table_seq)
         if table is None:
             return _error_result("해당 stat_id/table_seq 통계표를 찾지 못했습니다.", stat_id, table_seq)
 
-        spec = _build_plot_spec(table, query, chart_type, x, y, group, top_n)
+        spec = _build_plot_spec(table, query, chart_type, x, y, group, top_n, total_mode)
         spec["vega_lite"] = _vega_lite_spec(spec)
 
         return CallToolResult(
