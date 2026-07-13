@@ -15,6 +15,24 @@ function markType(mark: unknown) {
   return isRecord(mark) && typeof mark.type === "string" ? mark.type : "";
 }
 
+function viewMarkType(view: JsonRecord) {
+  const direct = markType(view.mark);
+  if (direct) {
+    return direct;
+  }
+  if (Array.isArray(view.layer)) {
+    for (const layer of view.layer) {
+      if (isRecord(layer)) {
+        const layered = markType(layer.mark);
+        if (layered && layered !== "text") {
+          return layered;
+        }
+      }
+    }
+  }
+  return "";
+}
+
 function valuesFrom(view: JsonRecord) {
   const data = view.data;
   return isRecord(data) && Array.isArray(data.values) ? data.values : [];
@@ -48,13 +66,21 @@ function styleBar(view: JsonRecord, width: number) {
     ...view,
     width,
     height: horizontal ? clamp(120 + count * 34, 300, 560) : 340,
-    mark: { type: "bar", cornerRadiusEnd: 3 },
+    ...(Array.isArray(view.layer)
+      ? {
+          layer: view.layer.map((layer) =>
+            isRecord(layer) && markType(layer.mark) === "bar"
+              ? { ...layer, mark: { type: "bar", cornerRadiusEnd: 3 } }
+              : layer,
+          ),
+        }
+      : { mark: { type: "bar", cornerRadiusEnd: 3 } }),
     encoding,
   };
 }
 
 function styleView(view: JsonRecord, width: number): JsonRecord {
-  const type = markType(view.mark);
+  const type = viewMarkType(view);
   if (type === "bar") {
     return styleBar(view, width);
   }
