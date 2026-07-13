@@ -384,6 +384,43 @@ def _wants_delta_chart(query: str | None) -> bool:
     return _contains_any(query, DELTA_WORDS)
 
 
+# 질의에 명시된 단일 연도를 찾는다.
+def _query_year(query: str | None) -> int | None:
+    years = {_parse_header_year(match) for match in re.findall(r"(?:18|19|20)\d{2}", query or "")}
+    years.discard(None)
+    return next(iter(years)) if len(years) == 1 else None
+
+
+# 평탄화된 다중 헤더에서 요청한 상위 헤더에 속하는 숫자 컬럼들을 찾는다.
+def _column_family(requested: str | None, profiles: list[dict[str, Any]]) -> list[str]:
+    if not requested:
+        return []
+    key = _normalize_key(requested)
+    if not key:
+        return []
+    return [
+        profile["name"]
+        for profile in profiles
+        if profile["is_numeric"] and key in _normalize_key(profile["name"])
+    ]
+
+
+# 상위 헤더를 제거해 차트에 표시할 하위 범주 라벨을 만든다.
+def _family_category_label(column: str) -> str:
+    suffix = column.rsplit("_", 1)[-1]
+    korean = re.match(r"([가-힣･·ㆍ\s]+)", _clean_label(suffix))
+    if korean and len(re.sub(r"[^가-힣]", "", korean.group(1))) >= 2:
+        return _clean_label(korean.group(1))
+    return _display_category_label(suffix)
+
+
+# 합계 컬럼인지 컬럼명과 하위 범주 라벨을 기준으로 판별한다.
+def _is_total_column(column: str) -> bool:
+    suffix = column.rsplit("_", 1)[-1].lower()
+    tokens = set(re.findall(r"[가-힣A-Za-z]+", suffix))
+    return bool(tokens.intersection(TOTAL_WORDS))
+
+
 # 연도가 들어간 숫자 컬럼들을 연도순으로 찾는다.
 def _year_value_columns(profiles: list[dict[str, Any]]) -> list[tuple[int, str]]:
     columns = []
@@ -735,6 +772,109 @@ def _wide_year_time_series_spec(
     }
 
 
+# 특정 연도의 한 행에서 같은 상위 헤더 아래 지표들을 범주형 레코드로 펼친다.
+def _wide_row_category_spec(
+    table: dict,
+    query: str | None,
+    chart_type: str,
+    x: str | None,
+    y: str | None,
+    group: str | None,
+    top_n: int | None,
+    source_rows: list[dict[str, str]],
+    profiles: list[dict[str, Any]],
+    warnings: list[str],
+) -> dict[str, Any] | None:
+    target_year = _query_year(query)
+    requested_type = chart_type if chart_type in VALID_CHART_TYPES else "auto"
+    if target_year is None or not (requested_type == "donut" or _wants_share_chart(query)):
+        return None
+
+    year_profile = next((profile for profile in profiles if profile["is_year"]), None)
+    family_columns = _column_family(x, profiles)
+    if year_profile is None or len(family_columns) < 2:
+        return None
+
+    year_column = year_profile["name"]
+    selected_row = next(
+        (row for row in source_rows if _parse_year(row.get(year_column)) == target_year),
+        None,
+    )
+    if selected_row is None:
+        warnings.append(f"표에서 {target_year}년 행을 찾지 못했습니다.")
+        return None
+
+    exclude_total = _contains_any(query, ("합계 제외", "계 제외", "총계 제외", "exclude total"))
+    records: list[dict[str, Any]] = []
+    selected_columns: list[str] = []
+    for column in family_columns:
+        if exclude_total and _is_total_column(column):
+            continue
+        value = _parse_number(selected_row.get(column))
+        if value is None:
+            continue
+        selected_columns.append(column)
+        records.append({"x": _family_category_label(column), "value": value, "series": None})
+
+    if len(records) < 2:
+        return None
+
+    selected_type = "donut" if requested_type in {"auto", "donut"} else requested_type
+    records = _limit_categories(records, selected_type, False, top_n, warnings)
+    records = _sort_records(records, False, selected_type)
+    return {
+        "ok": True,
+        "version": "0.1",
+        "library": "vega-lite",
+        "renderer": "client",
+        "stat": {
+            "stat_id": table["stat_id"],
+            "ref_id": table["ref_id"],
+            "year": table["year"],
+            "title_ko": table["title_ko"],
+            "title_en": table["title_en"],
+            "unit": table["unit"],
+            "base_date": table["base_date"],
+            "table_seq": table["table_seq"],
+            "caption": table["caption"],
+        },
+        "request": {
+            "query": query,
+            "chart_type": chart_type,
+            "x": x,
+            "y": y,
+            "group": group,
+            "top_n": top_n,
+        },
+        "chart": {
+            "type": selected_type,
+            "requested_type": chart_type,
+            "decision_source": "server_wide_row",
+            "reason": f"{target_year}년 행을 선택하고 같은 소속별 헤더의 지표들을 범주로 변환했습니다.",
+            "title": _chart_title(table, f"{target_year}년"),
+            "x": "category",
+            "y": "value",
+            "group": None,
+            "unit": table["unit"],
+        },
+        "columns": profiles,
+        "transform": {
+            "type": "wide_row_to_categories",
+            "year_column": year_column,
+            "selected_year": target_year,
+            "selected_columns": selected_columns,
+            "excluded_total": exclude_total,
+        },
+        "data": {
+            "records": records,
+            "record_count": len(records),
+            "source_row_count": len(source_rows),
+            "table_preview": source_rows[:20],
+        },
+        "warnings": warnings,
+    }
+
+
 # 표 데이터와 요청값을 차트 렌더링용 spec으로 만든다.
 def _build_plot_spec(
     table: dict,
@@ -764,6 +904,21 @@ def _build_plot_spec(
     )
     if wide_spec is not None:
         return wide_spec
+
+    wide_category_spec = _wide_row_category_spec(
+        table,
+        query,
+        chart_type,
+        x,
+        y,
+        group,
+        top_n,
+        source_rows,
+        profiles,
+        warnings,
+    )
+    if wide_category_spec is not None:
+        return wide_category_spec
 
     x_column = _resolve_column(x, profiles) or _pick_x_column(profiles, query)
     group_column = _resolve_column(group, profiles)

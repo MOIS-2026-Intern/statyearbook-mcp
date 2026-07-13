@@ -30,7 +30,18 @@ function vegaLiteSpec(trace: McpTrace): Record<string, unknown> | null {
 export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessageProps) {
   const [expanded, setExpanded] = useState(false);
   const traces = (message.traceIds ?? []).map((traceId) => tracesById[traceId]).filter(Boolean);
-  const charts = traces.map(vegaLiteSpec).filter((spec): spec is Record<string, unknown> => spec !== null);
+  const chartKeys = new Set<string>();
+  const charts = traces
+    .map(vegaLiteSpec)
+    .filter((spec): spec is Record<string, unknown> => spec !== null)
+    .filter((spec) => {
+      const key = JSON.stringify(spec);
+      if (chartKeys.has(key)) {
+        return false;
+      }
+      chartKeys.add(key);
+      return true;
+    });
   const isUser = message.role === "user";
 
   return (

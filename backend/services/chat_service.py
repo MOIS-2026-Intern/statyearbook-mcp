@@ -103,6 +103,7 @@ class ChatService:
     ) -> str:
         state: object | None = None
         tool_results: list[ToolResult] = []
+        tool_result_cache: dict[str, dict[str, Any]] = {}
 
         for _ in range(self._settings.max_tool_rounds):
             turn = await self._model.create_turn(
@@ -120,7 +121,7 @@ class ChatService:
 
             tool_results = []
             for call in turn.tool_calls:
-                tool_results.append(await self._execute_tool_call(mcp, call, traces))
+                tool_results.append(await self._execute_tool_call(mcp, call, traces, tool_result_cache))
 
         final_turn = await self._model.create_turn(
             instructions=(
@@ -135,7 +136,13 @@ class ChatService:
         )
         return final_turn.text
 
-    async def _execute_tool_call(self, mcp: McpGateway, call: ToolCall, traces: list[McpTrace]) -> ToolResult:
+    async def _execute_tool_call(
+        self,
+        mcp: McpGateway,
+        call: ToolCall,
+        traces: list[McpTrace],
+        result_cache: dict[str, dict[str, Any]],
+    ) -> ToolResult:
         trace_id = str(uuid4())
         started = time.perf_counter()
         request_arguments = call.raw_arguments if call.arguments_error else call.arguments
@@ -148,7 +155,13 @@ class ChatService:
 
             arguments = mcp.prepare_tool_arguments(call.name, call.arguments)
             request_arguments = arguments
-            result = await mcp.call_tool(call.name, arguments)
+            cache_key = json_dumps({"name": call.name, "arguments": arguments})
+            reused = cache_key in result_cache
+            if reused:
+                result = result_cache[cache_key]
+            else:
+                result = await mcp.call_tool(call.name, arguments)
+                result_cache[cache_key] = result
             model_result = truncate_jsonable(result, self._settings.tool_output_max_chars)
             status = "error" if result.get("isError") else "success"
 
@@ -161,7 +174,7 @@ class ChatService:
                     timestamp=_now_iso(),
                     server=self._settings.mcp_server_label,
                     tool=call.name,
-                    summary=_tool_summary(result),
+                    summary=(f"{_tool_summary(result)} (동일 호출 결과 재사용)" if reused else _tool_summary(result)),
                     durationMs=_elapsed_ms(started),
                     request={"arguments": arguments},
                     response=truncate_jsonable(result, self._settings.tool_output_max_chars),
