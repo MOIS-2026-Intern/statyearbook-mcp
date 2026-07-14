@@ -19,10 +19,8 @@
 
 ```bash
 createdb statyearbook_mcp
-psql -d statyearbook_mcp -f db/migrations/0001_init.sql
+psql -d statyearbook_mcp -f supabase/migrations/202607140001_initial_schema.sql
 ```
-
-`db/migrations/0001_init.sql`은 `public` 스키마를 삭제 후 다시 생성하므로 기존 데이터가 초기화됩니다.
 
 ### 2. HWPX 원본을 파싱합니다
 

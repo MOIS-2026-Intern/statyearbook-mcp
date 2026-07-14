@@ -1,11 +1,8 @@
 -- ============================================================
 -- schema.sql : 행정안전통계연보 챗봇용 스키마 (PostgreSQL + pgvector)
 -- ============================================================
--- 매 실행마다 public 스키마를 통째로 비우고 재생성 → 완전 초기화(멱등)
-DROP SCHEMA public CASCADE;
-CREATE SCHEMA public;
+-- 최초 실행용 PostgreSQL + pgvector 스키마
 
--- 스키마를 다시 만든 뒤에 확장 생성(순서 중요: 스키마를 지우면 그 안의 확장도 지워짐)
 CREATE EXTENSION IF NOT EXISTS vector;
 -- (선택) 한국어 부분일치 키워드 검색용. 설치돼 있으면 아래 인덱스 주석 해제
 -- CREATE EXTENSION IF NOT EXISTS pg_bigm;
