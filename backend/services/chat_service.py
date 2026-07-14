@@ -163,7 +163,8 @@ class ChatService:
                 result = await mcp.call_tool(call.name, arguments)
                 if call.name == "visualize":
                     visualize_result_cache[cache_key] = result
-            model_result = truncate_jsonable(result, self._settings.tool_output_max_chars)
+            model_payload = _model_result_for_tool(call.name, result)
+            model_result = truncate_jsonable(model_payload, self._settings.tool_output_max_chars)
             status = "error" if result.get("isError") else "success"
 
             traces.append(
@@ -253,6 +254,58 @@ def _tool_summary(result: dict[str, Any]) -> str:
     return "MCP 도구 호출 완료"
 
 
+def _model_result_for_tool(tool_name: str | None, result: dict[str, Any]) -> dict[str, Any]:
+    """모델에는 후속 판단에 필요한 내용만 전달하고 프론트엔드 trace는 원본을 보존한다."""
+    if tool_name != "visualize" or result.get("isError"):
+        return result
+
+    structured = result.get("structuredContent")
+    if not isinstance(structured, dict) or structured.get("ok") is False:
+        return result
+
+    stat = structured.get("stat")
+    chart = structured.get("chart")
+    compact_stat = _select_keys(
+        stat,
+        "stat_id",
+        "ref_id",
+        "publication_year",
+        "title_ko",
+        "unit",
+        "base_date",
+        "table_seq",
+    )
+    visualization_created = isinstance(structured.get("vega_lite"), dict)
+    compact_chart = _select_keys(chart, "title", "unit")
+    if not visualization_created and isinstance(chart, dict) and chart.get("reason"):
+        compact_chart["reason"] = chart["reason"]
+    warnings = structured.get("warnings") if isinstance(structured.get("warnings"), list) else []
+
+    if visualization_created:
+        text = "시각화를 생성했습니다."
+    else:
+        reason = compact_chart.get("reason") or "시각화 사양이 생성되지 않았습니다."
+        text = f"시각화를 생성하지 못했습니다. {reason}"
+
+    return {
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": {
+            "ok": True,
+            "visualization_created": visualization_created,
+            "stat": compact_stat,
+            "chart": compact_chart,
+            "warnings": warnings,
+        },
+        "isError": False,
+    }
+
+
+def _select_keys(value: Any, *keys: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {key: value[key] for key in keys if value.get(key) is not None}
+
+
 def _model_messages_from_request(request: ChatRequest, max_trace_chars: int) -> list[ModelMessage]:
     trace_by_id = {trace.id: trace for trace in request.traces}
     messages: list[ModelMessage] = []
@@ -294,7 +347,11 @@ def _trace_context_for_message(
             "tool": trace.tool,
             "summary": trace.summary,
             "request": trace.request,
-            "response": trace.response,
+            "response": (
+                _model_result_for_tool(trace.tool, trace.response)
+                if isinstance(trace.response, dict)
+                else trace.response
+            ),
         }
         context.append({key: value for key, value in payload.items() if value is not None})
     return context

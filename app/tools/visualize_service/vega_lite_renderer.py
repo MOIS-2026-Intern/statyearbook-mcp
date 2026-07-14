@@ -144,14 +144,13 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
 # 도구 응답에 넣을 요약 문구를 만든다.
 def summary_text(spec: dict[str, Any]) -> str:
     chart = spec["chart"]
-    lines = [
-        f"{chart['title']}",
-        f"차트: {chart['type']} ({chart['decision_source']})",
-        f"선택 이유: {chart['reason']}",
-        f"데이터 포인트: {spec['data']['record_count']}개",
-    ]
     if spec.get("vega_lite"):
-        lines.append("structuredContent.vega_lite에 프론트엔드 렌더링용 Vega-Lite spec이 있습니다.")
+        return f"{chart['title']} 시각화를 생성했습니다."
+
+    lines = [
+        f"{chart['title']} 시각화를 생성하지 못했습니다.",
+        f"이유: {chart['reason']}",
+    ]
     if spec["warnings"]:
         lines.append("경고: " + " / ".join(spec["warnings"]))
     return "\n".join(lines)

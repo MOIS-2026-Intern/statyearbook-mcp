@@ -2,7 +2,7 @@ import unittest
 
 from app.tools.visualize_service.chart_spec_builder import build_plot_spec
 from app.tools.visualize_service.table_interpreter import profile_columns, resolve_column
-from app.tools.visualize_service.vega_lite_renderer import build_vega_lite_spec
+from app.tools.visualize_service.vega_lite_renderer import build_vega_lite_spec, summary_text
 
 
 def make_table(columns: list[str], records: list[dict[str, str]], title: str = "테스트 통계") -> dict:
@@ -21,6 +21,26 @@ def make_table(columns: list[str], records: list[dict[str, str]], title: str = "
 
 
 class VisualizeSpecTests(unittest.TestCase):
+    def test_success_summary_does_not_expose_internal_chart_details(self) -> None:
+        spec = {
+            "chart": {
+                "title": "행정기관 위원회",
+                "type": "bar",
+                "decision_source": "selection_plan",
+                "reason": "원본 표와 대조했습니다.",
+            },
+            "data": {"record_count": 3},
+            "vega_lite": {"mark": "bar"},
+            "warnings": [],
+        }
+
+        text = summary_text(spec)
+
+        self.assertEqual(text, "행정기관 위원회 시각화를 생성했습니다.")
+        self.assertNotIn("Vega-Lite", text)
+        self.assertNotIn("데이터 포인트", text)
+        self.assertNotIn("선택 이유", text)
+
     def test_validated_selection_plan_uses_all_requested_subsidy_metrics(self) -> None:
         columns = [
             "구분 Classification 지역 Region",
