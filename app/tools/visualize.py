@@ -86,7 +86,10 @@ def register(mcp: FastMCP) -> None:
         y: Annotated[str | None, Field(description=VISUALIZE_FIELDS["y"])] = None,
         group: str | None = None,
         top_n: int | None = None,
-        total_mode: TotalMode = "auto",
+        total_mode: Annotated[
+            TotalMode,
+            Field(description=VISUALIZE_FIELDS["total_mode"]),
+        ] = "auto",
         year: Annotated[
             int | None,
             Field(description=VISUALIZE_FIELDS["year"]),

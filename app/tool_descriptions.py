@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 
 SEARCH_STATISTICS = (
-    "통계표 제목 후보를 검색한다. publication_year는 통계연보의 발간판 연도이며 "
-    "표 안의 데이터 연도나 기준연도가 아니다. 일반적인 '2024년 통계' 질문에서는 "
-    "publication_year를 생략하고, 검색한 표 본문에서 2024년 행을 찾아야 한다. "
-    "발간연도 필터로 결과가 없으면 필터를 자동으로 완화해 후보를 반환한다."
+    "통계표 제목 후보와 stat_id를 검색한다. 이 도구의 결과는 후보 메타데이터이므로 "
+    "통계 수치를 답할 때는 선택한 stat_id로 search_tables를 호출해 표 본문을 확인한다. "
+    "publication_year는 통계연보의 발간판 연도이며 표 안의 데이터 연도나 기준연도가 아니다. "
+    "일반적인 '2024년 통계' 질문에서는 publication_year를 생략하고 표 본문에서 2024년 행을 찾는다. "
+    "발간연도 필터로 결과가 없으면 도구가 필터를 자동으로 완화한다."
 )
 SEARCH_STATISTICS_FIELDS = {
     "query": (
@@ -18,21 +19,22 @@ SEARCH_STATISTICS_FIELDS = {
     "limit": "반환할 통계표 후보의 최대 개수.",
 }
 SEARCH_TABLES = (
-    "통계표의 표 본문과 메타데이터를 가져온다. 각 표의 table_handle은 같은 요청에서 "
-    "visualize가 원본 표를 재조회하지 않고 재사용할 때 쓴다."
+    "stat_id에 해당하는 통계표 원문(table_md), 메타데이터, 주석과 출처를 가져온다. "
+    "전체 표를 요청하면 table_md를 가능한 한 그대로 Markdown 표로 제시하고, 특정 연도·행·열을 "
+    "요청하면 필요한 항목만 발췌해 간결한 Markdown 표로 재구성한다. 수치 단위는 질문의 명사나 "
+    "항목명으로 추론하지 말고 반환된 unit을 사용한다. 질문의 표현과 unit이 충돌하면 표 제목과 "
+    "헤더의 의미를 설명하고 unit을 우선한다. '-'는 0으로 바꾸지 않고 원문 그대로 유지한다. "
+    "사용한 title_ko, stat_id, base_date와 unit을 가능한 한 함께 밝힌다. 각 표의 table_handle은 "
+    "같은 사용자 요청에서 visualize가 원본 표를 재조회하지 않고 재사용할 때만 쓴다."
 )
 VISUALIZE = (
-    "통계표 데이터를 질의와 차트 파라미터에 맞춰 검증하고 "
-    "structuredContent.vega_lite에 프론트엔드가 직접 렌더링할 표준 Vega-Lite spec을 반환한다. "
-    "title에는 사용자의 요청을 요약한 짧은 한글 표시 제목을 전달한다. "
-    "search_tables를 먼저 호출했다면 해당 표의 table_handle을 전달한다. "
-    "사용자가 요구한 행은 filters에 search_tables의 정확한 컬럼명과 셀 값으로, "
-    "숫자 지표는 metrics에 정확한 컬럼명과 표시 라벨로 전달한다. 여러 지표는 모두 metrics에 넣는다. "
-    "서버는 filters와 metrics를 원본 표에 엄격하게 대조하고 검증된 selected_dataset으로 표와 차트를 만든다. "
-    "사용자가 연도나 도시·지역을 특정하면 year와 city에 각각 추출해 전달할 수도 있고, "
-    "평탄화된 '상위 헤더_하위 헤더' 표에서 특정 상위 헤더를 요구하면 column_family에 전달한다. "
-    "구조화된 선택 계획이 없을 때만 기존 질의 해석을 사용하며, 일치하지 않으면 전체 데이터로 대체하지 않는다. "
-    "total_mode는 auto(기본), include, exclude 중 하나이며 구성비 차트에서 집계 범주의 포함 여부를 제어한다."
+    "통계표 데이터를 검증해 프론트엔드가 렌더링할 Vega-Lite spec을 반환한다. 가능하면 먼저 "
+    "search_tables로 원본 표를 확인하고 같은 요청에서 받은 table_handle을 전달한다. 사용자가 요구한 행과 "
+    "숫자 지표는 표의 정확한 컬럼명·셀 값으로 filters와 metrics에 전달하며, 비교할 지표가 여러 개면 모두 "
+    "포함한다. 표에 없는 이름이나 값을 만들지 않으며 검증 실패 시 전체 데이터로 대체하지 않는다. "
+    "vega_lite가 생성되면 최종 답변은 시각화 완료 사실과 사용 표의 title_ko, stat_id, base_date, unit만 "
+    "6줄 이내로 알린다. 선택 과정, 차트 유형, 데이터 포인트 수, 내부 처리 과정이나 Vega-Lite 준비 여부는 "
+    "설명하지 않는다."
 )
 SELECTION_FILTER_FIELDS = {
     "column": "search_tables 표에 나온 정확한 필터 컬럼명",
@@ -40,8 +42,8 @@ SELECTION_FILTER_FIELDS = {
 }
 METRIC_SELECTION_FIELDS = {
     "column": "search_tables 표에 나온 정확한 숫자 컬럼명",
-    "label": "차트에 표시할 짧은 지표명",
-    "unit": "표 메타데이터와 일치하는 지표 단위",
+    "label": "차트에 표시할 짧은 한글 지표명. 컬럼명의 영문명은 제외",
+    "unit": "표 메타데이터에서 단위가 명확할 때만 전달하는 지표 단위",
 }
 VISUALIZE_FIELDS = {
     "table_handle": "직전 search_tables가 해당 표에 발급한 캐시 핸들",
@@ -56,4 +58,8 @@ VISUALIZE_FIELDS = {
     "column_family": "'상위 헤더_하위 헤더'로 평탄화된 컬럼 중 요청한 상위 헤더명",
     "filters": "원본 행을 고르는 정확한 컬럼-값 조건. search_tables 값을 그대로 사용",
     "metrics": "시각화할 정확한 숫자 컬럼 목록. 여러 지표 비교 시 모두 전달",
+    "total_mode": (
+        "구성비·비율 차트의 합계 범주 처리. 합계 포함 요청은 include, 제외 요청은 exclude, "
+        "불명확하면 auto"
+    ),
 }
