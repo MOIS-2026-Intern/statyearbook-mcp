@@ -20,21 +20,14 @@ SEARCH_STATISTICS_FIELDS = {
 }
 SEARCH_TABLES = (
     "stat_id에 해당하는 통계표 원문(table_md), 메타데이터, 주석과 출처를 가져온다. "
-    "전체 표를 요청하면 table_md를 가능한 한 그대로 Markdown 표로 제시하고, 특정 연도·행·열을 "
-    "요청하면 필요한 항목만 발췌해 간결한 Markdown 표로 재구성한다. 수치 단위는 질문의 명사나 "
-    "항목명으로 추론하지 말고 반환된 unit을 사용한다. 질문의 표현과 unit이 충돌하면 표 제목과 "
-    "헤더의 의미를 설명하고 unit을 우선한다. '-'는 0으로 바꾸지 않고 원문 그대로 유지한다. "
-    "사용한 title_ko, stat_id, base_date와 unit을 가능한 한 함께 밝힌다. 각 표의 table_handle은 "
-    "같은 사용자 요청에서 visualize가 원본 표를 재조회하지 않고 재사용할 때만 쓴다."
+    "수치 단위는 반환된 unit을 기준으로 해석한다. 각 표의 table_handle은 같은 사용자 요청에서 "
+    "visualize가 원본 표를 재조회하지 않고 재사용할 때만 쓴다."
 )
 VISUALIZE = (
     "통계표 데이터를 검증해 프론트엔드가 렌더링할 Vega-Lite spec을 반환한다. 가능하면 먼저 "
     "search_tables로 원본 표를 확인하고 같은 요청에서 받은 table_handle을 전달한다. 사용자가 요구한 행과 "
     "숫자 지표는 표의 정확한 컬럼명·셀 값으로 filters와 metrics에 전달하며, 비교할 지표가 여러 개면 모두 "
-    "포함한다. 표에 없는 이름이나 값을 만들지 않으며 검증 실패 시 전체 데이터로 대체하지 않는다. "
-    "vega_lite가 생성되면 최종 답변은 시각화 완료 사실과 사용 표의 title_ko, stat_id, base_date, unit만 "
-    "6줄 이내로 알린다. 선택 과정, 차트 유형, 데이터 포인트 수, 내부 처리 과정이나 Vega-Lite 준비 여부는 "
-    "설명하지 않는다."
+    "포함한다. 표에 없는 이름이나 값을 만들지 않으며 검증 실패 시 전체 데이터로 대체하지 않는다."
 )
 SELECTION_FILTER_FIELDS = {
     "column": "search_tables 표에 나온 정확한 필터 컬럼명",
