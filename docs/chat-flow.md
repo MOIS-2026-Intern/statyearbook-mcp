@@ -29,7 +29,7 @@ sequenceDiagram
     Model-->>Backend: ToolCall 반환<br/>search_statistics 호출 요청
 
     Backend->>MCP: call_tool("search_statistics", arguments)
-    MCP->>Tool: search_statistics(query, year, limit)
+    MCP->>Tool: search_statistics(query, publication_year, limit)
 
     Tool->>Embed: embeddings.create(query)
     Embed-->>Tool: query embedding 반환

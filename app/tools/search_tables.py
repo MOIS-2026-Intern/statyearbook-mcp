@@ -9,7 +9,7 @@ from app.tool_descriptions import SEARCH_TABLES
 
 
 STAT_SQL = """
-    SELECT stat_id, year, title_ko, title_en, unit, base_date, ref_id
+    SELECT stat_id, year AS publication_year, title_ko, title_en, unit, base_date, ref_id
     FROM statistics
     WHERE stat_id = %s
 """
@@ -60,7 +60,7 @@ def cached_table(stat: dict, row: dict) -> dict:
     return {
         "stat_id": stat["stat_id"],
         "ref_id": stat["ref_id"],
-        "year": stat["year"],
+        "publication_year": stat["publication_year"],
         "title_ko": stat["title_ko"],
         "title_en": stat["title_en"],
         "unit": stat["unit"],
@@ -113,7 +113,7 @@ def build_response(stat: dict, tables: list, footnotes: list, source: list) -> d
         "found": True,
         "stat_id": stat["stat_id"],
         "ref_id": stat["ref_id"],
-        "year": stat["year"],
+        "publication_year": stat["publication_year"],
         "title_ko": stat["title_ko"],
         "title_en": stat["title_en"],
         "unit": stat["unit"],

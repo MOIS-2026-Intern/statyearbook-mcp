@@ -272,7 +272,7 @@ def _build_response(
         "stat": {
             "stat_id": table["stat_id"],
             "ref_id": table["ref_id"],
-            "year": table["year"],
+            "publication_year": table["publication_year"],
             "title_ko": table["title_ko"],
             "title_en": table["title_en"],
             "unit": table["unit"],

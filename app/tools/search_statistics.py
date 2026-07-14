@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 import re
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from app.db import connect
 from app.query_embedding import embed_query
-from app.tool_descriptions import SEARCH_STATISTICS
+from app.tool_descriptions import SEARCH_STATISTICS, SEARCH_STATISTICS_FIELDS
 
 SEARCH_TEXT_COLUMNS = ("title_ko", "title_en", "chapter", "section")
 
@@ -41,27 +43,27 @@ def _similarity_score(distance: float) -> float:
 
 
 # 검색 SQL의 WHERE 절을 만든다.
-def _where_sql(year: int | None) -> str:
+def _where_sql(publication_year: int | None) -> str:
     where = ["embedding IS NOT NULL"]
-    if year is not None:
+    if publication_year is not None:
         where.append("year = %s")
     return " AND ".join(where)
 
 
 # 검색 SQL 파라미터를 만든다.
-def _params(query_vec: str, year: int | None, limit: int) -> list:
+def _params(query_vec: str, publication_year: int | None, limit: int) -> list:
     params: list = [query_vec]
-    if year is not None:
-        params.append(year)
+    if publication_year is not None:
+        params.append(publication_year)
     params.extend([query_vec, limit])
     return params
 
 
 # 통계표 의미 검색 SQL을 만든다.
-def _search_sql(year: int | None) -> str:
-    where_sql = _where_sql(year)
+def _search_sql(publication_year: int | None) -> str:
+    where_sql = _where_sql(publication_year)
     return f"""
-        SELECT stat_id, year, ref_id, chapter, section,
+        SELECT stat_id, year AS publication_year, ref_id, chapter, section,
                title_ko, title_en, unit, base_date, page_start,
                (embedding <=> %s::vector) AS distance
         FROM statistics
@@ -72,9 +74,12 @@ def _search_sql(year: int | None) -> str:
 
 
 # DB에서 관련 통계표를 조회한다.
-def _fetch_rows(query_vec: str, year: int | None, limit: int) -> list:
+def _fetch_rows(query_vec: str, publication_year: int | None, limit: int) -> list:
     with connect() as conn, conn.cursor() as cur:
-        cur.execute(_search_sql(year), _params(query_vec, year, limit))
+        cur.execute(
+            _search_sql(publication_year),
+            _params(query_vec, publication_year, limit),
+        )
         return cur.fetchall()
 
 
@@ -82,7 +87,7 @@ def _fetch_rows(query_vec: str, year: int | None, limit: int) -> list:
 def _result_row(row: dict, tokens: list[str]) -> dict:
     return {
         "stat_id": row["stat_id"],
-        "year": row["year"],
+        "publication_year": row["publication_year"],
         "ref_id": row["ref_id"],
         "chapter": row["chapter"],
         "section": row["section"],
@@ -97,28 +102,66 @@ def _result_row(row: dict, tokens: list[str]) -> dict:
 
 
 # 검색 결과가 없을 때의 응답을 만든다.
-def _empty_response(query: str) -> dict:
-    return {"query": query, "tokens": [], "count": 0, "results": []}
+def _empty_response(query: str, publication_year: int | None = None) -> dict:
+    return {
+        "query": query,
+        "tokens": [],
+        "requested_publication_year": publication_year,
+        "applied_publication_year": publication_year,
+        "publication_year_filter_relaxed": False,
+        "message": None,
+        "count": 0,
+        "results": [],
+    }
+
+
+# 검색 조건을 실행하고, 잘못 지정된 발간연도 때문에 후보가 사라지지 않도록 완화한다.
+def search_statistics_data(
+    query: str,
+    publication_year: int | None = None,
+    limit: int = 5,
+) -> dict:
+    if not query or not query.strip():
+        return _empty_response(query, publication_year)
+
+    tokens = _tokenize(query)
+    query_vec = embed_query(query)
+    rows = _fetch_rows(query_vec, publication_year, limit)
+    filter_relaxed = False
+
+    if not rows and publication_year is not None:
+        rows = _fetch_rows(query_vec, None, limit)
+        filter_relaxed = True
+
+    return {
+        "query": query,
+        "tokens": tokens,
+        "requested_publication_year": publication_year,
+        "applied_publication_year": None if filter_relaxed else publication_year,
+        "publication_year_filter_relaxed": filter_relaxed,
+        "message": (
+            "요청한 발간연도에는 후보가 없어 발간연도 필터를 제외하고 재검색했습니다."
+            if filter_relaxed
+            else None
+        ),
+        "count": len(rows),
+        "results": [_result_row(row, tokens) for row in rows],
+    }
 
 
 # search_statistics MCP 도구를 등록한다.
 def register(mcp: FastMCP) -> None:
     # 자연어 질의로 관련 통계표 목록을 찾는다.
     @mcp.tool(description=SEARCH_STATISTICS)
-    def search_statistics(query: str, year: int | None = None, limit: int = 5) -> dict:
-        if not query or not query.strip():
-            return _empty_response(query)
-
-        tokens = _tokenize(query)
-
-        # 저장된 제목 벡터와 거리순으로 비교한다.
-        query_vec = embed_query(query)
-        rows = _fetch_rows(query_vec, year, limit)
-        results = [_result_row(row, tokens) for row in rows]
-
-        return {
-            "query": query,
-            "tokens": tokens,
-            "count": len(results),
-            "results": results,
-        }
+    def search_statistics(
+        query: Annotated[str, Field(description=SEARCH_STATISTICS_FIELDS["query"])],
+        publication_year: Annotated[
+            int | None,
+            Field(description=SEARCH_STATISTICS_FIELDS["publication_year"]),
+        ] = None,
+        limit: Annotated[
+            int,
+            Field(description=SEARCH_STATISTICS_FIELDS["limit"], ge=1, le=20),
+        ] = 5,
+    ) -> dict:
+        return search_statistics_data(query, publication_year, limit)

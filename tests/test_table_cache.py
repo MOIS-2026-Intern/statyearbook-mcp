@@ -11,7 +11,7 @@ class TableCacheTests(unittest.TestCase):
         table = {
             "stat_id": 31,
             "ref_id": "2-1-4",
-            "year": 2025,
+            "publication_year": 2025,
             "title_ko": "보조금24",
             "title_en": "Subsidies",
             "unit": "건, %",

@@ -9,7 +9,7 @@ def make_table(columns: list[str], records: list[dict[str, str]], title: str = "
     return {
         "stat_id": 12,
         "ref_id": "1-2-2",
-        "year": 2025,
+        "publication_year": 2025,
         "title_ko": title,
         "title_en": "Test statistics",
         "unit": "명",
