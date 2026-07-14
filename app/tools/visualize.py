@@ -77,6 +77,10 @@ def register(mcp: FastMCP) -> None:
             Field(description=VISUALIZE_FIELDS["table_handle"]),
         ] = None,
         query: str | None = None,
+        title: Annotated[
+            str | None,
+            Field(description=VISUALIZE_FIELDS["title"], min_length=1, max_length=80),
+        ] = None,
         chart_type: ChartType = "auto",
         x: Annotated[str | None, Field(description=VISUALIZE_FIELDS["x"])] = None,
         y: Annotated[str | None, Field(description=VISUALIZE_FIELDS["y"])] = None,
@@ -122,6 +126,7 @@ def register(mcp: FastMCP) -> None:
             year=year, city=city, column_family_name=column_family,
             filters=[item.model_dump() for item in filters] if filters is not None else None,
             metrics=[item.model_dump() for item in metrics] if metrics is not None else None,
+            title=title,
         )
         spec["request"]["table_handle"] = table_handle
         spec["request"]["table_source"] = "search_tables_cache" if table_handle else "database"

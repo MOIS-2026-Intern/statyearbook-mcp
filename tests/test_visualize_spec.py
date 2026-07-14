@@ -21,6 +21,28 @@ def make_table(columns: list[str], records: list[dict[str, str]], title: str = "
 
 
 class VisualizeSpecTests(unittest.TestCase):
+    def test_llm_display_title_overrides_server_title_and_vega_title(self) -> None:
+        columns = ["연도 Year", "위원회 수"]
+        records = [{"연도 Year": "2024", "위원회 수": "571"}]
+
+        spec = build_plot_spec(
+            make_table(columns, records, "행정기관 위원회"),
+            "2024년 위원회 수",
+            "bar",
+            "연도 Year",
+            "위원회 수",
+            None,
+            None,
+            "auto",
+            title="  2024년   행정기관 위원회 수  ",
+        )
+        vega_lite = build_vega_lite_spec(spec)
+
+        self.assertEqual(spec["chart"]["title"], "2024년 행정기관 위원회 수")
+        self.assertEqual(spec["request"]["title"], "2024년 행정기관 위원회 수")
+        self.assertEqual(vega_lite["title"], "2024년 행정기관 위원회 수")
+        self.assertEqual(spec["stat"]["title_ko"], "행정기관 위원회")
+
     def test_success_summary_does_not_expose_internal_chart_details(self) -> None:
         spec = {
             "chart": {

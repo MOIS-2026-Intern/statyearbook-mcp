@@ -24,6 +24,7 @@ SEARCH_TABLES = (
 VISUALIZE = (
     "통계표 데이터를 질의와 차트 파라미터에 맞춰 검증하고 "
     "structuredContent.vega_lite에 프론트엔드가 직접 렌더링할 표준 Vega-Lite spec을 반환한다. "
+    "title에는 사용자의 요청을 요약한 짧은 한글 표시 제목을 전달한다. "
     "search_tables를 먼저 호출했다면 해당 표의 table_handle을 전달한다. "
     "사용자가 요구한 행은 filters에 search_tables의 정확한 컬럼명과 셀 값으로, "
     "숫자 지표는 metrics에 정확한 컬럼명과 표시 라벨로 전달한다. 여러 지표는 모두 metrics에 넣는다. "
@@ -44,6 +45,10 @@ METRIC_SELECTION_FIELDS = {
 }
 VISUALIZE_FIELDS = {
     "table_handle": "직전 search_tables가 해당 표에 발급한 캐시 핸들",
+    "title": (
+        "차트와 표에 표시할 짧은 한글 제목. 원본 통계표 제목을 바꾸는 값이 아니며, "
+        "선택한 연도·지역·지표가 드러나게 작성한다. 예: '2024년 행정기관 위원회 수(소속별)'"
+    ),
     "x": "실제 x축 컬럼명 또는 연도·분류 같은 역할",
     "y": "실제 y축 숫자 컬럼명 또는 값·정원 같은 역할",
     "year": "사용자가 특정한 데이터 행의 연도. 날짜가 있으면 연도 정수만 추출",

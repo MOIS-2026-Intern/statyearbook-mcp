@@ -132,6 +132,16 @@ def _chart_title(table: dict, subtitle: str | None = None) -> str:
     return title
 
 
+# LLM이 정한 표시 제목이 있으면 서버 자동 제목 대신 사용한다.
+def _apply_display_title(spec: dict[str, Any], title: str | None) -> dict[str, Any]:
+    display_title = " ".join((title or "").split())
+    if not display_title:
+        return spec
+    spec["chart"]["title"] = display_title
+    spec["request"]["title"] = display_title
+    return spec
+
+
 # 요청 힌트와 '_' 상위 헤더를 비교해 wide 표에서 사용할 컬럼군을 고른다.
 def _pick_column_family(
     table: dict,
@@ -782,6 +792,7 @@ def build_plot_spec(
     column_family_name: str | None = None,
     filters: list[dict[str, str]] | None = None,
     metrics: list[dict[str, str | None]] | None = None,
+    title: str | None = None,
 ) -> dict[str, Any]:
     columns, all_source_rows, warnings = body_to_rows(table["body"])
     profiles = profile_columns(columns, all_source_rows)
@@ -812,9 +823,12 @@ def build_plot_spec(
     }
 
     if metrics is not None:
-        return _selection_plan_spec(
-            table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles,
-            metrics, warnings, target_year, request_hints,
+        return _apply_display_title(
+            _selection_plan_spec(
+                table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles,
+                metrics, warnings, target_year, request_hints,
+            ),
+            title,
         )
 
     wide_spec = _wide_year_time_series_spec(
@@ -822,14 +836,14 @@ def build_plot_spec(
         target_year, request_hints,
     )
     if wide_spec is not None:
-        return wide_spec
+        return _apply_display_title(wide_spec, title)
 
     wide_category_spec = _wide_row_category_spec(
         table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles, warnings,
         target_year, column_family_name, request_hints,
     )
     if wide_category_spec is not None:
-        return wide_category_spec
+        return _apply_display_title(wide_category_spec, title)
 
     family_validation_failed = bool(
         column_family_name and not column_family(column_family_name, profiles)
@@ -914,8 +928,11 @@ def build_plot_spec(
         "group": series_source if has_group else None,
         "unit": table["unit"],
     }
-    return _build_response(
-        table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
-        records, source_rows, warnings,
-        request_hints=request_hints,
+    return _apply_display_title(
+        _build_response(
+            table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
+            records, source_rows, warnings,
+            request_hints=request_hints,
+        ),
+        title,
     )
