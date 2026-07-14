@@ -2,7 +2,6 @@ import unittest
 
 from app.tool_descriptions import SEARCH_STATISTICS, SEARCH_TABLES, VISUALIZE
 from backend.prompts import (
-    SEARCH_TABLES_REPAIR_PROMPT,
     SEARCH_TABLES_RESULT_PROMPT,
     SYSTEM_PROMPT,
     build_system_prompt,
@@ -25,10 +24,9 @@ class PromptContractTests(unittest.TestCase):
         self.assertNotIn("Markdown 표", SEARCH_TABLES)
 
     def test_search_tables_result_prompt_owns_answer_format(self) -> None:
-        self.assertIn("반드시 Markdown 표", SEARCH_TABLES_RESULT_PROMPT)
+        self.assertIn("Markdown 표 형식을 우선", SEARCH_TABLES_RESULT_PROMPT)
         self.assertIn("영문 병기", SEARCH_TABLES_RESULT_PROMPT)
-        self.assertIn("후속 질문", SEARCH_TABLES_REPAIR_PROMPT)
-        self.assertIn("|---|", SEARCH_TABLES_REPAIR_PROMPT)
+        self.assertNotIn("반드시", SEARCH_TABLES_RESULT_PROMPT)
 
     def test_result_prompt_is_added_only_after_matching_tool(self) -> None:
         initial_prompt = build_system_prompt()

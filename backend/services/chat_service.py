@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import time
 import json
-import re
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -13,7 +12,7 @@ from backend.gateways.mcp_gateway import McpGateway, describe_tool
 from backend.gateways.model_gateway import ModelGateway, create_model_gateway
 from backend.models.chat import ChatMessage, ChatRequest, ChatResponse, McpTrace
 from backend.models.tooling import ModelMessage, ToolCall, ToolResult, ToolSpec
-from backend.prompts import SEARCH_TABLES_REPAIR_PROMPT, build_system_prompt
+from backend.prompts import build_system_prompt
 from backend.serializers.mcp_result_serializer import (
     json_dumps,
     truncate_jsonable,
@@ -104,13 +103,13 @@ class ChatService:
     ) -> str:
         state: object | None = None
         tool_results: list[ToolResult] = []
-        historical_tool_results = _historical_tool_results(request)
+        historical_tool_names = _historical_tool_names(request)
         visualize_result_cache: dict[str, dict[str, Any]] = {}
 
         for _ in range(self._settings.max_tool_rounds):
-            response_context = _response_context_results(tool_results, historical_tool_results)
+            response_tool_names = _response_tool_names(tool_results, historical_tool_names)
             turn = await self._model.create_turn(
-                instructions=build_system_prompt(_successful_tool_names(response_context)),
+                instructions=build_system_prompt(response_tool_names),
                 messages=messages,
                 tools=tools,
                 model_profile=request.modelProfile,
@@ -120,35 +119,7 @@ class ChatService:
             state = turn.state
 
             if not turn.tool_calls:
-                answer = turn.text
-                answer_state = state
-                for _ in range(2):
-                    violations = _search_tables_answer_violations(
-                        answer,
-                        _follow_up_query_text(request),
-                        response_context,
-                    )
-                    if not violations:
-                        return answer
-                    repair_turn = await self._model.create_turn(
-                        instructions=(
-                            build_system_prompt(_successful_tool_names(response_context))
-                            + "\n\n"
-                            + SEARCH_TABLES_REPAIR_PROMPT
-                            + "\n위반 항목: "
-                            + ", ".join(violations)
-                            + "\n\n[재작성에 사용할 search_tables 결과]\n"
-                            + _search_tables_context_text(response_context)
-                        ),
-                        messages=messages,
-                        tools=[],
-                        model_profile=request.modelProfile,
-                        tool_results=[],
-                        state=answer_state,
-                    )
-                    answer = repair_turn.text
-                    answer_state = repair_turn.state
-                return _fallback_search_tables_answer(request, response_context) or answer
+                return turn.text
 
             tool_results = []
             for call in turn.tool_calls:
@@ -157,7 +128,7 @@ class ChatService:
         final_turn = await self._model.create_turn(
             instructions=(
                 build_system_prompt(
-                    _successful_tool_names(_response_context_results(tool_results, historical_tool_results))
+                    _response_tool_names(tool_results, historical_tool_names)
                 )
                 + "\n\n도구 호출 횟수 제한에 도달했습니다. 지금까지 받은 도구 결과만 사용해 답하세요."
             ),
@@ -257,22 +228,22 @@ def _successful_tool_names(results: list[ToolResult]) -> tuple[str, ...]:
     return tuple(result.name for result in results if not result.is_error)
 
 
-def _response_context_results(
+def _response_tool_names(
     current_results: list[ToolResult],
-    historical_results: list[ToolResult],
-) -> list[ToolResult]:
-    """새 도구 결과가 있으면 과거 표 컨텍스트보다 우선한다."""
-    return current_results or historical_results
+    historical_names: tuple[str, ...],
+) -> tuple[str, ...]:
+    """새 도구 결과가 있으면 과거 도구 컨텍스트보다 우선한다."""
+    return _successful_tool_names(current_results) or historical_names
 
 
-def _historical_tool_results(request: ChatRequest) -> list[ToolResult]:
-    """가장 최근 도구 사용 assistant 턴을 후속 질문의 응답 컨텍스트로 복원한다."""
+def _historical_tool_names(request: ChatRequest) -> tuple[str, ...]:
+    """가장 최근 도구 사용 assistant 턴의 성공한 도구 이름을 복원한다."""
     trace_by_id = {trace.id: trace for trace in request.traces}
     for message in reversed(request.history):
         if message.role != "assistant":
             continue
 
-        results: list[ToolResult] = []
+        names: list[str] = []
         for trace_id in message.traceIds or []:
             trace = trace_by_id.get(trace_id)
             if (
@@ -280,281 +251,12 @@ def _historical_tool_results(request: ChatRequest) -> list[ToolResult]:
                 or trace.kind != "tool_call"
                 or trace.status != "success"
                 or not trace.tool
-                or not isinstance(trace.response, dict)
             ):
                 continue
-            results.append(
-                ToolResult(
-                    call_id=trace.id,
-                    name=trace.tool,
-                    result=_model_result_for_tool(trace.tool, trace.response),
-                    is_error=False,
-                )
-            )
-        if results:
-            return results
-    return []
-
-
-def _search_tables_answer_violations(
-    text: str,
-    user_message: str,
-    results: list[ToolResult],
-) -> list[str]:
-    if "search_tables" not in _successful_tool_names(results):
-        return []
-
-    metadata_only = bool(re.search(r"출처|주석|각주|담당자|연락처|전화번호", user_message)) and not bool(
-        re.search(r"수치|몇\s*(명|개|건)|현황|내역|항목|표|원문|연도|합계|소계|등급", user_message)
-    )
-    violations: list[str] = []
-    if not metadata_only and not _has_markdown_table(text):
-        violations.append("Markdown 표 누락")
-    if re.search(r"\b(?:title_ko|base_date|unit)\s*=", text):
-        violations.append("원시 필드명 노출")
-    if re.search(r"원하시면|필요하시면|알려\s*주세요", text):
-        violations.append("불필요한 후속 제안")
-    if re.search(r"\bGR\s*\d|Senior Civil Service|Head Office|Overseas Missions|\bTotal\b", text, re.I):
-        violations.append("영문 병기 잔존")
-    if _search_tables_unit(results) == "명" and re.search(r"(?:기관|공관|본부|외교원)\s*수(?:\b|\()", text):
-        violations.append("인원 단위 표현 오류")
-    unit = _search_tables_unit(results)
-    if unit and text.count(f"({unit})") > 1:
-        violations.append("표 머리글 단위 반복")
-    if _has_wide_single_record_table(text):
-        violations.append("단일 연도 가로형 표")
-    if re.search(r"^\|.*_", text, re.MULTILINE):
-        violations.append("평탄화 헤더 흔적")
-    if _has_unrequested_family_items(text, user_message, results):
-        violations.append("요청 밖 항목 포함")
-    return violations
-
-
-def _has_markdown_table(text: str) -> bool:
-    rows = [line.strip() for line in text.splitlines() if line.strip().startswith("|")]
-    if len(rows) < 2:
-        return False
-    return any(re.fullmatch(r"\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?", row) for row in rows)
-
-
-def _has_wide_single_record_table(text: str) -> bool:
-    rows = [line.strip() for line in text.splitlines() if line.strip().startswith("|")]
-    for index, row in enumerate(rows):
-        if not re.fullmatch(r"\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?", row):
-            continue
-        header = rows[index - 1] if index else ""
-        data_rows = rows[index + 1 :]
-        column_count = max(0, header.count("|") - 1)
-        return column_count > 4 and len(data_rows) == 1
-    return False
-
-
-def _has_unrequested_family_items(
-    text: str,
-    query_text: str,
-    results: list[ToolResult],
-) -> bool:
-    structured = _search_tables_structured_content(results)
-    if structured is None:
-        return False
-    tables = structured.get("tables")
-    if not isinstance(tables, list):
-        return False
-    source_md = next(
-        (str(table["table_md"]) for table in tables if isinstance(table, dict) and table.get("table_md")),
-        None,
-    )
-    source_table = _parse_markdown_table(source_md) if source_md else None
-    answer_table = _parse_markdown_table(text)
-    if source_table is None or answer_table is None:
-        return False
-
-    source_headers, _ = source_table
-    indexes, family_label = _matching_column_family(source_headers, query_text)
-    if not indexes or not family_label:
-        return False
-    expected = {
-        _compact_label(_display_column_label(source_headers[index], family_label))
-        for index in indexes
-    }
-    _, answer_records = answer_table
-    for record in answer_records:
-        if not record:
-            continue
-        label = _compact_label(record[0])
-        if label in expected:
-            continue
-        without_family = label.removeprefix(_compact_label(family_label))
-        if without_family in expected:
-            continue
-        return True
-    return False
-
-
-def _compact_label(value: str) -> str:
-    return re.sub(r"[^가-힣0-9·･]", "", value).replace("･", "·")
-
-
-def _search_tables_unit(results: list[ToolResult]) -> str | None:
-    structured = _search_tables_structured_content(results)
-    if structured is not None and structured.get("unit"):
-        return str(structured["unit"])
-    return None
-
-
-def _search_tables_context_text(results: list[ToolResult]) -> str:
-    for result in results:
-        if result.name != "search_tables" or result.is_error or not isinstance(result.result, dict):
-            continue
-        structured = result.result.get("structuredContent")
-        if isinstance(structured, dict):
-            return truncate_text(json_dumps(structured), 20_000)
-    return "사용 가능한 search_tables 결과가 없습니다."
-
-
-def _fallback_search_tables_answer(request: ChatRequest, results: list[ToolResult]) -> str | None:
-    """모델 재작성도 실패하면 이전 원문 표에서 요청 연도·항목군을 직접 Markdown으로 만든다."""
-    structured = _search_tables_structured_content(results)
-    if structured is None:
-        return None
-    tables = structured.get("tables")
-    if not isinstance(tables, list):
-        return None
-
-    table_md = next(
-        (
-            str(table["table_md"])
-            for table in tables
-            if isinstance(table, dict) and table.get("table_md")
-        ),
-        None,
-    )
-    parsed = _parse_markdown_table(table_md) if table_md else None
-    if parsed is None:
-        return None
-    headers, records = parsed
-
-    query_text = _follow_up_query_text(request)
-    year = _requested_year(query_text)
-    record = next(
-        (row for row in records if year and any(cell.strip() == year for cell in row)),
-        records[-1] if len(records) == 1 else None,
-    )
-    if record is None:
-        return _table_with_metadata(table_md, structured)
-
-    family_indexes, family_label = _matching_column_family(headers, query_text)
-    year_indexes = {
-        index
-        for index, header in enumerate(headers)
-        if "연도" in _korean_label(header) or (index < len(record) and record[index].strip() == year)
-    }
-    selected_indexes = family_indexes or [
-        index for index in range(min(len(headers), len(record))) if index not in year_indexes
-    ]
-
-    items: list[tuple[str, str]] = []
-    for index in selected_indexes:
-        if index >= len(record) or index in year_indexes:
-            continue
-        label = _display_column_label(headers[index], family_label)
-        value = record[index].strip()
-        if label and value:
-            items.append((label, value))
-    if not items:
-        return _table_with_metadata(table_md, structured)
-
-    unit = str(structured.get("unit") or "").strip()
-    value_header = f"인원({unit})" if unit == "명" else f"값({unit})" if unit else "값"
-    lines = [f"{year + '년 ' if year else ''}{family_label or '요청 항목'} 현황입니다.", ""]
-    lines.extend([f"| 항목 | {value_header} |", "|---|---:|"])
-    lines.extend(f"| {label} | {value} |" for label, value in items)
-    lines.extend(["", _metadata_line(structured)])
-    return "\n".join(lines)
-
-
-def _search_tables_structured_content(results: list[ToolResult]) -> dict[str, Any] | None:
-    for result in results:
-        if result.name != "search_tables" or result.is_error or not isinstance(result.result, dict):
-            continue
-        structured = _structured_content_from_result(result.result)
-        if structured is not None:
-            return structured
-    return None
-
-
-def _parse_markdown_table(table_md: str) -> tuple[list[str], list[list[str]]] | None:
-    rows = [
-        [cell.strip() for cell in line.strip().strip("|").split("|")]
-        for line in table_md.splitlines()
-        if line.strip().startswith("|")
-    ]
-    if len(rows) < 3:
-        return None
-    separator_index = next(
-        (index for index, row in enumerate(rows) if row and all(re.fullmatch(r":?-{3,}:?", cell) for cell in row)),
-        None,
-    )
-    if separator_index is None or separator_index == 0:
-        return None
-    return rows[separator_index - 1], rows[separator_index + 1 :]
-
-
-def _follow_up_query_text(request: ChatRequest) -> str:
-    user_messages = [message.content for message in request.history if message.role == "user"]
-    return " ".join([*user_messages, request.message])
-
-
-def _requested_year(query_text: str) -> str | None:
-    matches = re.findall(r"(?:19|20)\d{2}", query_text)
-    return matches[-1] if matches else None
-
-
-def _matching_column_family(headers: list[str], query_text: str) -> tuple[list[int], str | None]:
-    compact_query = re.sub(r"\s+", "", query_text)
-    families: dict[str, list[int]] = {}
-    labels: dict[str, str] = {}
-    for index, header in enumerate(headers):
-        if "_" not in header:
-            continue
-        family = _korean_label(header.split("_", 1)[0])
-        compact_family = re.sub(r"\s+", "", family)
-        if not compact_family:
-            continue
-        families.setdefault(compact_family, []).append(index)
-        labels[compact_family] = compact_family
-
-    matches = [family for family in families if family in compact_query]
-    if not matches:
-        return [], None
-    family = max(matches, key=len)
-    return families[family], labels[family]
-
-
-def _display_column_label(header: str, family_label: str | None) -> str:
-    leaf = header.rsplit("_", 1)[-1]
-    label = re.sub(r"\s+", "", _korean_label(leaf)).replace("･", "·")
-    if label == "소계" and family_label:
-        return f"{family_label} 소계"
-    return label
-
-
-def _korean_label(value: str) -> str:
-    korean_part = re.split(r"[A-Za-z]", value, maxsplit=1)[0]
-    return re.sub(r"[^가-힣0-9·･\s]", "", korean_part).strip()
-
-
-def _table_with_metadata(table_md: str, structured: dict[str, Any]) -> str:
-    return f"{table_md}\n\n{_metadata_line(structured)}"
-
-
-def _metadata_line(structured: dict[str, Any]) -> str:
-    return (
-        f"사용 표: **{structured.get('title_ko') or '-'}** "
-        f"(stat_id: {structured.get('stat_id') or '-'}) · "
-        f"기준일: **{structured.get('base_date') or '-'}** · "
-        f"단위: **{structured.get('unit') or '-'}**"
-    )
+            names.append(trace.tool)
+        if names:
+            return tuple(dict.fromkeys(names))
+    return ()
 
 
 def _tool_summary(result: dict[str, Any]) -> str:
