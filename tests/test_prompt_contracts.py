@@ -4,6 +4,7 @@ from app.tool_descriptions import SEARCH_STATISTICS, SEARCH_TABLES, VISUALIZE
 from backend.prompts import (
     SEARCH_TABLES_RESULT_PROMPT,
     SYSTEM_PROMPT,
+    VISUALIZE_RESULT_PROMPT,
     build_system_prompt,
 )
 
@@ -39,6 +40,11 @@ class PromptContractTests(unittest.TestCase):
     def test_visualize_description_keeps_call_rules(self) -> None:
         self.assertIn("filters와 metrics", VISUALIZE)
         self.assertNotIn("6줄 이내", VISUALIZE)
+
+    def test_visualize_result_uses_separate_markdown_paragraphs(self) -> None:
+        self.assertIn("빈 줄을 하나 넣어", VISUALIZE_RESULT_PROMPT)
+        self.assertIn("별도의 Markdown 문단", VISUALIZE_RESULT_PROMPT)
+        self.assertIn("빈 줄 다음의 둘째 줄", VISUALIZE_RESULT_PROMPT)
 
 
 if __name__ == "__main__":
