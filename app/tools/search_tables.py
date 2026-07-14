@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
+import json
+
 from mcp.server.fastmcp import FastMCP
 
 from app.db import connect
+from app.table_cache import cache_table
 from app.tool_descriptions import SEARCH_TABLES
 
 
@@ -11,7 +14,7 @@ STAT_SQL = """
     WHERE stat_id = %s
 """
 TABLES_SQL = """
-    SELECT seq, caption, n_rows, n_cols, table_md
+    SELECT seq, caption, n_rows, n_cols, body, table_md
     FROM stat_tables
     WHERE stat_id = %s
     ORDER BY seq
@@ -49,10 +52,34 @@ def fetch_table_data(stat_id: int) -> tuple[dict | None, list, list, list]:
     return stat, tables, footnotes, source
 
 
-# 표 행을 API 응답 형태로 바꾼다.
-def table_result(row: dict) -> dict:
+# 시각화 도구가 그대로 사용할 수 있는 원본 표 객체를 만든다.
+def cached_table(stat: dict, row: dict) -> dict:
+    body = row["body"]
+    if isinstance(body, str):
+        body = json.loads(body)
+    return {
+        "stat_id": stat["stat_id"],
+        "ref_id": stat["ref_id"],
+        "year": stat["year"],
+        "title_ko": stat["title_ko"],
+        "title_en": stat["title_en"],
+        "unit": stat["unit"],
+        "base_date": stat["base_date"],
+        "table_seq": row["seq"],
+        "caption": row["caption"],
+        "n_rows": row["n_rows"],
+        "n_cols": row["n_cols"],
+        "body": body,
+        "table_md": row["table_md"],
+    }
+
+
+# 표 행을 API 응답 형태로 바꾸고 후속 호출용 핸들을 발급한다.
+def table_result(stat: dict, row: dict) -> dict:
+    table_handle = cache_table(cached_table(stat, row))
     return {
         "seq": row["seq"],
+        "table_handle": table_handle,
         "caption": row["caption"],
         "n_rows": row["n_rows"],
         "n_cols": row["n_cols"],
@@ -91,7 +118,7 @@ def build_response(stat: dict, tables: list, footnotes: list, source: list) -> d
         "title_en": stat["title_en"],
         "unit": stat["unit"],
         "base_date": stat["base_date"],
-        "tables": [table_result(row) for row in tables],
+        "tables": [table_result(stat, row) for row in tables],
         "footnotes": [footnote_result(row) for row in footnotes],
         "source": [source_result(row) for row in source],
     }

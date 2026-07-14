@@ -432,6 +432,38 @@ def select_source_rows(
     return selected, selection, warnings
 
 
+# LLM이 원본 표에서 고른 행 조건을 실제 컬럼명과 셀 값에 엄격하게 대조한다.
+def apply_exact_filters(
+    rows: list[dict[str, str]],
+    profiles: list[dict[str, Any]],
+    filters: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], list[dict[str, Any]], list[str]]:
+    selected = list(rows)
+    columns = {profile["name"] for profile in profiles}
+    applied: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    for item in filters:
+        column = clean_label(item.get("column"))
+        value = clean_label(item.get("value"))
+        if column not in columns:
+            errors.append(f"선택 조건의 컬럼 '{column}'이 원본 표에 없습니다.")
+            continue
+        if not value:
+            errors.append(f"선택 조건 '{column}'의 값이 비어 있습니다.")
+            continue
+
+        matches = [row for row in selected if clean_label(row.get(column)) == value]
+        applied.append({"column": column, "value": value, "matched_row_count": len(matches)})
+        if not matches:
+            errors.append(f"원본 표의 '{column}' 컬럼에서 값 '{value}'을 찾지 못했습니다.")
+            selected = []
+            continue
+        selected = matches
+
+    return ([] if errors else selected), applied, errors
+
+
 # 평탄화된 헤더를 첫 '_' 앞의 최상위 헤더별 컬럼군으로 묶는다.
 def column_family_groups(profiles: list[dict[str, Any]]) -> dict[str, list[str]]:
     groups: dict[str, list[str]] = {}
@@ -591,6 +623,7 @@ def filter_chart_records(
     query: str | None,
     total_mode: TotalMode,
     target_year: int | None = None,
+    apply_query_filters: bool = True,
 ) -> list[dict[str, Any]]:
     resolved_total_mode = resolve_total_mode(total_mode, query)
     filtered = records
@@ -607,7 +640,7 @@ def filter_chart_records(
         if year_matches:
             filtered = year_matches
 
-    query_key = normalize_key(query)
+    query_key = normalize_key(query) if apply_query_filters else ""
     if query_key:
         for field in ("x", "series"):
             category_values = []

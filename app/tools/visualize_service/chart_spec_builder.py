@@ -3,6 +3,7 @@ from typing import Any, Literal
 
 from .table_interpreter import (
     TotalMode,
+    apply_exact_filters,
     body_to_rows,
     column_family,
     column_family_groups,
@@ -249,6 +250,7 @@ def _build_response(
     *,
     request_hints: dict[str, Any] | None = None,
     transform: dict[str, Any] | None = None,
+    selected_dataset: dict[str, Any] | None = None,
     delta_records: list[dict[str, Any]] | object = _MISSING,
 ) -> dict[str, Any]:
     data: dict[str, Any] = {
@@ -259,6 +261,8 @@ def _build_response(
     }
     if delta_records is not _MISSING:
         data["delta_records"] = delta_records
+    if selected_dataset is not None:
+        data["selected_dataset"] = selected_dataset
 
     spec: dict[str, Any] = {
         "ok": True,
@@ -299,6 +303,204 @@ def _build_response(
             "warnings": warnings,
         }
     return spec
+
+
+# 복합 단위 표에서 선택한 지표 헤더를 기준으로 표시 단위를 좁힌다.
+def _metric_unit(column: str, table_unit: str | None) -> str:
+    lowered = column.lower()
+    if "비율" in column or "percentage" in lowered or "ratio" in lowered or "%" in column:
+        return "%"
+    units = [part.strip() for part in (table_unit or "").split(",") if part.strip()]
+    non_percent_units = [unit for unit in units if "%" not in unit]
+    if len(units) > 1 and len(non_percent_units) == 1:
+        return non_percent_units[0]
+    return table_unit or "값"
+
+
+# 여러 지표 컬럼이 공유하는 헤더 방향을 찾아 차트 범주 라벨을 만든다.
+def _metric_labels(columns: list[str], requested_labels: list[str | None]) -> list[str]:
+    prefixes = [column.split("_", 1)[0] if "_" in column else column for column in columns]
+    suffixes = [column.split("_", 1)[1] if "_" in column else "" for column in columns]
+    same_prefix = len(set(prefixes)) == 1 and all(suffixes)
+    same_suffix = len(set(suffixes)) == 1 and bool(suffixes[0])
+
+    labels: list[str] = []
+    for column, prefix, requested in zip(columns, prefixes, requested_labels):
+        if requested:
+            labels.append(requested)
+        elif same_prefix:
+            labels.append(family_category_label(column))
+        elif same_suffix:
+            labels.append(display_category_label(prefix))
+        else:
+            labels.append(display_category_label(column))
+    return labels
+
+
+# 구조화된 선택 계획을 검증하고 같은 데이터셋으로 표와 차트 응답을 만든다.
+def _selection_plan_spec(
+    table: dict,
+    query: str | None,
+    chart_type: str,
+    x: str | None,
+    y: str | None,
+    group: str | None,
+    top_n: int | None,
+    total_mode: TotalMode,
+    source_rows: list[dict[str, str]],
+    profiles: list[dict[str, Any]],
+    metrics: list[dict[str, str | None]],
+    warnings: list[str],
+    target_year: int | None,
+    request_hints: dict[str, Any],
+) -> dict[str, Any]:
+    profile_map = profile_by_name(profiles)
+    validated: list[dict[str, str]] = []
+    validation_errors: list[str] = []
+    seen_columns: set[str] = set()
+
+    if not metrics:
+        validation_errors.append("metrics에는 하나 이상의 숫자 컬럼을 지정해야 합니다.")
+    for metric in metrics:
+        column = str(metric.get("column") or "").strip()
+        label = str(metric.get("label") or "").strip()
+        requested_unit = str(metric.get("unit") or "").strip()
+        profile = profile_map.get(column)
+        if profile is None:
+            validation_errors.append(f"선택 지표 컬럼 '{column}'이 원본 표에 없습니다.")
+            continue
+        if not profile["is_numeric"]:
+            validation_errors.append(f"선택 지표 컬럼 '{column}'은 숫자형이 아닙니다.")
+            continue
+        if column in seen_columns:
+            validation_errors.append(f"선택 지표 컬럼 '{column}'이 중복되었습니다.")
+            continue
+
+        inferred_unit = _metric_unit(column, table.get("unit"))
+        valid_units = {part.strip() for part in str(table.get("unit") or "").split(",") if part.strip()}
+        valid_units.add(inferred_unit)
+        if requested_unit and requested_unit not in valid_units:
+            validation_errors.append(
+                f"선택 지표 '{column}'의 단위 '{requested_unit}'이 표 단위 '{table.get('unit')}'와 맞지 않습니다."
+            )
+            continue
+        seen_columns.add(column)
+        validated.append({
+            "column": column,
+            "label": label,
+            "unit": requested_unit or inferred_unit,
+        })
+
+    if validation_errors or not source_rows:
+        warnings.extend(validation_errors)
+        if not source_rows and not validation_errors:
+            warnings.append("선택 조건에 맞는 원본 표 행이 없습니다.")
+        chart = {
+            "type": "table",
+            "requested_type": chart_type,
+            "decision_source": "server_validation",
+            "reason": "요청한 행 또는 지표를 원본 표에서 검증하지 못해 차트를 생성하지 않았습니다.",
+            "title": _chart_title(table),
+            "x": "category",
+            "y": "value",
+            "group": None,
+            "unit": table.get("unit"),
+        }
+        return _build_response(
+            table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
+            [], source_rows, warnings, request_hints=request_hints,
+            transform={"type": "validated_selection_plan", "metrics": validated},
+            selected_dataset={"columns": ["x", "value", "series"], "records": [], "provenance": []},
+        )
+
+    columns = [metric["column"] for metric in validated]
+    labels = _metric_labels(columns, [metric.get("label") for metric in validated])
+    category_profiles = [profile for profile in profiles if profile.get("is_categorical")]
+    x_column = resolve_column(x, profiles)
+    if x_column and not profile_map[x_column].get("is_categorical") and not profile_map[x_column].get("is_year"):
+        warnings.append(f"선택 계획의 x축 컬럼 '{x_column}'은 범주형 또는 연도형이 아닙니다.")
+        x_column = None
+    x_column = x_column or (category_profiles[0]["name"] if category_profiles else None)
+    x_profile = profile_map.get(x_column) if x_column else None
+
+    records: list[dict[str, Any]] = []
+    provenance: list[dict[str, Any]] = []
+    single_row = len(source_rows) == 1
+    for row_index, row in enumerate(source_rows):
+        row_category = row_x_value(row, x_column, x_profile)
+        for metric, label in zip(validated, labels):
+            value = parse_number(row.get(metric["column"]))
+            if value is None:
+                continue
+            record = {
+                "x": label if single_row else row_category,
+                "value": value,
+                "series": None if single_row or len(validated) == 1 else label,
+            }
+            records.append(record)
+            provenance.append({
+                "record": record,
+                "source_row_index": row_index,
+                "source_row": {key: row.get(key) for key in row if key == x_column},
+                "source_column": metric["column"],
+                "source_value": row.get(metric["column"]),
+                "label": label,
+                "unit": metric["unit"],
+            })
+
+    records = filter_chart_records(
+        records, query, total_mode, target_year=target_year, apply_query_filters=False,
+    )
+    allowed_record_ids = {id(record) for record in records}
+    provenance = [item for item in provenance if id(item["record"]) in allowed_record_ids]
+    has_group = any(record.get("series") for record in records)
+    selected_type, decision_source, _ = _select_chart(
+        chart_type, query, bool(records), x_profile if not single_row else None, has_group, warnings,
+    )
+    records = _limit_series(records, warnings)
+    records = _limit_categories(records, selected_type, bool(x_profile and x_profile["is_year"]), top_n, warnings)
+    records = _sort_records(records, bool(x_profile and x_profile["is_year"]), selected_type)
+    visible_record_ids = {id(record) for record in records}
+    provenance = [item for item in provenance if id(item["record"]) in visible_record_ids]
+
+    units = {metric["unit"] for metric in validated}
+    chart_unit = next(iter(units)) if len(units) == 1 else table.get("unit")
+    if not records:
+        warnings.append("선택한 행의 지표 값이 비어 있어 차트 데이터를 만들지 못했습니다.")
+    chart = {
+        "type": selected_type,
+        "requested_type": chart_type,
+        "decision_source": (
+            "server_validation" if not records
+            else "selection_plan" if decision_source != "server_fallback"
+            else decision_source
+        ),
+        "reason": (
+            "선택한 원본 셀에 숫자 값이 없어 차트를 생성하지 않았습니다."
+            if not records
+            else "원본 표와 대조한 행·지표 선택 계획으로 차트 데이터를 구성했습니다."
+        ),
+        "title": _chart_title(table),
+        "x": "metric" if single_row else x_column,
+        "y": "value",
+        "group": "metric" if has_group else None,
+        "unit": chart_unit,
+    }
+    return _build_response(
+        table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
+        records, source_rows, warnings, request_hints=request_hints,
+        transform={
+            "type": "validated_selection_plan",
+            "row_shape": "single_row_metrics" if single_row else "rows_by_metrics",
+            "metrics": validated,
+        },
+        selected_dataset={
+            "columns": ["x", "value", "series"],
+            "records": records,
+            "provenance": provenance,
+            "unit": chart_unit,
+        },
+    )
 
 
 # 행은 범주, 열은 연도인 표를 시계열 차트 spec으로 변환한다.
@@ -578,22 +780,42 @@ def build_plot_spec(
     year: int | None = None,
     city: str | None = None,
     column_family_name: str | None = None,
+    filters: list[dict[str, str]] | None = None,
+    metrics: list[dict[str, str | None]] | None = None,
 ) -> dict[str, Any]:
     columns, all_source_rows, warnings = body_to_rows(table["body"])
     profiles = profile_columns(columns, all_source_rows)
     profile_map = profile_by_name(profiles)
     target_year = requested_year(year, query)
+    explicit_selection = filters is not None or metrics is not None
     source_rows, selection, selection_warnings = select_source_rows(
-        all_source_rows, profiles, target_year, city, query,
+        all_source_rows, profiles, target_year, city, None if explicit_selection else query,
     )
     warnings.extend(selection_warnings)
+    applied_filters: list[dict[str, Any]] = []
+    filter_errors: list[str] = []
+    if filters is not None:
+        source_rows, applied_filters, filter_errors = apply_exact_filters(
+            source_rows, profiles, filters,
+        )
+        warnings.extend(filter_errors)
+        selection["selected_row_count"] = len(source_rows)
+    selection["filters"] = applied_filters
     request_hints = {
         "year": year,
         "city": city,
         "column_family": column_family_name,
+        "filters": filters,
+        "metrics": metrics,
         "resolved_year": target_year,
         "selection": selection,
     }
+
+    if metrics is not None:
+        return _selection_plan_spec(
+            table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles,
+            metrics, warnings, target_year, request_hints,
+        )
 
     wide_spec = _wide_year_time_series_spec(
         table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles, warnings,
@@ -672,7 +894,7 @@ def build_plot_spec(
     selected_type, decision_source, reason = _select_chart(
         chart_type, query, bool(records), x_profile, has_group, warnings,
     )
-    if not source_rows and (selection_warnings or family_validation_failed):
+    if not source_rows and (selection_warnings or filter_errors or family_validation_failed):
         decision_source = "server_validation"
         reason = "요청한 행 또는 컬럼군을 표에서 확인하지 못해 전체 데이터로 대체하지 않았습니다."
     records = filter_chart_records(records, query, total_mode, target_year=target_year)

@@ -50,6 +50,8 @@ npm run dev
 
 `visualize` 도구는 `structuredContent.vega_lite`에 Vega-Lite JSON spec을 반환합니다. 프론트엔드는 로컬에 번들된 Vega 라이브러리로 차트를 렌더링하며 PNG 내보내기를 제공합니다. 별도 이미지 저장소나 asset server는 사용하지 않습니다.
 
+시각화 요청에서는 먼저 `search_tables`로 원본 표를 확인합니다. 응답의 각 표에는 현재 MCP 세션에서 유효한 `table_handle`이 포함됩니다. 모델은 이 핸들과 함께 원본 표의 정확한 행 조건을 `filters`, 숫자 컬럼을 `metrics`로 전달합니다. 서버는 선택 계획을 원본 표에 엄격하게 대조하고, 검증된 `selected_dataset` 하나로 표 데이터와 Vega-Lite spec을 생성합니다. 선택 계획이 없을 때는 기존 질의 기반 변환을 하위 호환 경로로 사용합니다.
+
 ## API
 
 ### `GET /health`
