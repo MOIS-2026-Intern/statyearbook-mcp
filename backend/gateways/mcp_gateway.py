@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import os
+
 from contextlib import AsyncExitStack
 from datetime import timedelta
 from typing import Any
@@ -24,10 +26,23 @@ class McpGateway:
         self._session: ClientSession | None = None
 
     async def __aenter__(self) -> "McpGateway":
+        mcp_env_names = (
+            "STATYEARBOOK_DSN",
+            "OPENAI_API_KEY",
+            "STATYEARBOOK_EMBED_MODEL",
+        )
+        
+        mcp_env = {
+            name: os.environ[name]
+            for name in mcp_env_names
+            if name in os.environ
+        }
+        
         server = StdioServerParameters(
             command=self._settings.mcp_command,
             args=self._settings.mcp_args,
             cwd=self._settings.mcp_cwd,
+            env=mcp_env,
         )
 
         self._stack = AsyncExitStack()
