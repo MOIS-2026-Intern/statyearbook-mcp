@@ -101,7 +101,9 @@ npm run dev
 
 프론트엔드는 같은 대화창의 최근 대화 5턴과 해당 메시지에 연결된 MCP trace를 `history`, `traces`로 보냅니다. 응답은 프론트엔드가 사용하는 `message`와 `traces` 형식입니다. `traces`에는 MCP 도구 목록 조회, 도구 이름, 요청 인자, 응답 JSON, 실행 시간이 포함됩니다.
 
-백엔드는 HTTP middleware에서 최소 access log를 표준 로거에 남깁니다. 대화 본문, MCP request, MCP response는 운영 로그에 저장하지 않고, 상태 복원은 프론트엔드 저장소가 담당합니다.
+백엔드는 HTTP middleware에서 access log를 표준 로거에 남기며, `/api/chat` 요청의
+대화 본문과 클라이언트 정보도 아래와 같이 기록합니다. MCP request와 MCP response의
+상태 복원은 프론트엔드 저장소가 담당합니다.
 
 ## 환경변수
 

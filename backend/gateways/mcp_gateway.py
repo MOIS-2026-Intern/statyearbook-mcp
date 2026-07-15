@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
 import os
 
 from contextlib import AsyncExitStack
@@ -13,6 +14,9 @@ from mcp.client.stdio import stdio_client
 from backend.config import Settings
 from backend.models.tooling import ToolSpec
 from backend.serializers.mcp_result_serializer import sanitize_mcp_result, to_jsonable
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class McpGatewayError(RuntimeError):
@@ -72,6 +76,7 @@ class McpGateway:
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         args = self.prepare_tool_arguments(name, arguments)
+        logger.info("MCP tool called name=%s", name)
 
         result = await self.session.call_tool(
             name,
