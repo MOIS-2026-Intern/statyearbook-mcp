@@ -42,9 +42,9 @@ class PromptContractTests(unittest.TestCase):
         self.assertNotIn("6줄 이내", VISUALIZE)
 
     def test_visualize_result_uses_separate_markdown_paragraphs(self) -> None:
-        self.assertIn("빈 줄을 하나 넣어", VISUALIZE_RESULT_PROMPT)
-        self.assertIn("별도의 Markdown 문단", VISUALIZE_RESULT_PROMPT)
-        self.assertIn("빈 줄 다음의 둘째 줄", VISUALIZE_RESULT_PROMPT)
+        self.assertIn("응답 첫 줄은", VISUALIZE_RESULT_PROMPT)
+        self.assertIn("다음의 두 번째 줄은", VISUALIZE_RESULT_PROMPT)
+        self.assertIn("한 줄만 적습니다", VISUALIZE_RESULT_PROMPT)
 
 
 if __name__ == "__main__":
