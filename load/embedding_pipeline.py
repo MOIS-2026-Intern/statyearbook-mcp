@@ -190,6 +190,7 @@ class EmbeddingRunner:
         force: bool = False,
         dry_run: bool = False,
         progress: Callable[[int, int], None] | None = None,
+        on_batch: Callable[[list[dict], list[list[float]], EmbeddingProfile], None] | None = None,
     ) -> EmbeddingRunResult:
         self.source.validate_dimension(conn, self.profile.dimension)
         self.jobs.acquire_lock(conn)
@@ -237,6 +238,8 @@ class EmbeddingRunner:
                 if not batch.rows:
                     break
                 vectors = self.provider.encode(self.source.texts(batch.rows))
+                if on_batch:
+                    on_batch(batch.rows, vectors, self.profile)
                 self.source.save_batch(
                     conn,
                     batch.rows,

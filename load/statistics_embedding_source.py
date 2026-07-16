@@ -11,7 +11,19 @@ def _first_value(row):
 
 
 class StatisticsEmbeddingSource:
-    name = "statistics"
+    def __init__(self, publication_year: int | None = None):
+        self.publication_year = publication_year
+        self.name = (
+            f"statistics:{publication_year}"
+            if publication_year is not None
+            else "statistics"
+        )
+
+    def _scope_sql(self) -> str:
+        return "year = %s" if self.publication_year is not None else "TRUE"
+
+    def _scope_params(self) -> list:
+        return [self.publication_year] if self.publication_year is not None else []
 
     def embedding_column_type(self, conn) -> str:
         with conn.cursor() as cur:
@@ -40,7 +52,10 @@ class StatisticsEmbeddingSource:
 
     def snapshot_max_id(self, conn) -> int:
         with conn.cursor() as cur:
-            cur.execute("SELECT COALESCE(MAX(stat_id), 0) FROM statistics")
+            cur.execute(
+                f"SELECT COALESCE(MAX(stat_id), 0) FROM statistics WHERE {self._scope_sql()}",
+                self._scope_params(),
+            )
             return int(_first_value(cur.fetchone()))
 
     def _candidate_sql(self, force: bool) -> str:
@@ -57,10 +72,14 @@ class StatisticsEmbeddingSource:
     ) -> int:
         condition = self._candidate_sql(force)
         params = [] if force else [profile_key]
+        params.extend(self._scope_params())
         params.append(max_source_id)
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT COUNT(*) FROM statistics WHERE {condition} AND stat_id <= %s",
+                f"""
+                SELECT COUNT(*) FROM statistics
+                WHERE {condition} AND {self._scope_sql()} AND stat_id <= %s
+                """,
                 params,
             )
             return int(_first_value(cur.fetchone()))
@@ -76,13 +95,16 @@ class StatisticsEmbeddingSource:
     ) -> EmbeddingBatch:
         condition = self._candidate_sql(force)
         params = [] if force else [profile_key]
+        params.extend(self._scope_params())
         params.extend([after_source_id, max_source_id, batch_size])
         with conn.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT stat_id, title_ko, title_en, chapter, section
+                SELECT stat_id, year, ref_id, title_ko, title_en,
+                       chapter, section, page_start
                 FROM statistics
                 WHERE {condition}
+                  AND {self._scope_sql()}
                   AND stat_id > %s
                   AND stat_id <= %s
                 ORDER BY stat_id
@@ -130,7 +152,7 @@ class StatisticsEmbeddingSource:
     def status(self, conn, profile_key: str) -> dict:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS total_count,
                        COUNT(embedding) AS embedded_count,
                        COUNT(*) FILTER (
@@ -138,8 +160,9 @@ class StatisticsEmbeddingSource:
                              AND embedding_profile_key = %s
                        ) AS current_count
                 FROM statistics
+                WHERE {self._scope_sql()}
                 """,
-                (profile_key,),
+                [profile_key, *self._scope_params()],
             )
             row = cur.fetchone()
         status = dict(row) if isinstance(row, dict) else {

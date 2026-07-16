@@ -20,6 +20,7 @@ from app.embedding import (  # noqa: E402
     create_embedding_provider,
 )
 from load.embedding_pipeline import EmbeddingJobRepository, EmbeddingRunner  # noqa: E402
+from load.embedding_dml import EmbeddingDmlWriter  # noqa: E402
 from load.statistics_embedding_source import StatisticsEmbeddingSource  # noqa: E402
 
 
@@ -51,6 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="한 번에 처리할 통계표 수")
     parser.add_argument("--dsn", default=DSN,
                         help="DB 접속 문자열(기본 .env 의 STATYEARBOOK_DSN)")
+    parser.add_argument("--year", type=int, default=None,
+                        help="특정 발간연도만 임베딩")
+    parser.add_argument("--emit-sql", default=None,
+                        help="생성된 embedding UPDATE DML 저장 경로")
     return parser
 
 
@@ -110,7 +115,7 @@ def run(args):
     import psycopg
     from psycopg.rows import dict_row
 
-    source = StatisticsEmbeddingSource()
+    source = StatisticsEmbeddingSource(args.year)
     if args.status:
         with psycopg.connect(args.dsn, row_factory=dict_row) as conn:
             print_status(conn, profile, source)
@@ -122,14 +127,23 @@ def run(args):
         profile=profile,
         source=source,
     )
-    with psycopg.connect(args.dsn, row_factory=dict_row) as conn:
-        result = runner.run(
-            conn,
-            batch_size=settings.batch_size,
-            force=args.all,
-            dry_run=args.dry_run,
-            progress=lambda done, total: print(f"  {done}/{total}"),
-        )
+    writer = EmbeddingDmlWriter(args.emit_sql, profile) if args.emit_sql and not args.dry_run else None
+    try:
+        with psycopg.connect(args.dsn, row_factory=dict_row) as conn:
+            result = runner.run(
+                conn,
+                batch_size=settings.batch_size,
+                force=args.all,
+                dry_run=args.dry_run,
+                progress=lambda done, total: print(f"  {done}/{total}"),
+                on_batch=writer.write_batch if writer else None,
+            )
+        if writer:
+            writer.complete()
+    except Exception as exc:
+        if writer:
+            writer.abort(exc)
+        raise
 
     mode = "dry-run" if result.dry_run else f"job {result.job_id}"
     print(

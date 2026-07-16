@@ -1,6 +1,13 @@
 # DB 적재 방법
 
 행정안전통계연보 HWPX 원본을 파싱해 PostgreSQL에 적재하고, 검색용 임베딩까지 생성하는 순서입니다.
+일상적인 관리자 작업에는 아래 개별 스크립트 대신 통합 명령을 사용합니다.
+
+```bash
+python -m admin ingest data/2026_통계연보.hwpx --year 2026
+```
+
+이 문서의 개별 명령은 장애 분석이나 특정 단계만 다시 실행할 때 사용합니다.
 
 ## 스크립트 역할
 
@@ -22,12 +29,15 @@ createdb statyearbook_mcp
 psql -d statyearbook_mcp -f supabase/migrations/202607140001_initial_schema.sql
 psql -d statyearbook_mcp -f supabase/migrations/202607160001_embedding_management.sql
 psql -d statyearbook_mcp -f supabase/migrations/202607160002_invalidate_statistics_embeddings.sql
+psql -d statyearbook_mcp -f supabase/migrations/202607160003_unique_publication_year.sql
 ```
 
 ### 2. HWPX 원본을 파싱합니다
 
 ```bash
 python load/parse_hwpx_yearbook.py data/통계연보.hwpx \
+  --year 2026 \
+  --title "2026 행정안전통계연보" \
   --json-out load/output/parsed_yearbook.json \
   --md-out load/output/parsed_yearbook.md
 ```
@@ -52,8 +62,9 @@ python load/load_to_postgres.py load/output/parsed_yearbook.json
 이 명령은 기본적으로 다음 작업을 함께 수행합니다.
 
 - `STATYEARBOOK_DSN`이 있으면 실제 DB에 적재합니다.
-- `db/seeds/load_all.sql`에 재적재용 SQL을 생성합니다.
-- 적재 시 기존 테이블 데이터를 `TRUNCATE ... RESTART IDENTITY CASCADE`로 비우고 다시 넣습니다.
+- `db/seeds/load_yearbook.sql`에 이관 가능한 누적 적재 SQL을 생성합니다.
+- 기본 `reject` 모드는 같은 연도가 이미 있으면 기존 데이터를 건드리지 않고 중단합니다.
+- `--mode replace`는 선택한 연도의 기존 데이터만 교체하며 다른 연도는 보존합니다.
 
 DSN을 명령에서 직접 지정하려면 다음처럼 실행합니다.
 
@@ -77,7 +88,8 @@ STATYEARBOOK_EMBED_DIMENSION=1536
 python load/embed_statistics.py
 ```
 
-기본 실행은 `embedding IS NULL`인 통계만 처리합니다. 이미 생성된 임베딩까지 모두 다시 만들려면 다음처럼 실행합니다.
+기본 실행은 임베딩이 없거나 현재 model profile과 다른 통계만 처리합니다. 이미 생성된
+임베딩까지 모두 다시 만들려면 다음처럼 실행합니다.
 
 ```bash
 python load/embed_statistics.py --all
@@ -178,11 +190,11 @@ psql -d statyearbook_mcp -c "SELECT COUNT(*) FROM stat_tables;"
 ```bash
 python load/load_to_postgres.py load/output/parsed_yearbook.json \
   --no-db \
-  --emit-sql db/seeds/load_all.sql
+  --emit-sql db/seeds/load_yearbook.sql
 ```
 
 생성된 SQL을 나중에 직접 적용하려면 다음처럼 실행합니다.
 
 ```bash
-psql -d statyearbook_mcp -f db/seeds/load_all.sql
+psql -d statyearbook_mcp -f db/seeds/load_yearbook.sql
 ```

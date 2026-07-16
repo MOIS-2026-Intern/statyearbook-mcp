@@ -745,7 +745,13 @@ def estimate_page_count(hwpx_path: str) -> int | None:
     return page_count
 
 
-def parse(hwpx_path: str, image_dir: str | None = None) -> dict:
+def parse(
+    hwpx_path: str,
+    image_dir: str | None = None,
+    publication_year: int | None = None,
+    publication_title: str | None = None,
+    publication_no: str | None = None,
+) -> dict:
     units: list[dict] = []
     current: dict | None = None
     pending_note: dict | None = None
@@ -780,8 +786,18 @@ def parse(hwpx_path: str, image_dir: str | None = None) -> dict:
             current["images"].append(block["image"])
 
     append_unit(units, current)
+    publication = default_publication(estimate_page_count(hwpx_path))
+    if publication_year is not None:
+        publication["year"] = publication_year
+    if publication_title:
+        publication["title"] = publication_title
+    elif publication_year is not None:
+        publication["title"] = f"{publication_year} 행정안전통계연보"
+    if publication_no is not None:
+        publication["pub_no"] = publication_no or None
+
     return {
-        "publication": default_publication(estimate_page_count(hwpx_path)),
+        "publication": publication,
         "metadata": {
             "source": os.path.abspath(hwpx_path),
             "parser": "load/parse_hwpx_yearbook.py",
@@ -872,12 +888,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json-out", default="load/output/parsed_yearbook.json")
     parser.add_argument("--md-out", default="load/output/parsed_yearbook.md")
     parser.add_argument("--image-dir", default=None, help="지정 시 HWPX BinData 이미지를 복사")
+    parser.add_argument("--year", type=int, default=None, help="발간연도 override")
+    parser.add_argument("--title", default=None, help="발간물 제목 override")
+    parser.add_argument("--pub-no", default=None, help="발간번호 override")
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    result = parse(args.hwpx_path, args.image_dir)
+    result = parse(
+        args.hwpx_path,
+        args.image_dir,
+        publication_year=args.year,
+        publication_title=args.title,
+        publication_no=args.pub_no,
+    )
     write_json(args.json_out, result)
     if args.md_out:
         write_text(args.md_out, parsed_to_markdown(result))

@@ -2,11 +2,14 @@
 /outputs/
 /models/*
 !/models/.gitkeep
+/admin/state/
+/admin/workspaces/
 
 # secrets / local env
 .env
 .env.*
 !.env.example
+!/admin/.env.admin.example
 
 # python
 __pycache__/
