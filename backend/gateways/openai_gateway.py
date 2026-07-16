@@ -25,16 +25,10 @@ class OpenAIContinuationState:
     input_items: list[Any]
 
 
-class OpenAIGateway:
-    def __init__(self, settings: Settings):
-        if not settings.openai_api_key:
-            raise OpenAIConfigurationError("OPENAI_API_KEY is not configured")
-
+class OpenAICompatibleGateway:
+    def __init__(self, settings: Settings, client: AsyncOpenAI):
         self._settings = settings
-        self._client = AsyncOpenAI(
-            api_key=settings.openai_api_key,
-            timeout=settings.openai_timeout_seconds,
-        )
+        self._client = client
 
     async def create_response(
         self,
@@ -84,6 +78,20 @@ class OpenAIGateway:
             text=_response_text(response, default="" if tool_calls else _missing_text_message()),
             tool_calls=tool_calls,
             state=OpenAIContinuationState(input_items=input_items),
+        )
+
+
+class OpenAIGateway(OpenAICompatibleGateway):
+    def __init__(self, settings: Settings):
+        if not settings.openai_api_key:
+            raise OpenAIConfigurationError("OPENAI_API_KEY is not configured")
+
+        super().__init__(
+            settings,
+            AsyncOpenAI(
+                api_key=settings.openai_api_key,
+                timeout=settings.openai_timeout_seconds,
+            ),
         )
 
 
