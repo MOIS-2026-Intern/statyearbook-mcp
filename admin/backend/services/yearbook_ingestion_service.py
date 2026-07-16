@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import json
 import traceback
 import zipfile
 
-from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from app.embedding import (
@@ -14,35 +12,27 @@ from app.embedding import (
     create_embedding_profile,
     create_embedding_provider,
 )
-from admin.config import AdminSettings
-from admin.job_store import AdminJobStore
-from load.embedding_dml import EmbeddingDmlWriter
-from load.embedding_pipeline import EmbeddingRunner
-from load.parse_hwpx_yearbook import parse, parsed_to_markdown, write_json, write_text
-from load.statistics_embedding_source import StatisticsEmbeddingSource
-from load.yearbook_dml import build_load_dml, execute_dml
+from admin.backend.config import AdminSettings
+from admin.backend.models.ingestion_job_model import IngestionOptions
+from admin.backend.repositories.admin_job_repository import AdminJobRepository
+from admin.backend.repositories.statistics_embedding_repository import StatisticsEmbeddingRepository
+from admin.backend.services.embedding_runner_service import EmbeddingRunner
+from admin.backend.services.yearbook_artifact_service import YearbookArtifactService
+from admin.backend.services.yearbook_load_dml_service import execute_dml
+from admin.backend.services.yearbook_parser_service import parse
+from admin.backend.services.yearbook_verification_service import YearbookVerificationService
 
 
-@dataclass(frozen=True)
-class IngestionOptions:
-    input_path: str
-    original_filename: str
-    year: int
-    title: str
-    pub_no: str | None = None
-    target: str = "local"
-    load_mode: str = "reject"
-    embedding_model: str = "bge-m3"
-    extract_images: bool = False
-
-    def as_dict(self) -> dict:
-        return asdict(self)
-
-
-class AdminIngestionService:
-    def __init__(self, settings: AdminSettings, store: AdminJobStore):
+class YearbookIngestionService:
+    def __init__(
+        self,
+        settings: AdminSettings,
+        store: AdminJobRepository,
+        verification: YearbookVerificationService | None = None,
+    ):
         self.settings = settings
         self.store = store
+        self.verification = verification or YearbookVerificationService()
 
     def _step(self, job_id: str, stage: str, progress: int, message: str) -> None:
         self.store.update(
@@ -59,6 +49,7 @@ class AdminIngestionService:
         options = IngestionOptions(**job["options"])
         workspace = self.settings.workspace_dir / job_id
         workspace.mkdir(parents=True, exist_ok=True)
+        artifact_service = YearbookArtifactService(workspace)
         artifacts: dict[str, str] = {}
         try:
             input_path = Path(options.input_path)
@@ -76,17 +67,11 @@ class AdminIngestionService:
                 publication_title=options.title,
                 publication_no=options.pub_no,
             )
-            parsed_json = workspace / "parsed_yearbook.json"
-            review_md = workspace / "parsed_yearbook.md"
-            write_json(str(parsed_json), parsed)
-            write_text(str(review_md), parsed_to_markdown(parsed))
-            artifacts.update(parsed_json=parsed_json.name, review_markdown=review_md.name)
+            artifacts.update(artifact_service.save_parsed_outputs(parsed))
             self.store.update(job_id, artifacts=artifacts)
 
             self._step(job_id, "load_dml", 38, "누적 적재용 SQL을 생성하고 있습니다.")
-            load_sql = workspace / "load.sql"
-            load_dml = build_load_dml(parsed, options.load_mode)
-            load_sql.write_text(load_dml, encoding="utf-8")
+            load_dml, load_sql = artifact_service.save_load_dml(parsed, options.load_mode)
             artifacts["load_dml"] = load_sql.name
             self.store.update(job_id, artifacts=artifacts)
 
@@ -108,10 +93,10 @@ class AdminIngestionService:
                 )
                 profile = create_embedding_profile(embed_settings, STATISTICS_CONTENT_VERSION)
                 provider = create_embedding_provider(embed_settings)
-                source = StatisticsEmbeddingSource(options.year)
+                source = StatisticsEmbeddingRepository(options.year)
                 runner = EmbeddingRunner(provider, profile, source)
-                embedding_sql = workspace / "embeddings.sql"
-                writer = EmbeddingDmlWriter(embedding_sql, profile)
+                writer = artifact_service.embedding_dml_writer(profile)
+                embedding_sql = writer.path
                 artifacts["embedding_dml"] = embedding_sql.name
                 self.store.update(job_id, artifacts=artifacts)
                 self._step(job_id, "embedding", 60, "제목 임베딩을 생성하고 DB에 저장하고 있습니다.")
@@ -144,7 +129,11 @@ class AdminIngestionService:
                 execute_dml(dsn, embedding_sql.read_text(encoding="utf-8"))
 
             self._step(job_id, "verify", 95, "적재 건수와 임베딩 profile을 검증하고 있습니다.")
-            verification = self._verify(dsn, options.year, embedding_profile_key)
+            verification = self.verification.verify(
+                dsn,
+                options.year,
+                embedding_profile_key,
+            )
             result_payload = {
                 "publication_year": options.year,
                 "publication_title": options.title,
@@ -175,36 +164,3 @@ class AdminIngestionService:
             )
             self.store.add_event(job_id, self.store.get(job_id)["stage"], str(exc), "error")
             return self.store.get(job_id)
-
-    def _verify(self, dsn: str, year: int, profile_key: str | None) -> dict:
-        import psycopg
-
-        with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT COUNT(*) AS statistics_count,
-                       COALESCE(SUM((SELECT COUNT(*) FROM stat_tables t WHERE t.stat_id = s.stat_id)), 0)
-                FROM statistics s WHERE s.year = %s
-                """,
-                (year,),
-            )
-            statistics_count, table_count = cur.fetchone()
-            current_count = 0
-            if profile_key:
-                cur.execute(
-                    """
-                    SELECT COUNT(*) FROM statistics
-                    WHERE year = %s AND embedding IS NOT NULL AND embedding_profile_key = %s
-                    """,
-                    (year, profile_key),
-                )
-                current_count = cur.fetchone()[0]
-        if profile_key and current_count != statistics_count:
-            raise RuntimeError(
-                f"embedding verification failed: {current_count}/{statistics_count}"
-            )
-        return {
-            "statistics_count": int(statistics_count),
-            "table_count": int(table_count),
-            "verified_embedding_count": int(current_count),
-        }

@@ -2,12 +2,17 @@ import json
 import tempfile
 import unittest
 
+from datetime import datetime, timezone
 from pathlib import Path
 
-from admin.job_store import AdminJobStore
+from admin.backend.repositories.admin_job_repository import AdminJobRepository
+from admin.backend.services.workspace_service import (
+    create_workspace_id,
+    migrate_legacy_workspaces,
+)
+from admin.backend.services.title_embedding_dml_service import TitleEmbeddingDmlWriter
+from admin.backend.services.yearbook_load_dml_service import build_load_dml
 from app.embedding import EmbeddingProfile
-from load.embedding_dml import EmbeddingDmlWriter
-from load.yearbook_dml import build_load_dml
 
 
 def parsed_yearbook(year: int = 2026) -> dict:
@@ -91,8 +96,8 @@ class EmbeddingDmlTests(unittest.TestCase):
             "page_start": 3,
         }
         with tempfile.TemporaryDirectory() as root:
-            path = Path(root) / "embeddings.sql"
-            writer = EmbeddingDmlWriter(path, profile)
+            path = Path(root) / "yearbook_title_embeddings.sql"
+            writer = TitleEmbeddingDmlWriter(path, profile)
             writer.write_batch([row], [[0.6, 0.8]], profile)
             writer.complete()
             dml = path.read_text(encoding="utf-8")
@@ -104,10 +109,10 @@ class EmbeddingDmlTests(unittest.TestCase):
         self.assertTrue(dml.endswith("COMMIT;\n"))
 
 
-class AdminJobStoreTests(unittest.TestCase):
+class AdminJobRepositoryTests(unittest.TestCase):
     def test_persists_progress_events_artifacts_and_result(self) -> None:
         with tempfile.TemporaryDirectory() as root:
-            store = AdminJobStore(Path(root) / "jobs.sqlite3")
+            store = AdminJobRepository(Path(root) / "jobs.sqlite3")
             store.create("job-1", {"year": 2026})
             store.update(
                 "job-1",
@@ -126,6 +131,47 @@ class AdminJobStoreTests(unittest.TestCase):
         self.assertEqual(job["artifacts"]["parsed_json"], "parsed.json")
         self.assertEqual(job["result"]["statistics_count"], 319)
         self.assertEqual(job["events"][-1]["message"], "통계표 파싱 완료")
+
+
+class WorkspaceServiceTests(unittest.TestCase):
+    def test_workspace_id_contains_date_time_and_microseconds(self) -> None:
+        timestamp = datetime(2026, 7, 16, 17, 5, 9, 123456, tzinfo=timezone.utc)
+
+        workspace_id = create_workspace_id(timestamp)
+
+        self.assertEqual(workspace_id, "20260716-170509-123456")
+
+    def test_migrates_legacy_workspace_id_paths_and_artifact_names(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            repository = AdminJobRepository(root_path / "jobs.sqlite3")
+            legacy_id = "a" * 32
+            legacy_workspace = root_path / legacy_id
+            legacy_workspace.mkdir()
+            (legacy_workspace / "source.hwpx").write_bytes(b"test")
+            (legacy_workspace / "parsed_yearbook.json").write_text(
+                json.dumps({"metadata": {"source": "old"}}),
+                encoding="utf-8",
+            )
+            repository.create(
+                legacy_id,
+                {
+                    "input_path": str(legacy_workspace / "source.hwpx"),
+                    "year": 2026,
+                },
+            )
+            repository.update(
+                legacy_id,
+                artifacts={"parsed_json": "parsed_yearbook.json"},
+            )
+
+            migrated = migrate_legacy_workspaces(root_path, repository)
+            new_id = migrated[0][1]
+            job = repository.get(new_id)
+
+        self.assertRegex(new_id, r"^\d{8}-\d{6}-\d{6}$")
+        self.assertTrue(job["options"]["input_path"].endswith("yearbook_source.hwpx"))
+        self.assertEqual(job["artifacts"]["parsed_json"], "yearbook_parsed.json")
 
 
 if __name__ == "__main__":

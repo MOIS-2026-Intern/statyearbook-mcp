@@ -3,14 +3,14 @@ from __future__ import annotations
 
 from app.embedding import EmbeddingConfigurationError
 from app.vector import vector_literal
-from load.embedding_pipeline import EmbeddingBatch
+from admin.backend.services.embedding_runner_service import EmbeddingBatch
 
 
 def _first_value(row):
     return next(iter(row.values())) if isinstance(row, dict) else row[0]
 
 
-class StatisticsEmbeddingSource:
+class StatisticsEmbeddingRepository:
     def __init__(self, publication_year: int | None = None):
         self.publication_year = publication_year
         self.name = (

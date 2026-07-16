@@ -8,7 +8,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY admin ./admin
 COPY app ./app
-COPY load ./load
 COPY models ./models
 
 EXPOSE 8100

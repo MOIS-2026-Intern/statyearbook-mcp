@@ -1,4 +1,4 @@
-const stages = [
+const ingestionStages = [
   ["validate", "파일 확인", "형식·대상 환경 검증"],
   ["parse", "구조 파싱", "JSON·검수 Markdown 생성"],
   ["load_dml", "적재 SQL 생성", "누적 적재 DML 보존"],
@@ -26,8 +26,8 @@ async function api(path, init = {}) {
 }
 
 function renderStages(job) {
-  const currentIndex = stages.findIndex(([id]) => id === job?.stage);
-  $("stageList").innerHTML = stages.map(([id, title, detail], index) => {
+  const currentIndex = ingestionStages.findIndex(([id]) => id === job?.stage);
+  $("stageList").innerHTML = ingestionStages.map(([id, title, detail], index) => {
     const done = job?.status === "completed" || index < currentIndex;
     const active = job?.status === "running" && index === currentIndex;
     return `<li class="stage ${done ? "stage--done" : ""} ${active ? "stage--active" : ""}"><span class="stage-dot">${done ? "✓" : index + 1}</span><div><strong>${title}</strong><span>${detail}</span></div></li>`;

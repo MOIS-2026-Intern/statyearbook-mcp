@@ -14,7 +14,7 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class AdminJobStore:
+class AdminJobRepository:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,3 +136,30 @@ class AdminJobStore:
                 "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [self._decode(row) for row in rows]
+
+    def migrate_job_identity(
+        self,
+        old_job_id: str,
+        new_job_id: str,
+        options: dict,
+        artifacts: dict,
+    ) -> None:
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET job_id = ?, options_json = ?, artifacts_json = ?, updated_at = ?
+                WHERE job_id = ?
+                """,
+                (
+                    new_job_id,
+                    json.dumps(options, ensure_ascii=False),
+                    json.dumps(artifacts, ensure_ascii=False),
+                    utc_now(),
+                    old_job_id,
+                ),
+            )
+            conn.execute(
+                "UPDATE job_events SET job_id = ? WHERE job_id = ?",
+                (new_job_id, old_job_id),
+            )

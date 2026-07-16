@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 from concurrent.futures import Future, ThreadPoolExecutor
 
-from admin.pipeline import AdminIngestionService
+from admin.backend.services.yearbook_ingestion_service import YearbookIngestionService
 
 
 class AdminJobOrchestrator:
-    def __init__(self, service: AdminIngestionService):
+    def __init__(self, service: YearbookIngestionService):
         self.service = service
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="yearbook-admin")
         self.futures: dict[str, Future] = {}

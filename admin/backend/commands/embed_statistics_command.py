@@ -9,7 +9,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from app.embedding import (  # noqa: E402
     BGE_M3_REVISION,
@@ -19,9 +19,10 @@ from app.embedding import (  # noqa: E402
     create_embedding_profile,
     create_embedding_provider,
 )
-from load.embedding_pipeline import EmbeddingJobRepository, EmbeddingRunner  # noqa: E402
-from load.embedding_dml import EmbeddingDmlWriter  # noqa: E402
-from load.statistics_embedding_source import StatisticsEmbeddingSource  # noqa: E402
+from admin.backend.repositories.statistics_embedding_repository import StatisticsEmbeddingRepository  # noqa: E402
+from admin.backend.repositories.embedding_job_repository import EmbeddingJobRepository  # noqa: E402
+from admin.backend.services.embedding_runner_service import EmbeddingRunner  # noqa: E402
+from admin.backend.services.title_embedding_dml_service import TitleEmbeddingDmlWriter  # noqa: E402
 
 
 load_dotenv()
@@ -115,7 +116,7 @@ def run(args):
     import psycopg
     from psycopg.rows import dict_row
 
-    source = StatisticsEmbeddingSource(args.year)
+    source = StatisticsEmbeddingRepository(args.year)
     if args.status:
         with psycopg.connect(args.dsn, row_factory=dict_row) as conn:
             print_status(conn, profile, source)
@@ -127,7 +128,11 @@ def run(args):
         profile=profile,
         source=source,
     )
-    writer = EmbeddingDmlWriter(args.emit_sql, profile) if args.emit_sql and not args.dry_run else None
+    writer = (
+        TitleEmbeddingDmlWriter(args.emit_sql, profile)
+        if args.emit_sql and not args.dry_run
+        else None
+    )
     try:
         with psycopg.connect(args.dsn, row_factory=dict_row) as conn:
             result = runner.run(

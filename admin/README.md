@@ -3,6 +3,21 @@
 운영 사용자용 채팅 서버와 완전히 분리된 파싱·적재·임베딩 애플리케이션입니다.
 기본값은 `127.0.0.1:8100`이며 운영 DB 대상은 명시적으로 활성화하기 전까지 사용할 수 없습니다.
 
+```text
+admin/
+├── backend/
+│   ├── controllers/
+│   ├── models/
+│   ├── repositories/
+│   ├── services/
+│   └── commands/
+├── frontend/
+├── state/
+└── workspaces/
+```
+
+`state`와 `workspaces`는 실행 중 생성되는 관리자 전용 데이터이며 Git에 포함되지 않습니다.
+
 ## 한 명령으로 로컬 적재
 
 ```bash
@@ -14,13 +29,13 @@ python -m admin ingest data/2026_통계연보.hwpx \
   --embedding bge-m3
 ```
 
-작업 결과는 `admin/workspaces/<job-id>/`에 보존됩니다.
+작업 결과는 `admin/workspaces/YYYYMMDD-HHMMSS-ffffff/`에 보존됩니다.
 
-- `source.hwpx`: 업로드 원본
-- `parsed_yearbook.json`: 구조화 파싱 결과
-- `parsed_yearbook.md`: 사람 검수용 문서
-- `load.sql`: ID에 독립적인 누적 적재 DML
-- `embeddings.sql`: 모델 profile과 실제 벡터를 포함한 임베딩 DML
+- `yearbook_source.hwpx`: 업로드 원본
+- `yearbook_parsed.json`: 구조화 파싱 결과
+- `yearbook_review.md`: 사람 검수용 문서
+- `yearbook_load.sql`: ID에 독립적인 누적 적재 DML
+- `yearbook_title_embeddings.sql`: 모델 profile과 실제 벡터를 포함한 임베딩 DML
 
 같은 연도를 의도적으로 교체할 때만 `--mode replace`를 사용합니다. 다른 연도 데이터는
 삭제하지 않습니다.
@@ -64,9 +79,10 @@ docker build -f admin/Dockerfile -t statyearbook-admin .
 python -m admin promote <job-id> --confirm-year 2026
 ```
 
-이 명령은 완료된 job의 `load.sql`을 먼저 적용하고, 존재하면 `embeddings.sql`을 이어서
+이 명령은 완료된 job의 `yearbook_load.sql`을 먼저 적용하고, 존재하면
+`yearbook_title_embeddings.sql`을 이어서
 적용합니다. 따라서 운영 서버에는 Hugging Face 접속이나 모델 추론 장치가 없어도 됩니다.
 
 향후에는 현재 SQLite 작업 큐를 Redis/Celery 또는 사내 작업 큐 adapter로 교체하면 여러
-관리자 인스턴스로 확장할 수 있습니다. 파싱·DML·임베딩 로직은 `AdminIngestionService`에
+관리자 인스턴스로 확장할 수 있습니다. 전체 흐름은 `YearbookIngestionService`에
 있으므로 CLI와 웹 API는 그대로 유지할 수 있습니다.

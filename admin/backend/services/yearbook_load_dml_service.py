@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 
-LOAD_MODES = ("reject", "replace")
+YEARBOOK_LOAD_MODES = ("reject", "replace")
 
 
 def sql_literal(value, cast: str | None = None) -> str:
@@ -125,7 +125,7 @@ def build_load_dml(
     include_transaction: bool = True,
 ) -> str:
     validate_yearbook(data)
-    if mode not in LOAD_MODES:
+    if mode not in YEARBOOK_LOAD_MODES:
         raise ValueError(f"unsupported load mode: {mode}")
 
     publication = data["publication"]

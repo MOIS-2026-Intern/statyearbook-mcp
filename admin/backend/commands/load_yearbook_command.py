@@ -9,21 +9,28 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from load.yearbook_dml import LOAD_MODES, build_load_dml, execute_dml  # noqa: E402
+from admin.backend.services.yearbook_load_dml_service import (  # noqa: E402
+    YEARBOOK_LOAD_MODES,
+    build_load_dml,
+    execute_dml,
+)
 
 
 load_dotenv()
-ROOT_DIR = Path(__file__).resolve().parents[1]
+ADMIN_DIR = Path(__file__).resolve().parents[2]
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate and execute cumulative yearbook DML.")
     parser.add_argument("parsed_json")
     parser.add_argument("--dsn", default=os.environ.get("STATYEARBOOK_DSN") or os.environ.get("DATABASE_URL"))
-    parser.add_argument("--emit-sql", default=str(ROOT_DIR / "db" / "seeds" / "load_yearbook.sql"))
-    parser.add_argument("--mode", choices=LOAD_MODES, default="reject")
+    parser.add_argument(
+        "--emit-sql",
+        default=str(ADMIN_DIR / "workspaces" / "manual" / "yearbook_load.sql"),
+    )
+    parser.add_argument("--mode", choices=YEARBOOK_LOAD_MODES, default="reject")
     parser.add_argument("--no-db", action="store_true")
     return parser
 

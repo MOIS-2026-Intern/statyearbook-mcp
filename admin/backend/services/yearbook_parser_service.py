@@ -800,7 +800,7 @@ def parse(
         "publication": publication,
         "metadata": {
             "source": os.path.abspath(hwpx_path),
-            "parser": "load/parse_hwpx_yearbook.py",
+            "parser": "admin/backend/services/yearbook_parser_service.py",
             "method": (
                 "HWPX ZIP의 Contents/section*.xml을 문서 순서대로 순회하고, "
                 "hp:cellAddr/hp:cellSpan으로 병합 셀을 보존한 뒤 grid/records/markdown을 생성"
@@ -885,8 +885,8 @@ def print_summary(result: dict, json_out: str, md_out: str | None) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("hwpx_path", nargs="?", default="data/통계연보.hwpx")
-    parser.add_argument("--json-out", default="load/output/parsed_yearbook.json")
-    parser.add_argument("--md-out", default="load/output/parsed_yearbook.md")
+    parser.add_argument("--json-out", default="admin/workspaces/manual/yearbook_parsed.json")
+    parser.add_argument("--md-out", default="admin/workspaces/manual/yearbook_review.md")
     parser.add_argument("--image-dir", default=None, help="지정 시 HWPX BinData 이미지를 복사")
     parser.add_argument("--year", type=int, default=None, help="발간연도 override")
     parser.add_argument("--title", default=None, help="발간물 제목 override")

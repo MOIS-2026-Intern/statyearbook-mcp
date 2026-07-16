@@ -11,8 +11,9 @@ from dotenv import load_dotenv
 from app.embedding import BGE_M3_REVISION
 
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-ADMIN_DIR = Path(__file__).resolve().parent
+ROOT_DIR = Path(__file__).resolve().parents[2]
+BACKEND_DIR = Path(__file__).resolve().parent
+ADMIN_DIR = BACKEND_DIR.parent
 load_dotenv(ROOT_DIR / ".env")
 load_dotenv(ADMIN_DIR / ".env.admin", override=True)
 

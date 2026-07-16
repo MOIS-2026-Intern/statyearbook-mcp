@@ -16,7 +16,7 @@ from app.embedding import (
     OpenAIEmbeddingProvider,
     create_embedding_profile,
 )
-from load.statistics_embedding_source import StatisticsEmbeddingSource
+from admin.backend.repositories.statistics_embedding_repository import StatisticsEmbeddingRepository
 
 
 class ArrayLike(list):
@@ -179,14 +179,14 @@ class DatabaseDimensionTests(unittest.TestCase):
             EmbeddingConfigurationError,
             r"vector\(1536\).*vector\(1024\)",
         ):
-            StatisticsEmbeddingSource().validate_dimension(conn, 1024)
+            StatisticsEmbeddingRepository().validate_dimension(conn, 1024)
 
     def test_accepts_matching_vector_dimension(self) -> None:
         conn = MagicMock()
         cursor = conn.cursor.return_value.__enter__.return_value
         cursor.fetchone.return_value = {"format_type": "vector(1024)"}
 
-        StatisticsEmbeddingSource().validate_dimension(conn, 1024)
+        StatisticsEmbeddingRepository().validate_dimension(conn, 1024)
 
 
 if __name__ == "__main__":
