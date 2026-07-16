@@ -1,15 +1,22 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 로컬에서 검수한 적재·임베딩 DML을 운영 DB에 승격한다.
+# 확인 연도와 최종 적재 건수를 검증한 뒤 작업 이벤트를 기록한다.
 import psycopg
 
 from admin.backend.config import AdminSettings
 from admin.backend.repositories.admin_job_repository import AdminJobRepository
-from admin.backend.services.yearbook_load_dml_service import execute_dml
+from admin.backend.repositories.postgres_dml_repository import PostgresDmlRepository
 
 
 class ProductionPromotionService:
-    def __init__(self, settings: AdminSettings, repository: AdminJobRepository):
+    def __init__(
+        self,
+        settings: AdminSettings,
+        repository: AdminJobRepository,
+        dml_repository: PostgresDmlRepository | None = None,
+    ):
         self.settings = settings
         self.repository = repository
+        self.dml_repository = dml_repository or PostgresDmlRepository()
 
     def promote(self, job_id: str, confirmed_year: int) -> dict:
         try:
@@ -26,9 +33,12 @@ class ProductionPromotionService:
         workspace = self.settings.workspace_dir / job_id
         load_dml_path = workspace / job["artifacts"]["load_dml"]
         embedding_dml_name = job["artifacts"].get("embedding_dml")
-        execute_dml(dsn, load_dml_path.read_text(encoding="utf-8"))
+        self.dml_repository.execute(
+            dsn,
+            load_dml_path.read_text(encoding="utf-8"),
+        )
         if embedding_dml_name:
-            execute_dml(
+            self.dml_repository.execute(
                 dsn,
                 (workspace / embedding_dml_name).read_text(encoding="utf-8"),
             )

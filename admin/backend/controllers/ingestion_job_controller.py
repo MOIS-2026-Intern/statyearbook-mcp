@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 연보 업로드, 작업 생성, 목록 및 상세 조회 API를 제공한다.
+# HTTP 입력 검증 후 실제 처리는 관리자 작업 실행기에 위임한다.
 import shutil
 
 from pathlib import Path

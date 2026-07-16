@@ -1,3 +1,5 @@
+// 이 파일은 관리자 API 호출, 파일 업로드, 작업 polling과 결과 다운로드를 처리한다.
+// 화면 상태를 backend job 상태와 동기화하는 frontend 진입점이다.
 const ingestionStages = [
   ["validate", "파일 확인", "형식·대상 환경 검증"],
   ["parse", "구조 파싱", "JSON·검수 Markdown 생성"],

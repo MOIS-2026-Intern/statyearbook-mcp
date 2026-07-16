@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 생성된 제목 벡터를 다시 적용할 수 있는 이관용 DML로 기록한다.
+# DB별 ID 대신 연도와 통계표 자연키를 사용해 운영 이관을 지원한다.
 from __future__ import annotations
 
 from pathlib import Path

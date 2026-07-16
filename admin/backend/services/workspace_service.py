@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 날짜·시간 기반 workspace ID 생성과 과거 UUID 작업 이관을 담당한다.
+# 기존 작업 파일명, SQLite ID와 저장 경로를 손실 없이 새 규칙으로 변경한다.
 from __future__ import annotations
 
 from datetime import datetime

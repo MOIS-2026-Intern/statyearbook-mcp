@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 파싱된 통계연보를 누적 적재하는 이관 가능한 PostgreSQL DML을 생성한다.
+# 중복 연도 거부와 선택 연도 교체 정책을 SQL 트랜잭션으로 표현한다.
 from __future__ import annotations
 
 import json
-
-from pathlib import Path
-
 
 YEARBOOK_LOAD_MODES = ("reject", "replace")
 
@@ -181,18 +179,3 @@ def build_load_dml(
         lines.append("COMMIT;")
     lines.append("")
     return "\n".join(lines)
-
-
-def write_load_dml(path: str | Path, data: dict, mode: str = "reject") -> Path:
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(build_load_dml(data, mode), encoding="utf-8")
-    return output
-
-
-def execute_dml(dsn: str, dml: str) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-        cur.execute(dml)
-        conn.commit()

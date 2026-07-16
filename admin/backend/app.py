@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 관리자 FastAPI 앱, controller, 작업 실행기와 frontend 정적 경로를 조립한다.
+# 관리자 서버의 유일한 ASGI 진입점이다.
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -60,7 +61,3 @@ def run() -> None:
         port=settings.port,
         reload=False,
     )
-
-
-if __name__ == "__main__":
-    run()

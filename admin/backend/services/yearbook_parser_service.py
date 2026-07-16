@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# 이 파일은 HWPX 문서 구조를 통계연보 JSON으로 파싱하고 검수용 Markdown을 렌더링한다.
+# 표 병합 셀, 본문, 주석, 연락처와 이미지 메타데이터 추출을 담당한다.
 from __future__ import annotations
 
-import argparse
 import html
 import json
 import os
@@ -864,50 +863,3 @@ def write_text(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8") as file:
         file.write(text)
-
-
-def count_items(stats: list[dict], key: str) -> int:
-    return sum(len(unit.get(key, [])) for unit in stats)
-
-
-def print_summary(result: dict, json_out: str, md_out: str | None) -> None:
-    stats = result["statistics"]
-    print(f"통계 단위 : {len(stats)}")
-    print(f"  표      : {count_items(stats, 'tables')}")
-    print(f"  주석    : {count_items(stats, 'footnotes')}")
-    print(f"  연락처  : {count_items(stats, 'contacts')}")
-    print(f"  이미지  : {count_items(stats, 'images')}")
-    print(f"-> {json_out}")
-    if md_out:
-        print(f"-> {md_out}")
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("hwpx_path", nargs="?", default="data/통계연보.hwpx")
-    parser.add_argument("--json-out", default="admin/workspaces/manual/yearbook_parsed.json")
-    parser.add_argument("--md-out", default="admin/workspaces/manual/yearbook_review.md")
-    parser.add_argument("--image-dir", default=None, help="지정 시 HWPX BinData 이미지를 복사")
-    parser.add_argument("--year", type=int, default=None, help="발간연도 override")
-    parser.add_argument("--title", default=None, help="발간물 제목 override")
-    parser.add_argument("--pub-no", default=None, help="발간번호 override")
-    return parser
-
-
-def main() -> None:
-    args = build_parser().parse_args()
-    result = parse(
-        args.hwpx_path,
-        args.image_dir,
-        publication_year=args.year,
-        publication_title=args.title,
-        publication_no=args.pub_no,
-    )
-    write_json(args.json_out, result)
-    if args.md_out:
-        write_text(args.md_out, parsed_to_markdown(result))
-    print_summary(result, args.json_out, args.md_out)
-
-
-if __name__ == "__main__":
-    main()

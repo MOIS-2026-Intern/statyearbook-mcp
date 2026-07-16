@@ -1,3 +1,4 @@
+<!-- 이 문서는 통계연보 관리자 CLI, 웹 실행과 운영 승격 절차를 설명한다. -->
 # 통계연보 관리자
 
 운영 사용자용 채팅 서버와 완전히 분리된 파싱·적재·임베딩 애플리케이션입니다.
@@ -9,8 +10,7 @@ admin/
 │   ├── controllers/
 │   ├── models/
 │   ├── repositories/
-│   ├── services/
-│   └── commands/
+│   └── services/
 ├── frontend/
 ├── state/
 └── workspaces/
@@ -50,8 +50,10 @@ python -m admin serve
 브라우저에서 `http://127.0.0.1:8100`을 엽니다. 파일 업로드, 옵션 선택, 단계별 진행률,
 오류 상세, 적재 건수 검증과 산출물 다운로드를 한 화면에서 사용할 수 있습니다.
 
-관리자 상태는 `admin/state/admin_jobs.sqlite3`에, 작업 파일은 `admin/workspaces/`에
-저장됩니다. 둘 다 사용자용 서비스와 분리되며 Git에 포함되지 않습니다.
+관리자 상태는 Python 표준 라이브러리인 `sqlite3`로
+`admin/state/admin_jobs.sqlite3`에 저장되므로 별도 SQLite 설치가 필요하지 않습니다.
+작업 파일은 `admin/workspaces/`에 저장됩니다. 둘 다 사용자용 서비스와 분리되며 Git에
+포함되지 않습니다.
 
 ## 운영 DB 적용 준비
 

@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 관리자 서버 상태와 화면에서 사용할 선택사항 조회 API를 제공한다.
+# DB DSN이나 로컬 모델 절대경로 같은 내부 설정은 응답에서 제외한다.
 from fastapi import APIRouter, Depends, Request
 
 from admin.backend.controllers.controller_dependencies import authorize_admin

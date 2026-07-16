@@ -1,3 +1,4 @@
+/* 이 파일은 사용자 화면과 일관된 관리자 layout, form, progress inspector 스타일을 정의한다. */
 :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2933; background: #fafafa; --border:#dde3ea; --muted:#667085; --surface:#f3f5f7; --accent:#176b87; --accent-dark:#0f5f6e; --accent-soft:#e8f4f6; --green:#21806b; --danger:#bd3d44; }
 * { box-sizing: border-box; }
 html, body { margin:0; min-width:320px; min-height:100%; }

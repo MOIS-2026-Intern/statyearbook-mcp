@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 ingest, serve, promote를 제공하는 관리자 통합 CLI를 정의한다.
+# 모든 명령은 backend service와 repository를 조합해 실행한다.
 import argparse
 import shutil
 import sys

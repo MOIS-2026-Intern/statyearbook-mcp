@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 업로드된 HWPX 스트림을 크기 제한 안에서 workspace에 저장한다.
+# HTTP controller와 파일 쓰기 세부 동작을 분리한다.
 from pathlib import Path
 
 from fastapi import UploadFile

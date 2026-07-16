@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 작업별 파싱 결과, 검수 문서와 두 종류 DML 산출물을 저장한다.
+# workspace 파일명 규칙을 통합 적재 service에서 분리한다.
 from pathlib import Path
 
 from admin.backend.models.ingestion_job_model import ARTIFACT_NAMES

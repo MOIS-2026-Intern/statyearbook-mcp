@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 검증, 파싱, DML 적재, 제목 임베딩과 결과 확인 단계를 조율한다.
+# CLI와 웹 API가 함께 사용하는 관리자 통합 적재 application service다.
 from __future__ import annotations
 
 import traceback
@@ -15,10 +16,10 @@ from app.embedding import (
 from admin.backend.config import AdminSettings
 from admin.backend.models.ingestion_job_model import IngestionOptions
 from admin.backend.repositories.admin_job_repository import AdminJobRepository
+from admin.backend.repositories.postgres_dml_repository import PostgresDmlRepository
 from admin.backend.repositories.statistics_embedding_repository import StatisticsEmbeddingRepository
 from admin.backend.services.embedding_runner_service import EmbeddingRunner
 from admin.backend.services.yearbook_artifact_service import YearbookArtifactService
-from admin.backend.services.yearbook_load_dml_service import execute_dml
 from admin.backend.services.yearbook_parser_service import parse
 from admin.backend.services.yearbook_verification_service import YearbookVerificationService
 
@@ -29,10 +30,12 @@ class YearbookIngestionService:
         settings: AdminSettings,
         store: AdminJobRepository,
         verification: YearbookVerificationService | None = None,
+        dml_repository: PostgresDmlRepository | None = None,
     ):
         self.settings = settings
         self.store = store
         self.verification = verification or YearbookVerificationService()
+        self.dml_repository = dml_repository or PostgresDmlRepository()
 
     def _step(self, job_id: str, stage: str, progress: int, message: str) -> None:
         self.store.update(
@@ -76,7 +79,7 @@ class YearbookIngestionService:
             self.store.update(job_id, artifacts=artifacts)
 
             self._step(job_id, "load_db", 48, f"{options.target} DB에 {options.year}년 연보를 적재하고 있습니다.")
-            execute_dml(dsn, load_dml)
+            self.dml_repository.execute(dsn, load_dml)
 
             embedding_profile_key = None
             embedding_count = 0
@@ -124,9 +127,8 @@ class YearbookIngestionService:
                 self.store.update(
                     job_id,
                     progress=93,
-                    message="생성된 임베딩 SQL을 DB에 적용하고 있습니다.",
+                    message="제목 임베딩 저장과 이관용 SQL 생성을 완료했습니다.",
                 )
-                execute_dml(dsn, embedding_sql.read_text(encoding="utf-8"))
 
             self._step(job_id, "verify", 95, "적재 건수와 임베딩 profile을 검증하고 있습니다.")
             verification = self.verification.verify(

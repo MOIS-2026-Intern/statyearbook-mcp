@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 완료되거나 실패한 관리자 작업의 산출물 다운로드 API를 제공한다.
+# workspace 밖의 파일에 접근하지 못하도록 경로를 검증한다.
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 

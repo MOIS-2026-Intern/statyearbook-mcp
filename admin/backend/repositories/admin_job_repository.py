@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 관리자 작업 상태와 단계별 이벤트를 내장 SQLite에 저장한다.
+# API 재시작 뒤에도 진행 이력과 산출물 메타데이터를 조회할 수 있게 한다.
 from __future__ import annotations
 
 import json

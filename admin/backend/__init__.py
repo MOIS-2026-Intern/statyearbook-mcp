@@ -1,1 +1,0 @@
-"""Administrator backend application."""

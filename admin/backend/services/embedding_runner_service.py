@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 임베딩 provider와 데이터 repository를 batch 단위로 연결해 실행한다.
+# 진행률, 실패 복구용 job 기록과 선택적인 DML 생성을 조율한다.
 from __future__ import annotations
 
 from dataclasses import dataclass

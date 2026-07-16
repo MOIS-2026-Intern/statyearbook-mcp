@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 통합 적재 작업 옵션과 workspace 산출물 파일명 계약을 정의한다.
+# CLI와 웹 API가 같은 모델과 파일명 규칙을 공유하도록 한다.
 from dataclasses import asdict, dataclass
 
 

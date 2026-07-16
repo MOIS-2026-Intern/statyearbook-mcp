@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 PostgreSQL의 임베딩 profile과 batch job 이력을 관리한다.
+# advisory lock으로 동시에 두 임베딩 작업이 실행되지 않도록 한다.
 from app.embedding import EmbeddingProfile
 
 

@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 관리자 전용 환경변수, DB 대상과 임베딩 모델 선택지를 구성한다.
+# 루트 .env를 기본값으로 읽고 admin/.env.admin 값으로 덮어쓴다.
 from __future__ import annotations
 
 import os

@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# 이 파일은 statistics 테이블의 임베딩 대상 조회와 벡터 저장을 담당한다.
+# 발간연도 범위와 현재 model profile을 기준으로 증분 대상을 선택한다.
 from __future__ import annotations
 
 from app.embedding import EmbeddingConfigurationError
