@@ -31,6 +31,11 @@ def create_model_gateway(settings: Settings) -> ModelGateway:
 
         return OpenAIGateway(settings)
 
+    if settings.model_provider == "bizrouter":
+        from backend.gateways.bizrouter_gateway import BizRouterGateway
+
+        return BizRouterGateway(settings)
+
     if settings.model_provider == "local_gemma":
         from backend.gateways.local_gemma_gateway import LocalGemmaGateway
 
