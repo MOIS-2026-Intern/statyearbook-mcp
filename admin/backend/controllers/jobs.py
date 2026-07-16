@@ -25,13 +25,13 @@ router = APIRouter(
 
 @router.get("")
 def list_jobs(request: Request) -> list[dict]:
-    return request.app.state.job_repository.list()
+    return request.app.state.job_repository.select_jobs()
 
 
 @router.get("/{job_id}")
 def get_job(job_id: str, request: Request) -> dict:
     try:
-        return request.app.state.job_repository.get(job_id)
+        return request.app.state.job_repository.select_job(job_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="job not found") from exc
 
@@ -88,6 +88,6 @@ async def create_job(
         embedding_model=embedding_model,
         extract_images=extract_images,
     )
-    job = request.app.state.job_repository.create(job_id, options.as_dict())
+    job = request.app.state.job_repository.insert_job(job_id, options.as_dict())
     request.app.state.job_orchestrator.submit(job_id)
     return job

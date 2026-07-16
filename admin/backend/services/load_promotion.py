@@ -20,7 +20,7 @@ class ProductionPromotionService:
 
     def promote(self, job_id: str, confirmed_year: int) -> dict:
         try:
-            job = self.repository.get(job_id)
+            job = self.repository.select_job(job_id)
         except KeyError as exc:
             raise RuntimeError(f"job not found: {job_id}") from exc
         if job["status"] != "completed":
@@ -33,9 +33,9 @@ class ProductionPromotionService:
         workspace = self.settings.workspace_dir / job_id
         load_dml_path = workspace / job["artifacts"]["load_dml"]
         embedding_dml_name = job["artifacts"].get("embedding_dml")
-        self.dml_repository.execute_file(dsn, load_dml_path)
+        self.dml_repository.execute_dml_file(dsn, load_dml_path)
         if embedding_dml_name:
-            self.dml_repository.execute_file(dsn, workspace / embedding_dml_name)
+            self.dml_repository.execute_dml_file(dsn, workspace / embedding_dml_name)
 
         with psycopg.connect(dsn) as conn, conn.cursor() as cur:
             cur.execute(
@@ -61,7 +61,7 @@ class ProductionPromotionService:
             "statistics_count": int(statistics_count),
             "embedding_count": int(embedding_count),
         }
-        self.repository.add_event(
+        self.repository.insert_event(
             job_id,
             "production",
             "운영 DB 적용 완료: "

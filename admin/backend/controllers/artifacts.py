@@ -18,7 +18,7 @@ def download_artifact(job_id: str, artifact_name: str, request: Request):
     repository = request.app.state.job_repository
     settings = request.app.state.settings
     try:
-        job = repository.get(job_id)
+        job = repository.select_job(job_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="job not found") from exc
     filename = job["artifacts"].get(artifact_name)

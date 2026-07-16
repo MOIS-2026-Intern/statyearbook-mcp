@@ -38,17 +38,17 @@ class YearbookIngestionService:
         self.dml_repository = dml_repository or PostgresDmlRepository()
 
     def _step(self, job_id: str, stage: str, progress: int, message: str) -> None:
-        self.store.update(
+        self.store.update_job(
             job_id,
             status="running",
             stage=stage,
             progress=progress,
             message=message,
         )
-        self.store.add_event(job_id, stage, message)
+        self.store.insert_event(job_id, stage, message)
 
     def run(self, job_id: str) -> dict:
-        job = self.store.get(job_id)
+        job = self.store.select_job(job_id)
         options = IngestionOptions(**job["options"])
         workspace = self.settings.workspace_dir / job_id
         workspace.mkdir(parents=True, exist_ok=True)
@@ -71,15 +71,15 @@ class YearbookIngestionService:
                 publication_no=options.pub_no,
             )
             artifacts.update(artifact_service.save_parsed_outputs(parsed))
-            self.store.update(job_id, artifacts=artifacts)
+            self.store.update_job(job_id, artifacts=artifacts)
 
             self._step(job_id, "load_dml", 38, "누적 적재용 SQL을 생성하고 있습니다.")
             load_sql = artifact_service.save_load_dml(parsed, options.load_mode)
             artifacts["load_dml"] = load_sql.name
-            self.store.update(job_id, artifacts=artifacts)
+            self.store.update_job(job_id, artifacts=artifacts)
 
             self._step(job_id, "load_db", 48, f"{options.target} DB에 {options.year}년 연보를 적재하고 있습니다.")
-            self.dml_repository.execute_file(dsn, load_sql)
+            self.dml_repository.execute_dml_file(dsn, load_sql)
 
             embedding_profile_key = None
             embedding_count = 0
@@ -101,7 +101,7 @@ class YearbookIngestionService:
                 writer = artifact_service.embedding_dml_writer(profile)
                 embedding_sql = writer.path
                 artifacts["embedding_dml"] = embedding_sql.name
-                self.store.update(job_id, artifacts=artifacts)
+                self.store.update_job(job_id, artifacts=artifacts)
                 self._step(
                     job_id,
                     "embedding_dml",
@@ -117,7 +117,7 @@ class YearbookIngestionService:
                             conn,
                             batch_size=embed_settings.batch_size,
                             mode="dml",
-                            progress=lambda done, total: self.store.update(
+                            progress=lambda done, total: self.store.update_job(
                                 job_id,
                                 progress=60 + int(28 * done / max(total, 1)),
                                 message=f"임베딩 적재 SQL 생성 {done}/{total}",
@@ -141,7 +141,7 @@ class YearbookIngestionService:
                     90,
                     f"생성된 임베딩 SQL을 {options.target} DB에 실행하고 있습니다.",
                 )
-                self.dml_repository.execute_file(dsn, embedding_sql)
+                self.dml_repository.execute_dml_file(dsn, embedding_sql)
 
             self._step(job_id, "verify", 95, "적재 건수와 임베딩 profile을 검증하고 있습니다.")
             verification = self.verification.verify(
@@ -156,7 +156,7 @@ class YearbookIngestionService:
                 "embedding_profile_key": embedding_profile_key,
                 **verification,
             }
-            self.store.update(
+            self.store.update_job(
                 job_id,
                 status="completed",
                 stage="completed",
@@ -165,17 +165,22 @@ class YearbookIngestionService:
                 artifacts=artifacts,
                 result=result_payload,
             )
-            self.store.add_event(job_id, "completed", "모든 단계가 완료되었습니다.")
-            return self.store.get(job_id)
+            self.store.insert_event(job_id, "completed", "모든 단계가 완료되었습니다.")
+            return self.store.select_job(job_id)
         except Exception as exc:
             detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-            self.store.update(
+            self.store.update_job(
                 job_id,
                 status="failed",
-                stage=self.store.get(job_id)["stage"],
+                stage=self.store.select_job(job_id)["stage"],
                 message="작업이 중단되었습니다.",
                 error=detail[-12000:],
                 artifacts=artifacts,
             )
-            self.store.add_event(job_id, self.store.get(job_id)["stage"], str(exc), "error")
-            return self.store.get(job_id)
+            self.store.insert_event(
+                job_id,
+                self.store.select_job(job_id)["stage"],
+                str(exc),
+                "error",
+            )
+            return self.store.select_job(job_id)

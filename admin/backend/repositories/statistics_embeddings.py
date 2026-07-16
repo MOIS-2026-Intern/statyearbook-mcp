@@ -26,7 +26,7 @@ class StatisticsEmbeddingRepository:
     def _scope_params(self) -> list:
         return [self.publication_year] if self.publication_year is not None else []
 
-    def embedding_column_type(self, conn) -> str:
+    def select_embedding_column_type(self, conn) -> str:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -42,8 +42,8 @@ class StatisticsEmbeddingRepository:
             raise RuntimeError("statistics.embedding column was not found")
         return str(next(iter(row.values())) if isinstance(row, dict) else row[0])
 
-    def validate_dimension(self, conn, expected_dimension: int) -> None:
-        actual_type = self.embedding_column_type(conn)
+    def select_and_validate_dimension(self, conn, expected_dimension: int) -> None:
+        actual_type = self.select_embedding_column_type(conn)
         expected_type = f"vector({expected_dimension})"
         if actual_type != expected_type:
             raise EmbeddingConfigurationError(
@@ -51,7 +51,7 @@ class StatisticsEmbeddingRepository:
                 f"{expected_type}; apply the pgvector migration before re-embedding"
             )
 
-    def snapshot_max_id(self, conn) -> int:
+    def select_max_source_id(self, conn) -> int:
         with conn.cursor() as cur:
             cur.execute(
                 f"SELECT COALESCE(MAX(stat_id), 0) FROM statistics WHERE {self._scope_sql()}",
@@ -64,7 +64,7 @@ class StatisticsEmbeddingRepository:
             return "TRUE"
         return "(embedding IS NULL OR embedding_profile_key IS DISTINCT FROM %s)"
 
-    def count_candidates(
+    def select_candidate_count(
         self,
         conn,
         profile_key: str,
@@ -85,7 +85,7 @@ class StatisticsEmbeddingRepository:
             )
             return int(_first_value(cur.fetchone()))
 
-    def fetch_batch(
+    def select_candidate_batch(
         self,
         conn,
         profile_key: str,
@@ -117,10 +117,10 @@ class StatisticsEmbeddingRepository:
         last_source_id = int(rows[-1]["stat_id"]) if rows else after_source_id
         return EmbeddingBatch(rows=rows, last_source_id=last_source_id)
 
-    def texts(self, rows: list[dict]) -> list[str]:
-        return [self.build_text(row) for row in rows]
+    def select_embedding_texts(self, rows: list[dict]) -> list[str]:
+        return [self._build_embedding_text(row) for row in rows]
 
-    def build_text(self, row: dict) -> str:
+    def _build_embedding_text(self, row: dict) -> str:
         parts = [
             row.get("title_ko"),
             row.get("title_en"),
@@ -129,7 +129,7 @@ class StatisticsEmbeddingRepository:
         ]
         return " ".join(filter(None, parts)).strip() or "(제목 없음)"
 
-    def save_batch(
+    def update_embedding_batch(
         self,
         conn,
         rows: list[dict],
@@ -150,7 +150,7 @@ class StatisticsEmbeddingRepository:
                 params,
             )
 
-    def status(self, conn, profile_key: str) -> dict:
+    def select_embedding_status(self, conn, profile_key: str) -> dict:
         with conn.cursor() as cur:
             cur.execute(
                 f"""

@@ -39,7 +39,7 @@ def migrate_legacy_workspaces(
     repository: AdminJobRepository,
 ) -> list[tuple[str, str]]:
     migrated = []
-    for job in repository.list(limit=10_000):
+    for job in repository.select_jobs(limit=10_000):
         old_id = job["job_id"]
         if not LEGACY_WORKSPACE_ID.fullmatch(old_id):
             continue
@@ -76,6 +76,6 @@ def migrate_legacy_workspaces(
                     json.dumps(parsed, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
-        repository.migrate_job_identity(old_id, new_id, options, artifacts)
+        repository.update_job_identity(old_id, new_id, options, artifacts)
         migrated.append((old_id, new_id))
     return migrated

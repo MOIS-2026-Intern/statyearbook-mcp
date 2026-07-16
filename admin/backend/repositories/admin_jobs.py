@@ -66,7 +66,7 @@ class AdminJobRepository:
                 """
             )
 
-    def create(self, job_id: str, options: dict) -> dict:
+    def insert_job(self, job_id: str, options: dict) -> dict:
         now = utc_now()
         with self._lock, self._connection() as conn:
             conn.execute(
@@ -82,9 +82,9 @@ class AdminJobRepository:
                 "INSERT INTO job_events (job_id, level, stage, message, created_at) VALUES (?, 'info', 'queued', ?, ?)",
                 (job_id, "작업이 등록되었습니다.", now),
             )
-        return self.get(job_id)
+        return self.select_job(job_id)
 
-    def update(self, job_id: str, **changes) -> dict:
+    def update_job(self, job_id: str, **changes) -> dict:
         allowed = {"status", "stage", "progress", "message", "error", "artifacts", "result"}
         unknown = set(changes) - allowed
         if unknown:
@@ -99,9 +99,9 @@ class AdminJobRepository:
         values.extend([utc_now(), job_id])
         with self._lock, self._connection() as conn:
             conn.execute(f"UPDATE jobs SET {', '.join(columns)} WHERE job_id = ?", values)
-        return self.get(job_id)
+        return self.select_job(job_id)
 
-    def add_event(self, job_id: str, stage: str, message: str, level: str = "info") -> None:
+    def insert_event(self, job_id: str, stage: str, message: str, level: str = "info") -> None:
         with self._lock, self._connection() as conn:
             conn.execute(
                 "INSERT INTO job_events (job_id, level, stage, message, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -118,7 +118,7 @@ class AdminJobRepository:
             payload[target] = json.loads(payload.pop(source) or "{}")
         return payload
 
-    def get(self, job_id: str) -> dict:
+    def select_job(self, job_id: str) -> dict:
         with self._connection() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
             if row is None:
@@ -131,14 +131,14 @@ class AdminJobRepository:
         payload["events"] = [dict(event) for event in events]
         return payload
 
-    def list(self, limit: int = 30) -> list[dict]:
+    def select_jobs(self, limit: int = 30) -> list[dict]:
         with self._connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [self._decode(row) for row in rows]
 
-    def migrate_job_identity(
+    def update_job_identity(
         self,
         old_job_id: str,
         new_job_id: str,

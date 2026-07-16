@@ -24,6 +24,12 @@ class AdminApiPrefixTests(unittest.TestCase):
             f"{ADMIN_API_PREFIX}/docs/oauth2-redirect",
         )
 
+    def test_publication_management_exposes_select_and_delete_methods(self) -> None:
+        publication_api = app.openapi()["paths"][f"{ADMIN_API_PREFIX}/publications"]
+
+        self.assertIn("get", publication_api)
+        self.assertIn("delete", publication_api)
+
 
 if __name__ == "__main__":
     unittest.main()

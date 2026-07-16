@@ -6,10 +6,10 @@ import psycopg
 
 
 class PostgresDmlRepository:
-    def execute(self, dsn: str, dml: str) -> None:
+    def execute_dml(self, dsn: str, dml: str) -> None:
         with psycopg.connect(dsn) as conn, conn.cursor() as cur:
             cur.execute(dml)
             conn.commit()
 
-    def execute_file(self, dsn: str, path: str | Path) -> None:
-        self.execute(dsn, Path(path).read_text(encoding="utf-8"))
+    def execute_dml_file(self, dsn: str, path: str | Path) -> None:
+        self.execute_dml(dsn, Path(path).read_text(encoding="utf-8"))

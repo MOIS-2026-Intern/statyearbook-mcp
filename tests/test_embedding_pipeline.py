@@ -38,16 +38,16 @@ class FakeSource:
         self.saved = []
         self.validated_dimension = None
 
-    def validate_dimension(self, _conn, expected_dimension):
+    def select_and_validate_dimension(self, _conn, expected_dimension):
         self.validated_dimension = expected_dimension
 
-    def snapshot_max_id(self, _conn):
+    def select_max_source_id(self, _conn):
         return self.rows[-1]["source_id"] if self.rows else 0
 
-    def count_candidates(self, _conn, _profile_key, _force, _max_source_id):
+    def select_candidate_count(self, _conn, _profile_key, _force, _max_source_id):
         return len(self.rows)
 
-    def fetch_batch(
+    def select_candidate_batch(
         self,
         _conn,
         _profile_key,
@@ -63,10 +63,10 @@ class FakeSource:
         last_id = rows[-1]["source_id"] if rows else after_source_id
         return EmbeddingBatch(rows=rows, last_source_id=last_id)
 
-    def texts(self, rows):
+    def select_embedding_texts(self, rows):
         return [row["text"] for row in rows]
 
-    def save_batch(self, _conn, rows, vectors, profile_key):
+    def update_embedding_batch(self, _conn, rows, vectors, profile_key):
         self.saved.extend(
             (row["source_id"], vector, profile_key)
             for row, vector in zip(rows, vectors)
@@ -87,20 +87,20 @@ class FakeJobs:
     def release_lock(self, _conn):
         self.locked = False
 
-    def register_profile(self, _conn, profile):
+    def insert_embedding_profile(self, _conn, profile):
         self.profile = profile
 
-    def create_job(self, _conn, *args):
+    def insert_embedding_job(self, _conn, *args):
         self.created.append(args)
         return 42
 
-    def update_progress(self, _conn, job_id, processed):
+    def update_embedding_job_progress(self, _conn, job_id, processed):
         self.progress.append((job_id, processed))
 
-    def complete_job(self, _conn, job_id, processed):
+    def update_embedding_job_completed(self, _conn, job_id, processed):
         self.completed.append((job_id, processed))
 
-    def fail_job(self, _conn, job_id, processed, error):
+    def update_embedding_job_failed(self, _conn, job_id, processed, error):
         self.failed.append((job_id, processed, str(error)))
 
 

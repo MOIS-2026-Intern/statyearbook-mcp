@@ -62,7 +62,7 @@ def run_ingestion_command(args) -> int:
     )
     repository = AdminJobRepository(settings.db_path)
     migrate_legacy_workspaces(settings.workspace_dir, repository)
-    repository.create(job_id, options.as_dict())
+    repository.insert_job(job_id, options.as_dict())
     result = YearbookIngestionService(settings, repository).run(job_id)
     print(f"job={job_id} status={result['status']} progress={result['progress']}%")
     print(result["message"])

@@ -54,6 +54,11 @@ python -m admin serve
 브라우저에서 `http://127.0.0.1:8100`을 엽니다. 파일 업로드, 옵션 선택, 단계별 진행률,
 오류 상세, 적재 건수 검증과 산출물 다운로드를 한 화면에서 사용할 수 있습니다.
 
+왼쪽 메뉴의 `DB 데이터 삭제`에서는 대상 DB의 publication 목록을 조회하고 여러 발간물을
+선택해 삭제할 수 있습니다. 삭제 API는 선택한 publication의 statistics를 먼저 삭제하여
+표, 주석, 연락처와 이미지를 cascade로 정리하고, 관련 임베딩 작업과 더 이상 참조되지 않는
+profile까지 같은 트랜잭션에서 제거합니다.
+
 관리자 상태는 Python 표준 라이브러리인 `sqlite3`로
 `admin/state/admin_jobs.sqlite3`에 저장되므로 별도 SQLite 설치가 필요하지 않습니다.
 작업 파일은 `admin/workspaces/`에 저장됩니다. 둘 다 사용자용 서비스와 분리되며 Git에

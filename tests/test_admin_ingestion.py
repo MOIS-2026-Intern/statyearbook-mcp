@@ -80,18 +80,18 @@ class RecordingDmlRepository(PostgresDmlRepository):
     def __init__(self):
         self.executions = []
 
-    def execute(self, dsn: str, dml: str) -> None:
+    def execute_dml(self, dsn: str, dml: str) -> None:
         self.executions.append((dsn, dml))
 
 
 class PostgresDmlRepositoryTests(unittest.TestCase):
-    def test_execute_file_uses_saved_sql_as_execution_source(self) -> None:
+    def test_execute_dml_file_uses_saved_sql_as_execution_source(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "yearbook_load.sql"
             path.write_text("BEGIN; SELECT 1; COMMIT;\n", encoding="utf-8")
             repository = RecordingDmlRepository()
 
-            repository.execute_file("postgresql:///test", path)
+            repository.execute_dml_file("postgresql:///test", path)
 
         self.assertEqual(
             repository.executions,
@@ -145,8 +145,8 @@ class AdminJobRepositoryTests(unittest.TestCase):
     def test_persists_progress_events_artifacts_and_result(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             store = AdminJobRepository(Path(root) / "jobs.sqlite3")
-            store.create("job-1", {"year": 2026})
-            store.update(
+            store.insert_job("job-1", {"year": 2026})
+            store.update_job(
                 "job-1",
                 status="running",
                 stage="parse",
@@ -155,9 +155,9 @@ class AdminJobRepositoryTests(unittest.TestCase):
                 artifacts={"parsed_json": "parsed.json"},
                 result={"statistics_count": 319},
             )
-            store.add_event("job-1", "parse", "통계표 파싱 완료")
+            store.insert_event("job-1", "parse", "통계표 파싱 완료")
 
-            job = store.get("job-1")
+            job = store.select_job("job-1")
 
         self.assertEqual(job["progress"], 25)
         self.assertEqual(job["artifacts"]["parsed_json"], "parsed.json")
@@ -185,21 +185,21 @@ class WorkspaceServiceTests(unittest.TestCase):
                 json.dumps({"metadata": {"source": "old"}}),
                 encoding="utf-8",
             )
-            repository.create(
+            repository.insert_job(
                 legacy_id,
                 {
                     "input_path": str(legacy_workspace / "source.hwpx"),
                     "year": 2026,
                 },
             )
-            repository.update(
+            repository.update_job(
                 legacy_id,
                 artifacts={"parsed_json": "parsed_yearbook.json"},
             )
 
             migrated = migrate_legacy_workspaces(root_path, repository)
             new_id = migrated[0][1]
-            job = repository.get(new_id)
+            job = repository.select_job(new_id)
 
         self.assertRegex(new_id, r"^\d{8}-\d{6}-\d{6}$")
         self.assertTrue(job["options"]["input_path"].endswith("yearbook_source.hwpx"))

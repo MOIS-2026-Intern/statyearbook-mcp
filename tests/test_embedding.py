@@ -179,14 +179,14 @@ class DatabaseDimensionTests(unittest.TestCase):
             EmbeddingConfigurationError,
             r"vector\(1536\).*vector\(1024\)",
         ):
-            StatisticsEmbeddingRepository().validate_dimension(conn, 1024)
+            StatisticsEmbeddingRepository().select_and_validate_dimension(conn, 1024)
 
     def test_accepts_matching_vector_dimension(self) -> None:
         conn = MagicMock()
         cursor = conn.cursor.return_value.__enter__.return_value
         cursor.fetchone.return_value = {"format_type": "vector(1024)"}
 
-        StatisticsEmbeddingRepository().validate_dimension(conn, 1024)
+        StatisticsEmbeddingRepository().select_and_validate_dimension(conn, 1024)
 
 
 if __name__ == "__main__":

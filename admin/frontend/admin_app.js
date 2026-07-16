@@ -1,5 +1,12 @@
-// 이 파일은 관리자 API 호출, 파일 업로드, 작업 polling과 결과 다운로드를 처리한다.
-// 화면 상태를 backend job 상태와 동기화하는 frontend 진입점이다.
+// 이 파일은 관리자 화면 전환, 연보 업로드, 작업 polling과 결과 다운로드를 처리한다.
+// 공통 API와 publication 삭제 화면을 조립하는 frontend 진입점이다.
+import { adminApiBasePath, api, restoreAdminToken, saveAdminToken } from "./api.js";
+import {
+  configurePublicationTargets,
+  initializePublicationScreen,
+  loadPublications,
+} from "./publications.js";
+
 const ingestionStages = [
   ["validate", "파일 확인", "형식·대상 환경 검증"],
   ["parse", "구조 파싱", "JSON·검수 Markdown 생성"],
@@ -10,23 +17,19 @@ const ingestionStages = [
   ["verify", "결과 검증", "건수·모델 profile 확인"],
 ];
 const artifactLabels = { parsed_json:"파싱 JSON", review_markdown:"검수 Markdown", load_dml:"적재 SQL", embedding_dml:"임베딩 SQL" };
-const adminApiBasePath = "/api/admin";
 let currentJobId = null;
 let pollTimer = null;
-let options = null;
 const $ = (id) => document.getElementById(id);
 
-function token() { return $("tokenInput").value || localStorage.getItem("statyearbookAdminToken") || ""; }
-async function api(path, init = {}) {
-  const headers = new Headers(init.headers || {});
-  if (token()) headers.set("X-Admin-Token", token());
-  const response = await fetch(path, { ...init, headers });
-  if (!response.ok) {
-    let message = `${response.status} ${response.statusText}`;
-    try { const payload = await response.json(); message = payload.detail || message; } catch {}
-    throw new Error(message);
-  }
-  return response;
+function showAdminView(view) {
+  const showLoad = view === "load";
+  $("loadView").hidden = !showLoad;
+  $("publicationView").hidden = showLoad;
+  $("showLoadView").classList.toggle("nav-item--active", showLoad);
+  $("showPublicationView").classList.toggle("nav-item--active", !showLoad);
+  $("pageTitle").textContent = showLoad ? "새 통계연보 적재" : "DB 통계연보 삭제";
+  document.querySelector(".admin-shell").classList.toggle("admin-shell--management", !showLoad);
+  if (!showLoad) loadPublications();
 }
 
 function renderStages(job) {
@@ -66,7 +69,10 @@ async function loadJobs() {
   try {
     const jobs = await (await api(`${adminApiBasePath}/jobs`)).json();
     $("jobList").innerHTML = jobs.length ? jobs.map((job) => `<button class="job-item ${job.job_id === currentJobId ? "job-item--active" : ""}" data-job="${job.job_id}"><strong>${job.options?.year || "-"} ${job.options?.original_filename || "통계연보"}</strong><span>${statusLabel(job.status)} · ${job.progress}%</span></button>`).join("") : `<p class="muted">아직 실행한 작업이 없습니다.</p>`;
-    document.querySelectorAll("[data-job]").forEach((button) => button.addEventListener("click", () => loadJob(button.dataset.job)));
+    document.querySelectorAll("[data-job]").forEach((button) => button.addEventListener("click", () => {
+      showAdminView("load");
+      loadJob(button.dataset.job);
+    }));
   } catch (error) { $("jobList").innerHTML = `<p class="muted">${error.message}</p>`; }
 }
 
@@ -77,14 +83,14 @@ async function downloadArtifact(jobId, name) {
 }
 
 function renderOptions(payload) {
-  options = payload; $("maxUpload").textContent = payload.max_upload_mb;
+  $("maxUpload").textContent = payload.max_upload_mb;
   $("targetSelect").innerHTML = payload.targets.map((item) => `<option value="${item.id}" ${item.enabled ? "" : "disabled"}>${item.label}${item.enabled ? "" : " (비활성)"}</option>`).join("");
   $("loadModeSelect").innerHTML = payload.load_modes.map((item) => `<option value="${item.id}">${item.label}</option>`).join("");
   $("embeddingOptions").innerHTML = payload.embedding_models.map((item, index) => `<label class="choice"><input type="radio" name="embedding_model" value="${item.id}" ${index === 0 ? "checked" : ""} ${item.enabled ? "" : "disabled"}/><strong>${item.label}</strong><small>${item.description}</small></label>`).join("");
+  configurePublicationTargets(payload.targets);
 }
 
 async function initialize() {
-  $("tokenInput").value = localStorage.getItem("statyearbookAdminToken") || "";
   try { renderOptions(await (await api(`${adminApiBasePath}/options`)).json()); await loadJobs(); renderStages(null); }
   catch (error) { $("formError").hidden = false; $("formError").textContent = `관리자 API 연결 실패: ${error.message}`; }
 }
@@ -95,8 +101,10 @@ $("fileInput").addEventListener("change", () => { $("fileLabel").textContent = $
 $("dropzone").addEventListener("dragover", (event) => { event.preventDefault(); $("dropzone").classList.add("dropzone--active"); });
 $("dropzone").addEventListener("dragleave", () => $("dropzone").classList.remove("dropzone--active"));
 $("dropzone").addEventListener("drop", (event) => { event.preventDefault(); $("dropzone").classList.remove("dropzone--active"); if (event.dataTransfer.files.length) { $("fileInput").files = event.dataTransfer.files; $("fileLabel").textContent = event.dataTransfer.files[0].name; } });
+$("showLoadView").addEventListener("click", () => showAdminView("load"));
+$("showPublicationView").addEventListener("click", () => showAdminView("publications"));
 $("refreshJobs").addEventListener("click", loadJobs);
-$("tokenInput").addEventListener("change", () => { localStorage.setItem("statyearbookAdminToken", $("tokenInput").value); initialize(); });
+$("tokenInput").addEventListener("change", () => { saveAdminToken($("tokenInput").value); initialize(); });
 $("ingestionForm").addEventListener("submit", async (event) => {
   event.preventDefault(); $("formError").hidden = true; $("submitButton").disabled = true;
   const form = new FormData(); const file = $("fileInput").files[0];
@@ -106,4 +114,6 @@ $("ingestionForm").addEventListener("submit", async (event) => {
   catch (error) { $("formError").hidden = false; $("formError").textContent = error.message; $("submitButton").disabled = false; }
 });
 
+restoreAdminToken();
+initializePublicationScreen();
 initialize();

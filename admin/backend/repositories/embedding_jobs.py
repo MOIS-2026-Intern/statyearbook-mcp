@@ -22,7 +22,7 @@ class EmbeddingJobRepository:
         with conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_unlock(%s)", (EMBEDDING_JOB_LOCK_ID,))
 
-    def register_profile(self, conn, profile: EmbeddingProfile) -> None:
+    def insert_embedding_profile(self, conn, profile: EmbeddingProfile) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -39,7 +39,7 @@ class EmbeddingJobRepository:
                 profile.as_record(),
             )
 
-    def create_job(
+    def insert_embedding_job(
         self,
         conn,
         source_name: str,
@@ -62,14 +62,14 @@ class EmbeddingJobRepository:
             )
             return int(_first_value(cur.fetchone()))
 
-    def update_progress(self, conn, job_id: int, processed_count: int) -> None:
+    def update_embedding_job_progress(self, conn, job_id: int, processed_count: int) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE embedding_jobs SET processed_count = %s WHERE job_id = %s",
                 (processed_count, job_id),
             )
 
-    def complete_job(self, conn, job_id: int, processed_count: int) -> None:
+    def update_embedding_job_completed(self, conn, job_id: int, processed_count: int) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -80,7 +80,13 @@ class EmbeddingJobRepository:
                 (processed_count, job_id),
             )
 
-    def fail_job(self, conn, job_id: int, processed_count: int, error: Exception) -> None:
+    def update_embedding_job_failed(
+        self,
+        conn,
+        job_id: int,
+        processed_count: int,
+        error: Exception,
+    ) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -92,7 +98,12 @@ class EmbeddingJobRepository:
                 (processed_count, str(error)[:4000], job_id),
             )
 
-    def latest_jobs(self, conn, source_name: str, limit: int = 5) -> list[dict]:
+    def select_latest_embedding_jobs(
+        self,
+        conn,
+        source_name: str,
+        limit: int = 5,
+    ) -> list[dict]:
         with conn.cursor() as cur:
             cur.execute(
                 """

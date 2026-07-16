@@ -15,7 +15,8 @@
           <div><span>STATYEARBOOK</span><strong>관리자</strong></div>
         </div>
         <nav>
-          <button class="nav-item nav-item--active"><span>＋</span>새 연보 적재</button>
+          <button class="nav-item nav-item--active" id="showLoadView"><span>＋</span>새 연보 적재</button>
+          <button class="nav-item" id="showPublicationView"><span>⌫</span>DB 데이터 삭제</button>
           <button class="nav-item" id="refreshJobs"><span>↻</span>작업 새로고침</button>
         </nav>
         <div class="sidebar-section">
@@ -30,11 +31,11 @@
 
       <main class="admin-main">
         <header class="topbar">
-          <div><span class="eyebrow">통계연보 MCP</span><h1>새 통계연보 적재</h1></div>
+          <div><span class="eyebrow">통계연보 MCP</span><h1 id="pageTitle">새 통계연보 적재</h1></div>
           <div class="environment-badge"><span></span> 관리자 전용</div>
         </header>
 
-        <div class="content-scroll">
+        <div class="content-scroll" id="loadView">
           <div class="content-wrap">
             <section class="intro">
               <div><span class="step-pill">통합 파이프라인</span><h2>연보 파일 하나로 적재를 끝내세요</h2></div>
@@ -76,6 +77,46 @@
               </section>
               <p id="formError" class="form-error" hidden></p>
             </form>
+          </div>
+        </div>
+
+        <div class="content-scroll" id="publicationView" hidden>
+          <div class="content-wrap">
+            <section class="intro">
+              <div><span class="step-pill step-pill--danger">데이터 관리</span><h2>DB 통계연보 삭제</h2></div>
+              <p>선택한 발간물과 연결된 통계표, 원자료 표, 주석, 연락처, 이미지와 임베딩 이력을 하나의 트랜잭션으로 삭제합니다.</p>
+            </section>
+
+            <section class="panel publication-panel">
+              <div class="panel-heading publication-heading">
+                <div><h3>등록된 발간물</h3><p>삭제할 publication을 체크박스로 선택하세요. 삭제한 데이터는 복구할 수 없습니다.</p></div>
+                <div class="publication-toolbar">
+                  <select id="publicationTargetSelect" aria-label="삭제 대상 DB"></select>
+                  <button class="secondary-button" id="refreshPublications" type="button">목록 새로고침</button>
+                </div>
+              </div>
+              <p id="publicationMessage" class="action-message" hidden></p>
+              <div class="publication-table-wrap">
+                <table class="publication-table">
+                  <thead>
+                    <tr>
+                      <th class="checkbox-cell"><input id="selectAllPublications" type="checkbox" aria-label="전체 선택" /></th>
+                      <th>pub_id</th>
+                      <th>year</th>
+                      <th>pub_no</th>
+                      <th>title</th>
+                    </tr>
+                  </thead>
+                  <tbody id="publicationList">
+                    <tr><td colspan="5" class="empty-table">목록을 불러오려면 삭제 화면을 여세요.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="delete-actions">
+                <div><strong><span id="selectedPublicationCount">0</span>개 선택</strong><span>선택한 publication에 연결된 모든 데이터가 함께 삭제됩니다.</span></div>
+                <button class="danger-button" id="deletePublications" type="button" disabled>선택한 데이터 삭제</button>
+              </div>
+            </section>
           </div>
         </div>
       </main>

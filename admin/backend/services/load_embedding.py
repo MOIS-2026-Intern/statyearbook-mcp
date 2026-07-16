@@ -29,13 +29,13 @@ class EmbeddingRunResult:
 class EmbeddingSource(Protocol):
     name: str
 
-    def validate_dimension(self, conn, expected_dimension: int) -> None:
+    def select_and_validate_dimension(self, conn, expected_dimension: int) -> None:
         ...
 
-    def snapshot_max_id(self, conn) -> int:
+    def select_max_source_id(self, conn) -> int:
         ...
 
-    def count_candidates(
+    def select_candidate_count(
         self,
         conn,
         profile_key: str,
@@ -44,7 +44,7 @@ class EmbeddingSource(Protocol):
     ) -> int:
         ...
 
-    def fetch_batch(
+    def select_candidate_batch(
         self,
         conn,
         profile_key: str,
@@ -55,10 +55,10 @@ class EmbeddingSource(Protocol):
     ) -> EmbeddingBatch:
         ...
 
-    def texts(self, rows: list[dict]) -> list[str]:
+    def select_embedding_texts(self, rows: list[dict]) -> list[str]:
         ...
 
-    def save_batch(
+    def update_embedding_batch(
         self,
         conn,
         rows: list[dict],
@@ -97,14 +97,14 @@ class EmbeddingRunner:
             raise ValueError("on_batch is required when embedding run mode is dml")
 
         writes_database = mode == "database"
-        self.source.validate_dimension(conn, self.profile.dimension)
+        self.source.select_and_validate_dimension(conn, self.profile.dimension)
         if writes_database:
             self.jobs.acquire_lock(conn)
         job_id = None
         processed = 0
         try:
-            max_source_id = self.source.snapshot_max_id(conn)
-            target_count = self.source.count_candidates(
+            max_source_id = self.source.select_max_source_id(conn)
+            target_count = self.source.select_candidate_count(
                 conn,
                 self.profile.profile_key,
                 force,
@@ -122,8 +122,8 @@ class EmbeddingRunner:
                 )
 
             if writes_database:
-                self.jobs.register_profile(conn, self.profile)
-                job_id = self.jobs.create_job(
+                self.jobs.insert_embedding_profile(conn, self.profile)
+                job_id = self.jobs.insert_embedding_job(
                     conn,
                     self.source.name,
                     self.profile.profile_key,
@@ -135,7 +135,7 @@ class EmbeddingRunner:
 
             after_source_id = 0
             while processed < target_count:
-                batch = self.source.fetch_batch(
+                batch = self.source.select_candidate_batch(
                     conn,
                     self.profile.profile_key,
                     force,
@@ -145,11 +145,11 @@ class EmbeddingRunner:
                 )
                 if not batch.rows:
                     break
-                vectors = self.provider.encode(self.source.texts(batch.rows))
+                vectors = self.provider.encode(self.source.select_embedding_texts(batch.rows))
                 if on_batch:
                     on_batch(batch.rows, vectors, self.profile)
                 if writes_database:
-                    self.source.save_batch(
+                    self.source.update_embedding_batch(
                         conn,
                         batch.rows,
                         vectors,
@@ -158,7 +158,7 @@ class EmbeddingRunner:
                 processed += len(batch.rows)
                 after_source_id = batch.last_source_id
                 if writes_database:
-                    self.jobs.update_progress(conn, job_id, processed)
+                    self.jobs.update_embedding_job_progress(conn, job_id, processed)
                     conn.commit()
                 if progress:
                     progress(processed, target_count)
@@ -168,7 +168,7 @@ class EmbeddingRunner:
                     f"embedding candidate count changed: expected {target_count}, processed {processed}"
                 )
             if writes_database:
-                self.jobs.complete_job(conn, job_id, processed)
+                self.jobs.update_embedding_job_completed(conn, job_id, processed)
                 conn.commit()
             return EmbeddingRunResult(
                 job_id=job_id,
@@ -181,7 +181,7 @@ class EmbeddingRunner:
         except Exception as exc:
             conn.rollback()
             if writes_database and job_id is not None:
-                self.jobs.fail_job(conn, job_id, processed, exc)
+                self.jobs.update_embedding_job_failed(conn, job_id, processed, exc)
                 conn.commit()
             raise
         finally:
