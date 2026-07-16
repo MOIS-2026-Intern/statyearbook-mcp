@@ -20,6 +20,8 @@
 ```bash
 createdb statyearbook_mcp
 psql -d statyearbook_mcp -f supabase/migrations/202607140001_initial_schema.sql
+psql -d statyearbook_mcp -f supabase/migrations/202607160001_embedding_management.sql
+psql -d statyearbook_mcp -f supabase/migrations/202607160002_invalidate_statistics_embeddings.sql
 ```
 
 ### 2. HWPX 원본을 파싱합니다
@@ -62,6 +64,15 @@ python load/load_to_postgres.py load/output/parsed_yearbook.json \
 
 ### 4. 임베딩을 생성합니다
 
+적재와 검색 질의는 `.env`의 동일한 `STATYEARBOOK_EMBED_*` 설정을 사용합니다.
+기존 OpenAI 임베딩을 계속 사용할 때는 다음과 같이 설정합니다.
+
+```dotenv
+STATYEARBOOK_EMBED_PROVIDER=openai
+STATYEARBOOK_EMBED_MODEL=text-embedding-3-small
+STATYEARBOOK_EMBED_DIMENSION=1536
+```
+
 ```bash
 python load/embed_statistics.py
 ```
@@ -71,6 +82,86 @@ python load/embed_statistics.py
 ```bash
 python load/embed_statistics.py --all
 ```
+
+### BGE-M3 오프라인 모델 준비
+
+인터넷에 연결된 빌드 환경에서 고정된 모델 revision을 다운로드합니다. 모델 파일은
+Git에 커밋하지 않으며 `models/bge-m3` 디렉터리를 이미지나 읽기 전용 볼륨에 포함합니다.
+
+```bash
+python scripts/download_embedding_model.py
+```
+
+운영 환경과 동일하게 네트워크 사용을 차단한 상태에서 모델 로딩, 1024차원 출력,
+L2 정규화를 검증합니다.
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  python scripts/verify_embedding_model.py
+```
+
+검증이 끝난 뒤 `.env`를 다음과 같이 변경합니다.
+
+```dotenv
+STATYEARBOOK_EMBED_PROVIDER=local
+STATYEARBOOK_EMBED_MODEL=models/bge-m3
+STATYEARBOOK_EMBED_DIMENSION=1024
+STATYEARBOOK_EMBED_REVISION=5617a9f61b028005a4858fdac845db406aefb181
+STATYEARBOOK_EMBED_DEVICE=cpu
+STATYEARBOOK_EMBED_BATCH_SIZE=16
+STATYEARBOOK_EMBED_MAX_LENGTH=512
+HF_HUB_OFFLINE=1
+TRANSFORMERS_OFFLINE=1
+```
+
+`embed_statistics.py`는 설정된 차원과 `statistics.embedding` 컬럼의 차원이 다르면
+DB를 수정하지 않고 중단합니다. BGE-M3 전환 migration은 활성 컬럼을 `vector(1024)`로
+만들고 기존 OpenAI 벡터를 `embedding_legacy_1536`에 보존합니다. 이후 차원이 다른
+모델로 바꿀 때도 먼저 별도의 pgvector 차원 전환 migration을 적용해야 합니다.
+
+### 반복 운영과 신규 통계표 임베딩
+
+현재 적용 현황과 최근 실행 이력을 확인합니다.
+
+```bash
+python load/embed_statistics.py --status
+```
+
+신규 적재 후 처리할 행만 미리 확인합니다.
+
+```bash
+python load/embed_statistics.py --dry-run
+```
+
+기본 실행은 다음 행만 증분 처리합니다.
+
+- `embedding`이 없는 신규 통계표
+- 현재 환경의 모델/revision/차원/텍스트 버전과 다른 profile로 처리된 통계표
+- 제목·장·절이 수정되어 DB trigger가 기존 embedding을 무효화한 통계표
+
+```bash
+python load/embed_statistics.py
+```
+
+같은 profile의 기존 행까지 강제로 다시 만들 때만 `--all`을 사용합니다.
+
+```bash
+python load/embed_statistics.py --all
+```
+
+각 실행은 `embedding_jobs`에 대상 수, 완료 수, 상태와 오류를 기록합니다. 실행 시점의
+최대 `stat_id`를 경계로 잡기 때문에 처리 도중 들어온 데이터는 다음 증분 실행에서
+안전하게 처리됩니다. 동시에 두 작업이 실행되지 않도록 PostgreSQL advisory lock도
+사용합니다.
+
+구현은 다음 세 경계로 분리되어 있습니다.
+
+- `embedding_pipeline.py`: provider와 데이터 소스를 조합하는 공통 batch runner
+- `statistics_embedding_source.py`: 통계표 조회, 임베딩 텍스트 구성, 결과 저장
+- `embed_statistics.py`: 관리자 CLI와 환경변수 구성
+
+향후 다른 DB 테이블을 임베딩하려면 `EmbeddingSource` 프로토콜을 구현하는 source
+adapter를 추가하고 같은 `EmbeddingRunner`를 재사용합니다.
 
 ### 5. 적재 결과를 확인합니다
 

@@ -1,5 +1,7 @@
 /data/*
 /outputs/
+/models/*
+!/models/.gitkeep
 
 # secrets / local env
 .env

@@ -4,139 +4,146 @@ import argparse
 import os
 import sys
 
+from dataclasses import replace
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv()  # .env 의 STATYEARBOOK_DSN, OPENAI_API_KEY 로드
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.embedding import (  # noqa: E402
+    BGE_M3_REVISION,
+    STATISTICS_CONTENT_VERSION,
+    EmbeddingConfigurationError,
+    EmbeddingSettings,
+    create_embedding_profile,
+    create_embedding_provider,
+)
+from load.embedding_pipeline import EmbeddingJobRepository, EmbeddingRunner  # noqa: E402
+from load.statistics_embedding_source import StatisticsEmbeddingSource  # noqa: E402
+
+
+load_dotenv()
 
 DSN = os.environ.get("STATYEARBOOK_DSN") or os.environ.get("DATABASE_URL")
-EXPECTED_DIM = 1536  # 스키마 vector(1536) 과 일치해야 함
 
 
-# CLI 인자를 정의한다.
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--all", action="store_true",
-                    help="embedding 이 이미 있어도 전부 다시 생성")
-    ap.add_argument("--model", default="text-embedding-3-small",
-                    help="OpenAI 임베딩 모델(기본 text-embedding-3-small, 1536차원)")
-    ap.add_argument("--batch", type=int, default=100,
-                    help="한 번의 API 호출에 넣을 제목 수(기본 100)")
-    ap.add_argument("--dsn", default=DSN, help="DB 접속 문자열(기본 .env 의 STATYEARBOOK_DSN)")
-    return ap
+    defaults = EmbeddingSettings.from_env()
+    parser = argparse.ArgumentParser(
+        description="Incrementally embed new or outdated statistics rows."
+    )
+    parser.add_argument("--all", action="store_true",
+                        help="현재 profile과 같아도 전체 재임베딩")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="DB를 변경하지 않고 대상 건수와 profile만 확인")
+    parser.add_argument("--status", action="store_true",
+                        help="현재 profile 적용 현황과 최근 작업 이력 확인")
+    parser.add_argument("--provider", choices=("openai", "local"),
+                        default=defaults.provider, help="임베딩 provider")
+    parser.add_argument("--model", default=defaults.model,
+                        help="OpenAI 모델명 또는 로컬 모델 디렉터리")
+    parser.add_argument("--dimension", type=int, default=defaults.dimension,
+                        help="임베딩 차원")
+    parser.add_argument("--revision", default=defaults.revision,
+                        help="로컬 모델 artifact revision")
+    parser.add_argument("--batch", type=int, default=defaults.batch_size,
+                        help="한 번에 처리할 통계표 수")
+    parser.add_argument("--dsn", default=DSN,
+                        help="DB 접속 문자열(기본 .env 의 STATYEARBOOK_DSN)")
+    return parser
 
 
-# 실행에 필요한 설정을 확인한다.
-def validate_settings(args) -> None:
-    if not args.dsn:
-        sys.exit("DSN 미지정: .env 의 STATYEARBOOK_DSN 또는 --dsn 을 설정하세요.")
-    if not os.environ.get("OPENAI_API_KEY"):
-        sys.exit("OPENAI_API_KEY 미설정: .env 에 키를 넣으세요.")
-    if args.batch <= 0:
-        sys.exit("--batch 는 1 이상이어야 합니다.")
-
-
-# 임베딩할 제목 조회 SQL을 만든다.
-def select_sql(all_rows: bool) -> str:
-    where = "" if all_rows else "WHERE embedding IS NULL"
-    return (
-        "SELECT stat_id, title_ko, title_en, chapter, section "
-        f"FROM statistics {where} ORDER BY stat_id"
+def settings_from_args(args) -> EmbeddingSettings:
+    defaults = EmbeddingSettings.from_env()
+    revision = args.revision
+    if args.provider == "local" and not revision and Path(args.model).name == "bge-m3":
+        revision = BGE_M3_REVISION
+    return replace(
+        defaults,
+        provider=args.provider,
+        model=args.model,
+        dimension=args.dimension,
+        batch_size=args.batch,
+        revision=revision,
     )
 
 
-# DB에서 임베딩 대상 행을 조회한다.
-def fetch_rows(conn, all_rows: bool) -> list[dict]:
-    with conn.cursor() as cur:
-        cur.execute(select_sql(all_rows))
-        return cur.fetchall()
+def validate_args(args) -> None:
+    if not args.dsn:
+        raise EmbeddingConfigurationError(
+            "DSN 미지정: .env 의 STATYEARBOOK_DSN 또는 --dsn 을 설정하세요."
+        )
+    if args.batch <= 0:
+        raise EmbeddingConfigurationError("--batch 는 1 이상이어야 합니다.")
+    if args.dimension <= 0:
+        raise EmbeddingConfigurationError("--dimension 은 1 이상이어야 합니다.")
+    if args.status and (args.all or args.dry_run):
+        raise EmbeddingConfigurationError("--status 는 --all/--dry-run 과 함께 쓸 수 없습니다.")
 
 
-# 리스트를 배치 단위로 나눈다.
-def iter_batches(rows: list, batch_size: int):
-    for start in range(0, len(rows), batch_size):
-        yield rows[start:start + batch_size]
+def print_status(conn, profile, source) -> None:
+    source.validate_dimension(conn, profile.dimension)
+    status = source.status(conn, profile.profile_key)
+    print(
+        f"전체 {status['total_count']} · 임베딩 있음 {status['embedded_count']} · "
+        f"현재 profile {status['current_count']} · 처리 필요 {status['pending_count']}"
+    )
+    jobs = EmbeddingJobRepository().latest_jobs(conn, source.name)
+    if not jobs:
+        print("최근 embedding job 없음")
+        return
+    print("최근 embedding jobs:")
+    for job in jobs:
+        print(
+            f"  #{job['job_id']} {job['status']} "
+            f"{job['processed_count']}/{job['target_count']} "
+            f"started={job['started_at']} finished={job['finished_at']}"
+        )
 
 
-# 임베딩할 텍스트를 만든다.
-def build_text(row: dict) -> str:
-    parts = [row.get("title_ko"), row.get("title_en"),
-             row.get("chapter"), row.get("section")]
-    text = " ".join(filter(None, parts)).strip()
-    # OpenAI 는 빈 문자열 입력을 거부하므로 최소 한 글자는 보장
-    return text or "(제목 없음)"
-
-
-# 파이썬 리스트를 pgvector 리터럴로 바꾼다.
-def vector_literal(vec) -> str:
-    items = ",".join(str(float(value)) for value in vec)
-    return f"[{items}]"
-
-
-# OpenAI 응답에서 임베딩 벡터만 꺼낸다.
-def create_embeddings(client, model: str, rows: list[dict]) -> list:
-    inputs = [build_text(row) for row in rows]
-    resp = client.embeddings.create(model=model, input=inputs)
-    return [item.embedding for item in resp.data]
-
-
-# 임베딩 차원이 DB 스키마와 맞는지 확인한다.
-def validate_dimension(vecs: list) -> None:
-    dim = len(vecs[0])
-    if dim != EXPECTED_DIM:
-        sys.exit(f"임베딩 차원 {dim} != 스키마 {EXPECTED_DIM}. "
-                 f"모델을 바꾸거나 컬럼을 vector({dim}) 로 변경하세요.")
-
-
-# DB 업데이트용 파라미터를 만든다.
-def update_params(vecs: list, rows: list[dict]) -> list[tuple]:
-    return [(vector_literal(vec), row["stat_id"]) for vec, row in zip(vecs, rows)]
-
-
-# 임베딩 값을 DB에 저장한다.
-def update_embeddings(conn, params: list[tuple]) -> None:
-    with conn.cursor() as cur:
-        cur.executemany(
-            "UPDATE statistics SET embedding = %s::vector WHERE stat_id = %s",
-            params)
-    conn.commit()
-
-
-# 한 배치를 임베딩하고 저장한다.
-def process_batch(conn, client, model: str, rows: list[dict]) -> None:
-    vecs = create_embeddings(client, model, rows)
-    validate_dimension(vecs)
-    update_embeddings(conn, update_params(vecs, rows))
-
-
-def run(args) -> None:
-    validate_settings(args)
+def run(args):
+    validate_args(args)
+    settings = settings_from_args(args)
+    profile = create_embedding_profile(settings, STATISTICS_CONTENT_VERSION)
 
     import psycopg
     from psycopg.rows import dict_row
-    from openai import OpenAI
 
-    client = OpenAI()  # OPENAI_API_KEY 를 환경변수에서 읽음
+    source = StatisticsEmbeddingSource()
+    if args.status:
+        with psycopg.connect(args.dsn, row_factory=dict_row) as conn:
+            print_status(conn, profile, source)
+        return None
 
+    provider = create_embedding_provider(settings)
+    runner = EmbeddingRunner(
+        provider=provider,
+        profile=profile,
+        source=source,
+    )
     with psycopg.connect(args.dsn, row_factory=dict_row) as conn:
-        rows = fetch_rows(conn, args.all)
+        result = runner.run(
+            conn,
+            batch_size=settings.batch_size,
+            force=args.all,
+            dry_run=args.dry_run,
+            progress=lambda done, total: print(f"  {done}/{total}"),
+        )
 
-        if not rows:
-            print("임베딩할 대상이 없습니다. (--all 로 전체 재생성 가능)")
-            return
-
-        print(f"대상 {len(rows)}건 · 모델 {args.model} · 배치 {args.batch}")
-        done = 0
-        for chunk in iter_batches(rows, args.batch):
-            process_batch(conn, client, args.model, chunk)
-            done += len(chunk)
-            print(f"  {done}/{len(rows)}")
-
-    print("완료. 이제 검색에서 embedding <=> query 로 의미 검색을 쓸 수 있습니다.")
+    mode = "dry-run" if result.dry_run else f"job {result.job_id}"
+    print(
+        f"{mode} 완료 · 대상 {result.target_count} · 처리 {result.processed_count} · "
+        f"profile {result.profile_key}"
+    )
+    return result
 
 
 def main() -> None:
-    args = build_parser().parse_args()
-    run(args)
+    try:
+        run(build_parser().parse_args())
+    except (EmbeddingConfigurationError, RuntimeError) as exc:
+        sys.exit(str(exc))
 
 
 if __name__ == "__main__":

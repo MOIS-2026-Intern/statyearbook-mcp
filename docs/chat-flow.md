@@ -31,7 +31,7 @@ sequenceDiagram
     Backend->>MCP: call_tool("search_statistics", arguments)
     MCP->>Tool: search_statistics(query, publication_year, limit)
 
-    Tool->>Embed: embeddings.create(query)
+    Tool->>Embed: configured provider로 query embedding 생성
     Embed-->>Tool: query embedding 반환
 
     Tool->>DB: 벡터 유사도 검색

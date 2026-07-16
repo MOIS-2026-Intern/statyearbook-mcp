@@ -109,7 +109,14 @@ npm run dev
 
 - `STATYEARBOOK_MODEL_PROVIDER`: 채팅 모델 provider, 기본값 `openai`. 현재 값은 `openai`, `bizrouter`, `local_gemma`를 인식합니다.
 - `STATYEARBOOK_CHAT_MODEL`: 채팅 모델, 기본값 `gpt-5.5`
-- `OPENAI_API_KEY`: OpenAI provider와 임베딩 생성에 사용하는 API 키
+- `OPENAI_API_KEY`: OpenAI 채팅 provider 또는 OpenAI 임베딩 provider에 사용하는 API 키
+- `STATYEARBOOK_EMBED_PROVIDER`: 검색 임베딩 provider. `openai` 또는 `local`
+- `STATYEARBOOK_EMBED_MODEL`: OpenAI 모델명 또는 오프라인 로컬 모델 디렉터리
+- `STATYEARBOOK_EMBED_DIMENSION`: DB와 일치해야 하는 임베딩 차원
+- `STATYEARBOOK_EMBED_REVISION`: 로컬 모델 아티팩트의 고정 revision
+- `STATYEARBOOK_EMBED_DEVICE`: 로컬 모델 실행 장치. 기본값 `cpu`
+- `STATYEARBOOK_EMBED_BATCH_SIZE`: 로컬 모델 배치 크기. 기본값 `16`
+- `STATYEARBOOK_EMBED_MAX_LENGTH`: 임베딩 입력 최대 토큰 길이. 기본값 `512`
 - `BIZROUTER_API_KEY`: BizRouter provider에 사용하는 `sk-br-v1-...` 서비스 API 키
 - `BIZROUTER_BASE_URL`: BizRouter OpenAI 호환 endpoint, 기본값 `https://api.bizrouter.ai/v1`
 - `STATYEARBOOK_MODEL_TIMEOUT_SECONDS`: 모델 provider 호출 timeout, 기본값 `60`

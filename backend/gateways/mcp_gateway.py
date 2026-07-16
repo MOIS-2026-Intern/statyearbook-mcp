@@ -33,7 +33,15 @@ class McpGateway:
         mcp_env_names = (
             "STATYEARBOOK_DSN",
             "OPENAI_API_KEY",
+            "STATYEARBOOK_EMBED_PROVIDER",
             "STATYEARBOOK_EMBED_MODEL",
+            "STATYEARBOOK_EMBED_DIMENSION",
+            "STATYEARBOOK_EMBED_BATCH_SIZE",
+            "STATYEARBOOK_EMBED_MAX_LENGTH",
+            "STATYEARBOOK_EMBED_REVISION",
+            "STATYEARBOOK_EMBED_DEVICE",
+            "HF_HUB_OFFLINE",
+            "TRANSFORMERS_OFFLINE",
         )
         
         mcp_env = {
