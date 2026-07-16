@@ -47,7 +47,7 @@ class Settings:
     bizrouter_base_url: str = os.environ.get(
         "BIZROUTER_BASE_URL", "https://api.bizrouter.ai/v1"
     ).rstrip("/")
-    max_tool_rounds: int = int(os.environ.get("STATYEARBOOK_MAX_TOOL_ROUNDS", "10"))
+    max_tool_rounds: int = int(os.environ.get("STATYEARBOOK_MAX_TOOL_ROUNDS", "5"))
     tool_output_max_chars: int = int(os.environ.get("STATYEARBOOK_TOOL_OUTPUT_MAX_CHARS", "60000"))
 
     mcp_server_label: str = os.environ.get("STATYEARBOOK_MCP_SERVER_LABEL", "statyearbook")
