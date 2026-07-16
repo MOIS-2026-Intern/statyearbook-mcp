@@ -9,6 +9,7 @@ const ingestionStages = [
   ["verify", "결과 검증", "건수·모델 profile 확인"],
 ];
 const artifactLabels = { parsed_json:"파싱 JSON", review_markdown:"검수 Markdown", load_dml:"적재 SQL", embedding_dml:"임베딩 SQL" };
+const adminApiBasePath = "/api/admin";
 let currentJobId = null;
 let pollTimer = null;
 let options = null;
@@ -59,17 +60,17 @@ function renderJob(job) {
   if (["completed", "failed"].includes(job.status)) { clearInterval(pollTimer); pollTimer = null; $("submitButton").disabled = false; loadJobs(); }
 }
 
-async function loadJob(jobId) { const job = await (await api(`/api/jobs/${jobId}`)).json(); renderJob(job); }
+async function loadJob(jobId) { const job = await (await api(`${adminApiBasePath}/jobs/${jobId}`)).json(); renderJob(job); }
 async function loadJobs() {
   try {
-    const jobs = await (await api("/api/jobs")).json();
+    const jobs = await (await api(`${adminApiBasePath}/jobs`)).json();
     $("jobList").innerHTML = jobs.length ? jobs.map((job) => `<button class="job-item ${job.job_id === currentJobId ? "job-item--active" : ""}" data-job="${job.job_id}"><strong>${job.options?.year || "-"} ${job.options?.original_filename || "통계연보"}</strong><span>${statusLabel(job.status)} · ${job.progress}%</span></button>`).join("") : `<p class="muted">아직 실행한 작업이 없습니다.</p>`;
     document.querySelectorAll("[data-job]").forEach((button) => button.addEventListener("click", () => loadJob(button.dataset.job)));
   } catch (error) { $("jobList").innerHTML = `<p class="muted">${error.message}</p>`; }
 }
 
 async function downloadArtifact(jobId, name) {
-  const response = await api(`/api/jobs/${jobId}/artifacts/${name}`);
+  const response = await api(`${adminApiBasePath}/jobs/${jobId}/artifacts/${name}`);
   const blob = await response.blob(); const url = URL.createObjectURL(blob);
   const link = document.createElement("a"); link.href = url; link.download = response.headers.get("content-disposition")?.match(/filename="?([^";]+)/)?.[1] || name; link.click(); URL.revokeObjectURL(url);
 }
@@ -83,7 +84,7 @@ function renderOptions(payload) {
 
 async function initialize() {
   $("tokenInput").value = localStorage.getItem("statyearbookAdminToken") || "";
-  try { renderOptions(await (await api("/api/options")).json()); await loadJobs(); renderStages(null); }
+  try { renderOptions(await (await api(`${adminApiBasePath}/options`)).json()); await loadJobs(); renderStages(null); }
   catch (error) { $("formError").hidden = false; $("formError").textContent = `관리자 API 연결 실패: ${error.message}`; }
 }
 
@@ -100,7 +101,7 @@ $("ingestionForm").addEventListener("submit", async (event) => {
   const form = new FormData(); const file = $("fileInput").files[0];
   if (!file) { $("formError").hidden = false; $("formError").textContent = "HWPX 파일을 선택하세요."; $("submitButton").disabled = false; return; }
   form.append("file", file); form.append("year", $("yearInput").value); form.append("title", $("titleInput").value); form.append("pub_no", $("pubNoInput").value); form.append("target", $("targetSelect").value); form.append("load_mode", $("loadModeSelect").value); form.append("embedding_model", document.querySelector("input[name=embedding_model]:checked").value); form.append("extract_images", $("extractImages").checked);
-  try { const job = await (await api("/api/jobs", { method:"POST", body:form })).json(); renderJob(job); await loadJobs(); pollTimer = setInterval(() => loadJob(job.job_id).catch(console.error), 1000); }
+  try { const job = await (await api(`${adminApiBasePath}/jobs`, { method:"POST", body:form })).json(); renderJob(job); await loadJobs(); pollTimer = setInterval(() => loadJob(job.job_id).catch(console.error), 1000); }
   catch (error) { $("formError").hidden = false; $("formError").textContent = error.message; $("submitButton").disabled = false; }
 });
 

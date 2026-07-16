@@ -6,7 +6,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from admin.backend.config import ADMIN_DIR, AdminSettings, settings
+from admin.backend.config import ADMIN_API_PREFIX, ADMIN_DIR, AdminSettings, settings
 from admin.backend.controllers import (
     artifact_controller,
     ingestion_job_controller,
@@ -33,8 +33,10 @@ def create_app(config: AdminSettings = settings) -> FastAPI:
         title="StatYearbook Administration",
         version="0.1.0",
         lifespan=lifespan,
-        docs_url="/admin-api/docs",
-        openapi_url="/admin-api/openapi.json",
+        docs_url=f"{ADMIN_API_PREFIX}/docs",
+        openapi_url=f"{ADMIN_API_PREFIX}/openapi.json",
+        redoc_url=f"{ADMIN_API_PREFIX}/redoc",
+        swagger_ui_oauth2_redirect_url=f"{ADMIN_API_PREFIX}/docs/oauth2-redirect",
     )
     app.state.settings = config
     app.state.job_repository = repository

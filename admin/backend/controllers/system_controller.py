@@ -2,10 +2,11 @@
 # DB DSN이나 로컬 모델 절대경로 같은 내부 설정은 응답에서 제외한다.
 from fastapi import APIRouter, Depends, Request
 
+from admin.backend.config import ADMIN_API_PREFIX
 from admin.backend.controllers.controller_dependencies import authorize_admin
 
 
-router = APIRouter(prefix="/api", dependencies=[Depends(authorize_admin)])
+router = APIRouter(prefix=ADMIN_API_PREFIX, dependencies=[Depends(authorize_admin)])
 
 
 @router.get("/health")

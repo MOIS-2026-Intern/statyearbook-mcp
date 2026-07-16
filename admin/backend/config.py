@@ -15,6 +15,7 @@ from app.embedding import BGE_M3_REVISION
 ROOT_DIR = Path(__file__).resolve().parents[2]
 BACKEND_DIR = Path(__file__).resolve().parent
 ADMIN_DIR = BACKEND_DIR.parent
+ADMIN_API_PREFIX = "/api/admin"
 load_dotenv(ROOT_DIR / ".env")
 load_dotenv(ADMIN_DIR / ".env.admin", override=True)
 

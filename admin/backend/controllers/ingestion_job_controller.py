@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
+from admin.backend.config import ADMIN_API_PREFIX
 from admin.backend.controllers.controller_dependencies import authorize_admin
 from admin.backend.models.ingestion_job_model import ARTIFACT_NAMES, IngestionOptions
 from admin.backend.services.uploaded_yearbook_service import (
@@ -16,7 +17,10 @@ from admin.backend.services.workspace_service import create_workspace
 from admin.backend.services.yearbook_load_dml_service import YEARBOOK_LOAD_MODES
 
 
-router = APIRouter(prefix="/api/jobs", dependencies=[Depends(authorize_admin)])
+router = APIRouter(
+    prefix=f"{ADMIN_API_PREFIX}/jobs",
+    dependencies=[Depends(authorize_admin)],
+)
 
 
 @router.get("")

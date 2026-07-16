@@ -3,11 +3,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
+from admin.backend.config import ADMIN_API_PREFIX
 from admin.backend.controllers.controller_dependencies import authorize_admin
 
 
 router = APIRouter(
-    prefix="/api/jobs/{job_id}/artifacts",
+    prefix=f"{ADMIN_API_PREFIX}/jobs/{{job_id}}/artifacts",
     dependencies=[Depends(authorize_admin)],
 )
 
