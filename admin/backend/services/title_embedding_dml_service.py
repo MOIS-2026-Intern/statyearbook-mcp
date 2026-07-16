@@ -65,9 +65,36 @@ class TitleEmbeddingDmlWriter:
             )
         self._file.flush()
 
-    def complete(self) -> None:
+    def complete(
+        self,
+        source_name: str | None = None,
+        target_count: int | None = None,
+        processed_count: int | None = None,
+        max_source_id: int | None = None,
+        force: bool = False,
+    ) -> None:
         if self._closed:
             return
+        if source_name is not None:
+            if None in {target_count, processed_count, max_source_id}:
+                raise ValueError("embedding job counts are required with source_name")
+            values = ", ".join([
+                sql_literal(source_name),
+                sql_literal(self.profile.profile_key),
+                "'completed'",
+                sql_literal(force),
+                sql_literal(target_count),
+                sql_literal(processed_count),
+                sql_literal(max_source_id),
+                "now()",
+            ])
+            self._file.write(
+                "\nINSERT INTO embedding_jobs "
+                "(source_name, profile_key, status, force_reembed, target_count, "
+                "processed_count, max_source_id, finished_at) VALUES ("
+                + values
+                + ");\n"
+            )
         self._file.write("COMMIT;\n")
         self._file.close()
         self._closed = True

@@ -1,9 +1,9 @@
 # 이 파일은 임베딩 provider와 데이터 repository를 batch 단위로 연결해 실행한다.
-# 진행률, 실패 복구용 job 기록과 선택적인 DML 생성을 조율한다.
+# DB 직접 저장과 DML 전용 생성 모드를 분리해 호출자가 적재 방식을 선택하게 한다.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Callable, Literal, Protocol
 
 from admin.backend.repositories.embedding_job_repository import EmbeddingJobRepository
 from app.embedding import EmbeddingProfile, EmbeddingProvider
@@ -21,6 +21,7 @@ class EmbeddingRunResult:
     job_id: int | None
     target_count: int
     processed_count: int
+    max_source_id: int
     profile_key: str
     dry_run: bool
 
@@ -86,11 +87,19 @@ class EmbeddingRunner:
         batch_size: int,
         force: bool = False,
         dry_run: bool = False,
+        mode: Literal["database", "dml"] = "database",
         progress: Callable[[int, int], None] | None = None,
         on_batch: Callable[[list[dict], list[list[float]], EmbeddingProfile], None] | None = None,
     ) -> EmbeddingRunResult:
+        if mode not in {"database", "dml"}:
+            raise ValueError(f"unsupported embedding run mode: {mode}")
+        if mode == "dml" and on_batch is None and not dry_run:
+            raise ValueError("on_batch is required when embedding run mode is dml")
+
+        writes_database = mode == "database"
         self.source.validate_dimension(conn, self.profile.dimension)
-        self.jobs.acquire_lock(conn)
+        if writes_database:
+            self.jobs.acquire_lock(conn)
         job_id = None
         processed = 0
         try:
@@ -107,20 +116,22 @@ class EmbeddingRunner:
                     job_id=None,
                     target_count=target_count,
                     processed_count=0,
+                    max_source_id=max_source_id,
                     profile_key=self.profile.profile_key,
                     dry_run=True,
                 )
 
-            self.jobs.register_profile(conn, self.profile)
-            job_id = self.jobs.create_job(
-                conn,
-                self.source.name,
-                self.profile.profile_key,
-                force,
-                target_count,
-                max_source_id,
-            )
-            conn.commit()
+            if writes_database:
+                self.jobs.register_profile(conn, self.profile)
+                job_id = self.jobs.create_job(
+                    conn,
+                    self.source.name,
+                    self.profile.profile_key,
+                    force,
+                    target_count,
+                    max_source_id,
+                )
+                conn.commit()
 
             after_source_id = 0
             while processed < target_count:
@@ -137,16 +148,18 @@ class EmbeddingRunner:
                 vectors = self.provider.encode(self.source.texts(batch.rows))
                 if on_batch:
                     on_batch(batch.rows, vectors, self.profile)
-                self.source.save_batch(
-                    conn,
-                    batch.rows,
-                    vectors,
-                    self.profile.profile_key,
-                )
+                if writes_database:
+                    self.source.save_batch(
+                        conn,
+                        batch.rows,
+                        vectors,
+                        self.profile.profile_key,
+                    )
                 processed += len(batch.rows)
                 after_source_id = batch.last_source_id
-                self.jobs.update_progress(conn, job_id, processed)
-                conn.commit()
+                if writes_database:
+                    self.jobs.update_progress(conn, job_id, processed)
+                    conn.commit()
                 if progress:
                     progress(processed, target_count)
 
@@ -154,21 +167,24 @@ class EmbeddingRunner:
                 raise RuntimeError(
                     f"embedding candidate count changed: expected {target_count}, processed {processed}"
                 )
-            self.jobs.complete_job(conn, job_id, processed)
-            conn.commit()
+            if writes_database:
+                self.jobs.complete_job(conn, job_id, processed)
+                conn.commit()
             return EmbeddingRunResult(
                 job_id=job_id,
                 target_count=target_count,
                 processed_count=processed,
+                max_source_id=max_source_id,
                 profile_key=self.profile.profile_key,
                 dry_run=False,
             )
         except Exception as exc:
             conn.rollback()
-            if job_id is not None:
+            if writes_database and job_id is not None:
                 self.jobs.fail_job(conn, job_id, processed, exc)
                 conn.commit()
             raise
         finally:
-            self.jobs.release_lock(conn)
-            conn.commit()
+            if writes_database:
+                self.jobs.release_lock(conn)
+                conn.commit()

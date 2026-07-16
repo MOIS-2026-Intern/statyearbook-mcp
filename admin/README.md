@@ -37,6 +37,10 @@ python -m admin ingest data/2026_통계연보.hwpx \
 - `yearbook_load.sql`: ID에 독립적인 누적 적재 DML
 - `yearbook_title_embeddings.sql`: 모델 profile과 실제 벡터를 포함한 임베딩 DML
 
+로컬 DB 적재는 두 SQL 산출물을 그대로 실행하는 방식입니다. Python 코드는 HWPX 파싱,
+적재 SQL 생성과 임베딩 벡터 계산·SQL 생성을 담당하며, 통계 데이터와 임베딩 벡터는 각각
+`yearbook_load.sql`, `yearbook_title_embeddings.sql`을 실행할 때만 DB에 반영됩니다.
+
 같은 연도를 의도적으로 교체할 때만 `--mode replace`를 사용합니다. 다른 연도 데이터는
 삭제하지 않습니다.
 

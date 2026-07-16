@@ -23,11 +23,11 @@ class YearbookArtifactService:
             "review_markdown": review_path.name,
         }
 
-    def save_load_dml(self, parsed: dict, load_mode: str) -> tuple[str, Path]:
+    def save_load_dml(self, parsed: dict, load_mode: str) -> Path:
         dml = build_load_dml(parsed, load_mode)
         path = self.workspace / ARTIFACT_NAMES.load_dml
         path.write_text(dml, encoding="utf-8")
-        return dml, path
+        return path
 
     def embedding_dml_writer(self, profile: EmbeddingProfile) -> TitleEmbeddingDmlWriter:
         return TitleEmbeddingDmlWriter(

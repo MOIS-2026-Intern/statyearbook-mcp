@@ -33,15 +33,9 @@ class ProductionPromotionService:
         workspace = self.settings.workspace_dir / job_id
         load_dml_path = workspace / job["artifacts"]["load_dml"]
         embedding_dml_name = job["artifacts"].get("embedding_dml")
-        self.dml_repository.execute(
-            dsn,
-            load_dml_path.read_text(encoding="utf-8"),
-        )
+        self.dml_repository.execute_file(dsn, load_dml_path)
         if embedding_dml_name:
-            self.dml_repository.execute(
-                dsn,
-                (workspace / embedding_dml_name).read_text(encoding="utf-8"),
-            )
+            self.dml_repository.execute_file(dsn, workspace / embedding_dml_name)
 
         with psycopg.connect(dsn) as conn, conn.cursor() as cur:
             cur.execute(

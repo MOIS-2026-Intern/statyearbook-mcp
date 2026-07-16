@@ -5,7 +5,8 @@ const ingestionStages = [
   ["parse", "구조 파싱", "JSON·검수 Markdown 생성"],
   ["load_dml", "적재 SQL 생성", "누적 적재 DML 보존"],
   ["load_db", "DB 적재", "선택 연도 트랜잭션 실행"],
-  ["embedding", "제목 임베딩", "벡터·임베딩 SQL 생성"],
+  ["embedding_dml", "임베딩 SQL 생성", "제목 벡터를 DML 산출물로 보존"],
+  ["embedding_db", "임베딩 DB 적재", "생성된 임베딩 DML 실행"],
   ["verify", "결과 검증", "건수·모델 profile 확인"],
 ];
 const artifactLabels = { parsed_json:"파싱 JSON", review_markdown:"검수 Markdown", load_dml:"적재 SQL", embedding_dml:"임베딩 SQL" };

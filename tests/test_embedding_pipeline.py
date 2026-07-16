@@ -1,3 +1,4 @@
+# 이 파일은 임베딩 batch 실행기의 DB 저장 모드와 DML 생성 모드를 검증한다.
 import unittest
 
 from app.embedding import EmbeddingProfile, EmbeddingSettings
@@ -133,11 +134,39 @@ class EmbeddingRunnerTests(unittest.TestCase):
 
         self.assertEqual(result.job_id, 42)
         self.assertEqual(result.processed_count, 5)
+        self.assertEqual(result.max_source_id, 5)
         self.assertEqual([len(call) for call in provider.calls], [2, 2, 1])
         self.assertEqual(len(source.saved), 5)
         self.assertEqual(jobs.progress, [(42, 2), (42, 4), (42, 5)])
         self.assertEqual(jobs.completed, [(42, 5)])
         self.assertEqual(progress, [(2, 5), (4, 5), (5, 5)])
+        self.assertFalse(jobs.locked)
+
+    def test_dml_mode_emits_vectors_without_direct_database_writes(self) -> None:
+        conn = FakeConnection()
+        provider = FakeProvider()
+        source = FakeSource(count=3)
+        jobs = FakeJobs()
+        emitted = []
+        runner = EmbeddingRunner(provider, profile(), source, jobs)
+
+        result = runner.run(
+            conn,
+            batch_size=2,
+            mode="dml",
+            on_batch=lambda rows, vectors, _profile: emitted.extend(
+                zip(rows, vectors)
+            ),
+        )
+
+        self.assertIsNone(result.job_id)
+        self.assertEqual(result.processed_count, 3)
+        self.assertEqual(len(emitted), 3)
+        self.assertEqual(source.saved, [])
+        self.assertEqual(jobs.created, [])
+        self.assertEqual(jobs.progress, [])
+        self.assertEqual(jobs.completed, [])
+        self.assertEqual(conn.commits, 0)
         self.assertFalse(jobs.locked)
 
     def test_dry_run_does_not_load_provider_or_create_job(self) -> None:

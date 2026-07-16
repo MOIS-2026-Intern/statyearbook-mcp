@@ -1,3 +1,4 @@
+# 이 파일은 관리자 적재 DML, 임베딩 DML, SQLite 작업과 workspace 규칙을 검증한다.
 import json
 import tempfile
 import unittest
@@ -6,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from admin.backend.repositories.admin_job_repository import AdminJobRepository
+from admin.backend.repositories.postgres_dml_repository import PostgresDmlRepository
 from admin.backend.services.workspace_service import (
     create_workspace_id,
     migrate_legacy_workspaces,
@@ -74,6 +76,29 @@ class YearbookDmlTests(unittest.TestCase):
         self.assertNotIn("year = 2026", dml)
 
 
+class RecordingDmlRepository(PostgresDmlRepository):
+    def __init__(self):
+        self.executions = []
+
+    def execute(self, dsn: str, dml: str) -> None:
+        self.executions.append((dsn, dml))
+
+
+class PostgresDmlRepositoryTests(unittest.TestCase):
+    def test_execute_file_uses_saved_sql_as_execution_source(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "yearbook_load.sql"
+            path.write_text("BEGIN; SELECT 1; COMMIT;\n", encoding="utf-8")
+            repository = RecordingDmlRepository()
+
+            repository.execute_file("postgresql:///test", path)
+
+        self.assertEqual(
+            repository.executions,
+            [("postgresql:///test", "BEGIN; SELECT 1; COMMIT;\n")],
+        )
+
+
 class EmbeddingDmlTests(unittest.TestCase):
     def test_embedding_dml_uses_portable_natural_key(self) -> None:
         profile = EmbeddingProfile(
@@ -99,13 +124,20 @@ class EmbeddingDmlTests(unittest.TestCase):
             path = Path(root) / "yearbook_title_embeddings.sql"
             writer = TitleEmbeddingDmlWriter(path, profile)
             writer.write_batch([row], [[0.6, 0.8]], profile)
-            writer.complete()
+            writer.complete(
+                source_name="statistics:2026",
+                target_count=1,
+                processed_count=1,
+                max_source_id=999,
+            )
             dml = path.read_text(encoding="utf-8")
 
         self.assertIn("year = 2026", dml)
         self.assertIn("ref_id IS NOT DISTINCT FROM '1-1-1'", dml)
         self.assertNotIn("stat_id = 999", dml)
         self.assertIn("[0.6,0.8]", dml)
+        self.assertIn("INSERT INTO embedding_jobs", dml)
+        self.assertIn("'statistics:2026'", dml)
         self.assertTrue(dml.endswith("COMMIT;\n"))
 
 

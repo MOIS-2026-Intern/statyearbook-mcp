@@ -74,12 +74,12 @@ class YearbookIngestionService:
             self.store.update(job_id, artifacts=artifacts)
 
             self._step(job_id, "load_dml", 38, "누적 적재용 SQL을 생성하고 있습니다.")
-            load_dml, load_sql = artifact_service.save_load_dml(parsed, options.load_mode)
+            load_sql = artifact_service.save_load_dml(parsed, options.load_mode)
             artifacts["load_dml"] = load_sql.name
             self.store.update(job_id, artifacts=artifacts)
 
             self._step(job_id, "load_db", 48, f"{options.target} DB에 {options.year}년 연보를 적재하고 있습니다.")
-            self.dml_repository.execute(dsn, load_dml)
+            self.dml_repository.execute_file(dsn, load_sql)
 
             embedding_profile_key = None
             embedding_count = 0
@@ -102,7 +102,12 @@ class YearbookIngestionService:
                 embedding_sql = writer.path
                 artifacts["embedding_dml"] = embedding_sql.name
                 self.store.update(job_id, artifacts=artifacts)
-                self._step(job_id, "embedding", 60, "제목 임베딩을 생성하고 DB에 저장하고 있습니다.")
+                self._step(
+                    job_id,
+                    "embedding_dml",
+                    60,
+                    "제목 벡터와 임베딩 적재 SQL을 생성하고 있습니다.",
+                )
                 try:
                     import psycopg
                     from psycopg.rows import dict_row
@@ -111,24 +116,32 @@ class YearbookIngestionService:
                         result = runner.run(
                             conn,
                             batch_size=embed_settings.batch_size,
+                            mode="dml",
                             progress=lambda done, total: self.store.update(
                                 job_id,
-                                progress=60 + int(32 * done / max(total, 1)),
-                                message=f"제목 임베딩 {done}/{total}",
+                                progress=60 + int(28 * done / max(total, 1)),
+                                message=f"임베딩 적재 SQL 생성 {done}/{total}",
                             ),
                             on_batch=writer.write_batch,
                         )
-                    writer.complete()
+                    writer.complete(
+                        source_name=source.name,
+                        target_count=result.target_count,
+                        processed_count=result.processed_count,
+                        max_source_id=result.max_source_id,
+                    )
                 except Exception as exc:
                     writer.abort(exc)
                     raise
                 embedding_profile_key = result.profile_key
                 embedding_count = result.processed_count
-                self.store.update(
+                self._step(
                     job_id,
-                    progress=93,
-                    message="제목 임베딩 저장과 이관용 SQL 생성을 완료했습니다.",
+                    "embedding_db",
+                    90,
+                    f"생성된 임베딩 SQL을 {options.target} DB에 실행하고 있습니다.",
                 )
+                self.dml_repository.execute_file(dsn, embedding_sql)
 
             self._step(job_id, "verify", 95, "적재 건수와 임베딩 profile을 검증하고 있습니다.")
             verification = self.verification.verify(
