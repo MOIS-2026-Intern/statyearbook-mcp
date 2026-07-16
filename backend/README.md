@@ -107,9 +107,11 @@ npm run dev
 
 ## 환경변수
 
-- `STATYEARBOOK_MODEL_PROVIDER`: 채팅 모델 provider, 기본값 `openai`. 현재 값은 `openai`, `local_gemma`를 인식합니다.
+- `STATYEARBOOK_MODEL_PROVIDER`: 채팅 모델 provider, 기본값 `openai`. 현재 값은 `openai`, `bizrouter`, `local_gemma`를 인식합니다.
 - `STATYEARBOOK_CHAT_MODEL`: 채팅 모델, 기본값 `gpt-5.5`
 - `OPENAI_API_KEY`: OpenAI provider와 임베딩 생성에 사용하는 API 키
+- `BIZROUTER_API_KEY`: BizRouter provider에 사용하는 `sk-br-v1-...` 서비스 API 키
+- `BIZROUTER_BASE_URL`: BizRouter OpenAI 호환 endpoint, 기본값 `https://api.bizrouter.ai/v1`
 - `STATYEARBOOK_MODEL_TIMEOUT_SECONDS`: 모델 provider 호출 timeout, 기본값 `60`
 - `STATYEARBOOK_OPENAI_TIMEOUT_SECONDS`: 기존 OpenAI timeout 변수. `STATYEARBOOK_MODEL_TIMEOUT_SECONDS`가 없을 때 fallback으로 사용합니다.
 - `STATYEARBOOK_BACKEND_PORT`: FastAPI 포트, 기본값 `8000`
@@ -118,3 +120,12 @@ npm run dev
 - `STATYEARBOOK_MCP_CWD`: MCP 서버 실행 디렉터리
 
 `local_gemma` provider는 adapter 경계가 준비되어 있지만, Ollama, llama.cpp, vLLM 등 실제 로컬 런타임 프로토콜을 정한 뒤 `backend/gateways/local_gemma_gateway.py`에 연결해야 합니다.
+
+BizRouter는 OpenAI SDK 호환 Responses API를 제공하므로 별도 adapter 없이 기존 도구 호출
+흐름을 재사용합니다. `.env`에서 아래 값만 선택하면 됩니다.
+
+```dotenv
+STATYEARBOOK_MODEL_PROVIDER=bizrouter
+STATYEARBOOK_CHAT_MODEL=openai/gpt-5.1
+BIZROUTER_API_KEY=sk-br-v1-YOUR_API_KEY
+```

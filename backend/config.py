@@ -43,6 +43,10 @@ class Settings:
     )
 
     openai_api_key: str | None = os.environ.get("OPENAI_API_KEY")
+    bizrouter_api_key: str | None = os.environ.get("BIZROUTER_API_KEY")
+    bizrouter_base_url: str = os.environ.get(
+        "BIZROUTER_BASE_URL", "https://api.bizrouter.ai/v1"
+    ).rstrip("/")
     max_tool_rounds: int = int(os.environ.get("STATYEARBOOK_MAX_TOOL_ROUNDS", "10"))
     tool_output_max_chars: int = int(os.environ.get("STATYEARBOOK_TOOL_OUTPUT_MAX_CHARS", "60000"))
 
@@ -71,9 +75,15 @@ class Settings:
         return bool(self.openai_api_key)
 
     @property
+    def has_bizrouter_key(self) -> bool:
+        return bool(self.bizrouter_api_key)
+
+    @property
     def model_configured(self) -> bool:
         if self.model_provider == "openai":
             return self.has_openai_key
+        if self.model_provider == "bizrouter":
+            return self.has_bizrouter_key
         if self.model_provider == "local_gemma":
             return False
         return False
