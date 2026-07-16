@@ -799,7 +799,7 @@ def parse(
         "publication": publication,
         "metadata": {
             "source": os.path.abspath(hwpx_path),
-            "parser": "admin/backend/services/yearbook_parser_service.py",
+            "parser": "admin/backend/services/load_parser.py",
             "method": (
                 "HWPX ZIP의 Contents/section*.xml을 문서 순서대로 순회하고, "
                 "hp:cellAddr/hp:cellSpan으로 병합 셀을 보존한 뒤 grid/records/markdown을 생성"

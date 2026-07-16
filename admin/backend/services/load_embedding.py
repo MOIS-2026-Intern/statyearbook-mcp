@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Literal, Protocol
 
-from admin.backend.repositories.embedding_job_repository import EmbeddingJobRepository
+from admin.backend.repositories.embedding_jobs import EmbeddingJobRepository
 from app.embedding import EmbeddingProfile, EmbeddingProvider
 
 

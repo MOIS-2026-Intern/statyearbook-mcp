@@ -16,7 +16,7 @@ from app.embedding import (
     OpenAIEmbeddingProvider,
     create_embedding_profile,
 )
-from admin.backend.repositories.statistics_embedding_repository import StatisticsEmbeddingRepository
+from admin.backend.repositories.statistics_embeddings import StatisticsEmbeddingRepository
 
 
 class ArrayLike(list):

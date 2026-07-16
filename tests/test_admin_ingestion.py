@@ -6,14 +6,14 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from admin.backend.repositories.admin_job_repository import AdminJobRepository
-from admin.backend.repositories.postgres_dml_repository import PostgresDmlRepository
-from admin.backend.services.workspace_service import (
+from admin.backend.repositories.admin_jobs import AdminJobRepository
+from admin.backend.repositories.postgres_dml import PostgresDmlRepository
+from admin.backend.services.load_workspace import (
     create_workspace_id,
     migrate_legacy_workspaces,
 )
-from admin.backend.services.title_embedding_dml_service import TitleEmbeddingDmlWriter
-from admin.backend.services.yearbook_load_dml_service import build_load_dml
+from admin.backend.services.load_dml import build_load_dml
+from admin.backend.services.load_embedding_dml import TitleEmbeddingDmlWriter
 from app.embedding import EmbeddingProfile
 
 

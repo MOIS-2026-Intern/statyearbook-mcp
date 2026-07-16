@@ -7,12 +7,12 @@ import sys
 from pathlib import Path
 
 from admin.backend.config import settings
-from admin.backend.models.ingestion_job_model import ARTIFACT_NAMES, IngestionOptions
-from admin.backend.repositories.admin_job_repository import AdminJobRepository
-from admin.backend.services.production_promotion_service import ProductionPromotionService
-from admin.backend.services.workspace_service import create_workspace, migrate_legacy_workspaces
-from admin.backend.services.yearbook_ingestion_service import YearbookIngestionService
-from admin.backend.services.yearbook_load_dml_service import YEARBOOK_LOAD_MODES
+from admin.backend.models.ingestion_job import ARTIFACT_NAMES, IngestionOptions
+from admin.backend.repositories.admin_jobs import AdminJobRepository
+from admin.backend.services.load_dml import YEARBOOK_LOAD_MODES
+from admin.backend.services.load_pipeline import YearbookIngestionService
+from admin.backend.services.load_promotion import ProductionPromotionService
+from admin.backend.services.load_workspace import create_workspace, migrate_legacy_workspaces
 
 
 def build_parser() -> argparse.ArgumentParser:

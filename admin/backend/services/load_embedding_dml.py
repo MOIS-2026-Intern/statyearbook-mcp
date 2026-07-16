@@ -6,7 +6,7 @@ from pathlib import Path
 
 from app.embedding import EmbeddingProfile
 from app.vector import vector_literal
-from admin.backend.services.yearbook_load_dml_service import sql_literal
+from admin.backend.services.load_dml import sql_literal
 
 
 class TitleEmbeddingDmlWriter:

@@ -2,10 +2,10 @@
 # workspace 파일명 규칙을 통합 적재 service에서 분리한다.
 from pathlib import Path
 
-from admin.backend.models.ingestion_job_model import ARTIFACT_NAMES
-from admin.backend.services.title_embedding_dml_service import TitleEmbeddingDmlWriter
-from admin.backend.services.yearbook_load_dml_service import build_load_dml
-from admin.backend.services.yearbook_parser_service import parsed_to_markdown, write_json, write_text
+from admin.backend.models.ingestion_job import ARTIFACT_NAMES
+from admin.backend.services.load_dml import build_load_dml
+from admin.backend.services.load_embedding_dml import TitleEmbeddingDmlWriter
+from admin.backend.services.load_parser import parsed_to_markdown, write_json, write_text
 from app.embedding import EmbeddingProfile
 
 

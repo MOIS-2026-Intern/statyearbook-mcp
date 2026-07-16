@@ -7,14 +7,14 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 from admin.backend.config import ADMIN_API_PREFIX
-from admin.backend.controllers.controller_dependencies import authorize_admin
-from admin.backend.models.ingestion_job_model import ARTIFACT_NAMES, IngestionOptions
-from admin.backend.services.uploaded_yearbook_service import (
+from admin.backend.controllers.dependencies import authorize_admin
+from admin.backend.models.ingestion_job import ARTIFACT_NAMES, IngestionOptions
+from admin.backend.services.upload import (
     UploadedYearbookService,
     UploadTooLargeError,
 )
-from admin.backend.services.workspace_service import create_workspace
-from admin.backend.services.yearbook_load_dml_service import YEARBOOK_LOAD_MODES
+from admin.backend.services.load_dml import YEARBOOK_LOAD_MODES
+from admin.backend.services.load_workspace import create_workspace
 
 
 router = APIRouter(

@@ -8,14 +8,14 @@ from fastapi.staticfiles import StaticFiles
 
 from admin.backend.config import ADMIN_API_PREFIX, ADMIN_DIR, AdminSettings, settings
 from admin.backend.controllers import (
-    artifact_controller,
-    ingestion_job_controller,
-    system_controller,
+    artifacts,
+    jobs,
+    system,
 )
-from admin.backend.repositories.admin_job_repository import AdminJobRepository
-from admin.backend.services.admin_job_orchestrator import AdminJobOrchestrator
-from admin.backend.services.workspace_service import migrate_legacy_workspaces
-from admin.backend.services.yearbook_ingestion_service import YearbookIngestionService
+from admin.backend.repositories.admin_jobs import AdminJobRepository
+from admin.backend.services.job_queue import AdminJobOrchestrator
+from admin.backend.services.load_pipeline import YearbookIngestionService
+from admin.backend.services.load_workspace import migrate_legacy_workspaces
 
 
 def create_app(config: AdminSettings = settings) -> FastAPI:
@@ -42,9 +42,9 @@ def create_app(config: AdminSettings = settings) -> FastAPI:
     app.state.job_repository = repository
     app.state.job_orchestrator = orchestrator
 
-    app.include_router(system_controller.router)
-    app.include_router(ingestion_job_controller.router)
-    app.include_router(artifact_controller.router)
+    app.include_router(system.router)
+    app.include_router(jobs.router)
+    app.include_router(artifacts.router)
     app.mount(
         "/",
         StaticFiles(directory=ADMIN_DIR / "frontend", html=True),

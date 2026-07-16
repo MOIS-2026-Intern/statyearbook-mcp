@@ -2,7 +2,7 @@
 # 동시에 여러 연보가 DB를 변경하지 못하도록 프로세스 실행 큐를 제공한다.
 from concurrent.futures import Future, ThreadPoolExecutor
 
-from admin.backend.services.yearbook_ingestion_service import YearbookIngestionService
+from admin.backend.services.load_pipeline import YearbookIngestionService
 
 
 class AdminJobOrchestrator:

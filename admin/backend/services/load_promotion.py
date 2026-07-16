@@ -3,8 +3,8 @@
 import psycopg
 
 from admin.backend.config import AdminSettings
-from admin.backend.repositories.admin_job_repository import AdminJobRepository
-from admin.backend.repositories.postgres_dml_repository import PostgresDmlRepository
+from admin.backend.repositories.admin_jobs import AdminJobRepository
+from admin.backend.repositories.postgres_dml import PostgresDmlRepository
 
 
 class ProductionPromotionService:

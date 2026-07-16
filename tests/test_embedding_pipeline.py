@@ -2,7 +2,7 @@
 import unittest
 
 from app.embedding import EmbeddingProfile, EmbeddingSettings
-from admin.backend.services.embedding_runner_service import EmbeddingBatch, EmbeddingRunner
+from admin.backend.services.load_embedding import EmbeddingBatch, EmbeddingRunner
 
 
 class FakeConnection:

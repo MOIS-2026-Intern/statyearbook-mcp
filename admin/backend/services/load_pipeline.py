@@ -14,14 +14,14 @@ from app.embedding import (
     create_embedding_provider,
 )
 from admin.backend.config import AdminSettings
-from admin.backend.models.ingestion_job_model import IngestionOptions
-from admin.backend.repositories.admin_job_repository import AdminJobRepository
-from admin.backend.repositories.postgres_dml_repository import PostgresDmlRepository
-from admin.backend.repositories.statistics_embedding_repository import StatisticsEmbeddingRepository
-from admin.backend.services.embedding_runner_service import EmbeddingRunner
-from admin.backend.services.yearbook_artifact_service import YearbookArtifactService
-from admin.backend.services.yearbook_parser_service import parse
-from admin.backend.services.yearbook_verification_service import YearbookVerificationService
+from admin.backend.models.ingestion_job import IngestionOptions
+from admin.backend.repositories.admin_jobs import AdminJobRepository
+from admin.backend.repositories.postgres_dml import PostgresDmlRepository
+from admin.backend.repositories.statistics_embeddings import StatisticsEmbeddingRepository
+from admin.backend.services.load_artifacts import YearbookArtifactService
+from admin.backend.services.load_embedding import EmbeddingRunner
+from admin.backend.services.load_parser import parse
+from admin.backend.services.load_verification import YearbookVerificationService
 
 
 class YearbookIngestionService:

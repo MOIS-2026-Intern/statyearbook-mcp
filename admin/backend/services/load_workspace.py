@@ -7,8 +7,8 @@ from pathlib import Path
 import json
 import re
 
-from admin.backend.models.ingestion_job_model import ARTIFACT_NAMES
-from admin.backend.repositories.admin_job_repository import AdminJobRepository
+from admin.backend.models.ingestion_job import ARTIFACT_NAMES
+from admin.backend.repositories.admin_jobs import AdminJobRepository
 
 
 WORKSPACE_ID_FORMAT = "%Y%m%d-%H%M%S-%f"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.embedding import EmbeddingConfigurationError
 from app.vector import vector_literal
-from admin.backend.services.embedding_runner_service import EmbeddingBatch
+from admin.backend.services.load_embedding import EmbeddingBatch
 
 
 def _first_value(row):
