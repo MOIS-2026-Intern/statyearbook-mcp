@@ -1,10 +1,15 @@
 /data/*
 /outputs/
+/models/*
+!/models/.gitkeep
+/admin/state/
+/admin/workspaces/
 
 # secrets / local env
 .env
 .env.*
 !.env.example
+!/admin/.env.admin.example
 
 # python
 __pycache__/
@@ -18,7 +23,3 @@ dist/
 
 # db
 /db/seeds/*.sql
-
-#load
-/load/parsed_yearbook.json
-/load/output/

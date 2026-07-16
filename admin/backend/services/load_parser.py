@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# 이 파일은 HWPX 문서 구조를 통계연보 JSON으로 파싱하고 검수용 Markdown을 렌더링한다.
+# 표 병합 셀, 본문, 주석, 연락처와 이미지 메타데이터 추출을 담당한다.
 from __future__ import annotations
 
-import argparse
 import html
 import json
 import os
@@ -745,7 +744,13 @@ def estimate_page_count(hwpx_path: str) -> int | None:
     return page_count
 
 
-def parse(hwpx_path: str, image_dir: str | None = None) -> dict:
+def parse(
+    hwpx_path: str,
+    image_dir: str | None = None,
+    publication_year: int | None = None,
+    publication_title: str | None = None,
+    publication_no: str | None = None,
+) -> dict:
     units: list[dict] = []
     current: dict | None = None
     pending_note: dict | None = None
@@ -780,11 +785,21 @@ def parse(hwpx_path: str, image_dir: str | None = None) -> dict:
             current["images"].append(block["image"])
 
     append_unit(units, current)
+    publication = default_publication(estimate_page_count(hwpx_path))
+    if publication_year is not None:
+        publication["year"] = publication_year
+    if publication_title:
+        publication["title"] = publication_title
+    elif publication_year is not None:
+        publication["title"] = f"{publication_year} 행정안전통계연보"
+    if publication_no is not None:
+        publication["pub_no"] = publication_no or None
+
     return {
-        "publication": default_publication(estimate_page_count(hwpx_path)),
+        "publication": publication,
         "metadata": {
             "source": os.path.abspath(hwpx_path),
-            "parser": "load/parse_hwpx_yearbook.py",
+            "parser": "admin/backend/services/load_parser.py",
             "method": (
                 "HWPX ZIP의 Contents/section*.xml을 문서 순서대로 순회하고, "
                 "hp:cellAddr/hp:cellSpan으로 병합 셀을 보존한 뒤 grid/records/markdown을 생성"
@@ -848,41 +863,3 @@ def write_text(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8") as file:
         file.write(text)
-
-
-def count_items(stats: list[dict], key: str) -> int:
-    return sum(len(unit.get(key, [])) for unit in stats)
-
-
-def print_summary(result: dict, json_out: str, md_out: str | None) -> None:
-    stats = result["statistics"]
-    print(f"통계 단위 : {len(stats)}")
-    print(f"  표      : {count_items(stats, 'tables')}")
-    print(f"  주석    : {count_items(stats, 'footnotes')}")
-    print(f"  연락처  : {count_items(stats, 'contacts')}")
-    print(f"  이미지  : {count_items(stats, 'images')}")
-    print(f"-> {json_out}")
-    if md_out:
-        print(f"-> {md_out}")
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("hwpx_path", nargs="?", default="data/통계연보.hwpx")
-    parser.add_argument("--json-out", default="load/output/parsed_yearbook.json")
-    parser.add_argument("--md-out", default="load/output/parsed_yearbook.md")
-    parser.add_argument("--image-dir", default=None, help="지정 시 HWPX BinData 이미지를 복사")
-    return parser
-
-
-def main() -> None:
-    args = build_parser().parse_args()
-    result = parse(args.hwpx_path, args.image_dir)
-    write_json(args.json_out, result)
-    if args.md_out:
-        write_text(args.md_out, parsed_to_markdown(result))
-    print_summary(result, args.json_out, args.md_out)
-
-
-if __name__ == "__main__":
-    main()

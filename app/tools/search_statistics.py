@@ -6,7 +6,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from app.db import connect
-from app.query_embedding import embed_query
+from app.query_embedding import embed_query, embedding_profile
 from app.tool_descriptions import SEARCH_STATISTICS, SEARCH_STATISTICS_FIELDS
 
 SEARCH_TEXT_COLUMNS = ("title_ko", "title_en", "chapter", "section")
@@ -44,15 +44,20 @@ def _similarity_score(distance: float) -> float:
 
 # 검색 SQL의 WHERE 절을 만든다.
 def _where_sql(publication_year: int | None) -> str:
-    where = ["embedding IS NOT NULL"]
+    where = ["embedding IS NOT NULL", "embedding_profile_key = %s"]
     if publication_year is not None:
         where.append("year = %s")
     return " AND ".join(where)
 
 
 # 검색 SQL 파라미터를 만든다.
-def _params(query_vec: str, publication_year: int | None, limit: int) -> list:
-    params: list = [query_vec]
+def _params(
+    query_vec: str,
+    profile_key: str,
+    publication_year: int | None,
+    limit: int,
+) -> list:
+    params: list = [query_vec, profile_key]
     if publication_year is not None:
         params.append(publication_year)
     params.extend([query_vec, limit])
@@ -74,11 +79,16 @@ def _search_sql(publication_year: int | None) -> str:
 
 
 # DB에서 관련 통계표를 조회한다.
-def _fetch_rows(query_vec: str, publication_year: int | None, limit: int) -> list:
+def _fetch_rows(
+    query_vec: str,
+    profile_key: str,
+    publication_year: int | None,
+    limit: int,
+) -> list:
     with connect() as conn, conn.cursor() as cur:
         cur.execute(
             _search_sql(publication_year),
-            _params(query_vec, publication_year, limit),
+            _params(query_vec, profile_key, publication_year, limit),
         )
         return cur.fetchall()
 
@@ -126,11 +136,12 @@ def search_statistics_data(
 
     tokens = _tokenize(query)
     query_vec = embed_query(query)
-    rows = _fetch_rows(query_vec, publication_year, limit)
+    profile_key = embedding_profile().profile_key
+    rows = _fetch_rows(query_vec, profile_key, publication_year, limit)
     filter_relaxed = False
 
     if not rows and publication_year is not None:
-        rows = _fetch_rows(query_vec, None, limit)
+        rows = _fetch_rows(query_vec, profile_key, None, limit)
         filter_relaxed = True
 
     return {

@@ -27,3 +27,21 @@ VITE_USE_MOCK_API=false
 cd frontend
 npm run dev
 ```
+
+## 관리자 통합 적재
+
+새 통계연보의 파싱, 누적 적재 DML 생성·실행, 임베딩 DML 생성·실행과 검증은 관리자
+애플리케이션으로 분리되어 있습니다.
+
+```bash
+python -m admin ingest data/2026_통계연보.hwpx --year 2026
+```
+
+관리자 웹은 사용자용 백엔드와 다른 프로세스와 포트를 사용합니다.
+
+```bash
+python -m admin serve
+# http://127.0.0.1:8100
+```
+
+환경 분리와 운영 DB 활성화 절차는 `admin/README.md`를 참고하세요.

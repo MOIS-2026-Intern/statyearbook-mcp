@@ -15,6 +15,7 @@ RUN pip install --upgrade pip \
 
 COPY backend ./backend
 COPY app ./app
+COPY models ./models
 COPY server.py ./
 
 RUN chown -R app:app /app

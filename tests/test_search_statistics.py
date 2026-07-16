@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.mcp_app import create_app
@@ -34,8 +35,13 @@ class SearchStatisticsTests(unittest.TestCase):
 
     @patch("app.tools.search_statistics._fetch_rows")
     @patch("app.tools.search_statistics.embed_query", return_value="[0.1,0.2]")
+    @patch(
+        "app.tools.search_statistics.embedding_profile",
+        return_value=SimpleNamespace(profile_key="profile-key"),
+    )
     def test_relaxes_publication_year_when_filtered_search_is_empty(
         self,
+        _embedding_profile_mock,
         embed_query_mock,
         fetch_rows_mock,
     ) -> None:
@@ -50,18 +56,23 @@ class SearchStatisticsTests(unittest.TestCase):
         self.assertEqual(response["results"][0]["publication_year"], 2025)
         self.assertEqual(
             fetch_rows_mock.call_args_list[0].args,
-            ("[0.1,0.2]", 2024, 5),
+            ("[0.1,0.2]", "profile-key", 2024, 5),
         )
         self.assertEqual(
             fetch_rows_mock.call_args_list[1].args,
-            ("[0.1,0.2]", None, 5),
+            ("[0.1,0.2]", "profile-key", None, 5),
         )
         embed_query_mock.assert_called_once_with("행정기관 위원회")
 
     @patch("app.tools.search_statistics._fetch_rows")
     @patch("app.tools.search_statistics.embed_query", return_value="[0.1,0.2]")
+    @patch(
+        "app.tools.search_statistics.embedding_profile",
+        return_value=SimpleNamespace(profile_key="profile-key"),
+    )
     def test_keeps_publication_year_when_filtered_search_succeeds(
         self,
+        _embedding_profile_mock,
         _embed_query_mock,
         fetch_rows_mock,
     ) -> None:
@@ -72,7 +83,9 @@ class SearchStatisticsTests(unittest.TestCase):
         self.assertEqual(response["applied_publication_year"], 2025)
         self.assertFalse(response["publication_year_filter_relaxed"])
         self.assertIsNone(response["message"])
-        fetch_rows_mock.assert_called_once_with("[0.1,0.2]", 2025, 5)
+        fetch_rows_mock.assert_called_once_with(
+            "[0.1,0.2]", "profile-key", 2025, 5
+        )
 
 
 if __name__ == "__main__":
