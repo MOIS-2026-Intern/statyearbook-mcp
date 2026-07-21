@@ -13,8 +13,13 @@ from typing import Protocol, Sequence
 
 
 BGE_M3_REVISION = "5617a9f61b028005a4858fdac845db406aefb181"
+BGE_M3_MODEL = "BAAI/bge-m3"
 MODEL_MANIFEST = ".statyearbook-model.json"
 LOCAL_EMBEDDING_PROVIDER = "local"
+HUGGINGFACE_EMBEDDING_PROVIDER = "huggingface"
+SUPPORTED_EMBEDDING_PROVIDERS = frozenset(
+    {LOCAL_EMBEDDING_PROVIDER, HUGGINGFACE_EMBEDDING_PROVIDER}
+)
 STATISTICS_CONTENT_VERSION = "statistics-title-v3-level4-70-context-30"
 TABLE_SEARCH_CONTENT_VERSION = "table-search-v1-headers-labels"
 
@@ -32,16 +37,34 @@ class EmbeddingSettings:
     device: str = "cpu"
     max_length: int = 512
     revision: str | None = None
+    api_token: str | None = None
+    timeout_seconds: float = 60.0
 
-    # 로컬 BGE-M3 사용 여부와 양수여야 하는 실행 옵션을 생성 시점에 검증한다.
+    # 지원 provider와 양수여야 하는 실행 옵션을 생성 시점에 검증한다.
     def __post_init__(self) -> None:
-        if self.provider != LOCAL_EMBEDDING_PROVIDER:
+        if self.provider not in SUPPORTED_EMBEDDING_PROVIDERS:
+            allowed = ", ".join(sorted(SUPPORTED_EMBEDDING_PROVIDERS))
             raise EmbeddingConfigurationError(
-                "only the local BGE-M3 embedding provider is supported"
+                f"embedding provider must be one of: {allowed}"
             )
         for name in ("dimension", "batch_size", "max_length"):
             if getattr(self, name) <= 0:
                 raise EmbeddingConfigurationError(f"{name} must be greater than zero")
+        if self.timeout_seconds <= 0:
+            raise EmbeddingConfigurationError("timeout_seconds must be greater than zero")
+        if self.provider == HUGGINGFACE_EMBEDDING_PROVIDER:
+            if self.model != BGE_M3_MODEL:
+                raise EmbeddingConfigurationError(
+                    f"Hugging Face embedding model must be {BGE_M3_MODEL}"
+                )
+            if self.revision != BGE_M3_REVISION:
+                raise EmbeddingConfigurationError(
+                    "Hugging Face BGE-M3 revision must match the pinned local revision"
+                )
+            if not self.api_token or not self.api_token.strip():
+                raise EmbeddingConfigurationError(
+                    "a Hugging Face API token is required for remote embeddings"
+                )
 
 
 @dataclass(frozen=True)
@@ -90,11 +113,17 @@ def create_embedding_profile(
     settings: EmbeddingSettings,
     content_version: str,
 ) -> EmbeddingProfile:
-    model_path = Path(settings.model).expanduser().resolve()
-    manifest = _read_model_manifest(model_path)
-    model = str(manifest.get("source_model") or model_path.name)
-    revision = str(manifest.get("revision") or "")
+    if settings.provider == LOCAL_EMBEDDING_PROVIDER:
+        model_path = Path(settings.model).expanduser().resolve()
+        manifest = _read_model_manifest(model_path)
+        model = str(manifest.get("source_model") or model_path.name)
+        revision = str(manifest.get("revision") or "")
+    else:
+        model = settings.model
+        revision = str(settings.revision or "")
 
+    # DB에 적재한 로컬 벡터와 원격 query 벡터는 같은 모델 identity를 쓴다.
+    # 실행 위치를 profile key에 넣으면 provider 전환 시 기존 DB가 검색되지 않는다.
     identity = {
         "provider": LOCAL_EMBEDDING_PROVIDER,
         "model": model,
@@ -128,7 +157,10 @@ def _validated_vectors(
     expected_count: int,
     expected_dimension: int,
 ) -> list[list[float]]:
-    result = [[float(value) for value in vector] for vector in vectors]
+    try:
+        result = [[float(value) for value in vector] for vector in vectors]
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("embedding provider returned a non-numeric vector matrix") from exc
     if len(result) != expected_count:
         raise RuntimeError(
             f"embedding provider returned {len(result)} vectors for {expected_count} inputs"
@@ -205,6 +237,48 @@ class LocalSentenceTransformerProvider:
         return _validated_vectors(vectors, len(inputs), self.settings.dimension)
 
 
-# 검증된 로컬 BGE-M3 설정으로 임베딩 구현체를 생성한다.
+# Hugging Face Inference API로 로컬 적재분과 같은 BGE-M3 query 임베딩을 만든다.
+class HuggingFaceInferenceProvider:
+    # 타임아웃과 token을 명시한 HF Inference 클라이언트를 준비한다.
+    def __init__(self, settings: EmbeddingSettings):
+        self.settings = settings
+        try:
+            from huggingface_hub import InferenceClient
+        except ImportError as exc:
+            raise EmbeddingConfigurationError(
+                "huggingface-hub is required for remote embeddings"
+            ) from exc
+        self._client = InferenceClient(
+            provider="hf-inference",
+            api_key=settings.api_token,
+            timeout=settings.timeout_seconds,
+        )
+
+    # API에서 정규화·오른쪽 truncation을 요청하고 반환 shape를 강제한다.
+    def encode(self, texts: Sequence[str]) -> list[list[float]]:
+        inputs = list(texts)
+        if not inputs:
+            return []
+
+        result: list[list[float]] = []
+        for start in range(0, len(inputs), self.settings.batch_size):
+            batch = inputs[start : start + self.settings.batch_size]
+            encoded = self._client.feature_extraction(
+                batch,
+                model=self.settings.model,
+                normalize=True,
+                truncate=True,
+                truncation_direction="right",
+            )
+            vectors = encoded.tolist() if hasattr(encoded, "tolist") else encoded
+            result.extend(_validated_vectors(vectors, len(batch), self.settings.dimension))
+        return result
+
+
+# 검증된 BGE-M3 설정의 실행 provider에 맞는 구현체를 생성한다.
 def create_embedding_provider(settings: EmbeddingSettings) -> EmbeddingProvider:
-    return LocalSentenceTransformerProvider(settings)
+    if settings.provider == LOCAL_EMBEDDING_PROVIDER:
+        return LocalSentenceTransformerProvider(settings)
+    if settings.provider == HUGGINGFACE_EMBEDDING_PROVIDER:
+        return HuggingFaceInferenceProvider(settings)
+    raise EmbeddingConfigurationError(f"unsupported embedding provider: {settings.provider}")

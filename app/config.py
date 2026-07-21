@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from utils.embedding import (
+    BGE_M3_MODEL,
     BGE_M3_REVISION,
     EmbeddingConfigurationError,
     EmbeddingSettings,
+    HUGGINGFACE_EMBEDDING_PROVIDER,
+    LOCAL_EMBEDDING_PROVIDER,
     create_embedding_provider,
 )
 from utils.env import load_service_env
@@ -42,17 +45,27 @@ def _positive_int(name: str, default: str | None = None) -> int:
     return value
 
 
-# 로컬 BGE-M3 기본값과 서비스 전용 override로 임베딩 설정을 구성한다.
+# provider에 따라 로컬 artifact 또는 Hugging Face API 설정을 구성한다.
 def embedding_settings_from_env() -> EmbeddingSettings:
-    model = os.environ.get("STATYEARBOOK_APP_EMBED_MODEL", "models/bge-m3")
+    provider = os.environ.get(
+        "STATYEARBOOK_APP_EMBED_PROVIDER", LOCAL_EMBEDDING_PROVIDER
+    ).strip().lower()
+    if provider == HUGGINGFACE_EMBEDDING_PROVIDER:
+        model = os.environ.get("STATYEARBOOK_APP_HF_MODEL", BGE_M3_MODEL)
+        api_token = os.environ.get("STATYEARBOOK_APP_HF_TOKEN")
+    else:
+        model = os.environ.get("STATYEARBOOK_APP_EMBED_MODEL", "models/bge-m3")
+        api_token = None
     return EmbeddingSettings(
-        provider="local",
+        provider=provider,
         model=model,
         dimension=1024,
         batch_size=_positive_int("STATYEARBOOK_APP_EMBED_BATCH_SIZE", "16"),
         device=os.environ.get("STATYEARBOOK_APP_EMBED_DEVICE", "cpu"),
         max_length=512,
         revision=BGE_M3_REVISION,
+        api_token=api_token,
+        timeout_seconds=_positive_int("STATYEARBOOK_APP_HF_TIMEOUT_SECONDS", "60"),
     )
 
 
@@ -64,7 +77,7 @@ class AppSettings:
     host: str
     port: int
 
-    # 운영 app은 고정 BGE-M3 artifact의 경로·차원·revision을 시작 시 검증한다.
+    # 운영 app은 선택 provider의 필수 artifact 또는 token을 시작 시 검증한다.
     def __post_init__(self) -> None:
         if self.profile != "main":
             return

@@ -29,13 +29,15 @@ cp frontend/.env.example frontend/.env.development.local
 
 `main` 배포에는 서비스별로 다음 값을 secret 또는 배포 환경변수로 주입하세요.
 
-- app: `STATYEARBOOK_APP_DSN`, 아래 BGE-M3 모델 볼륨
+- app: `STATYEARBOOK_APP_DSN`, `STATYEARBOOK_APP_HF_TOKEN`
 - backend: `STATYEARBOOK_BACKEND_MCP_URL`, `STATYEARBOOK_BACKEND_CORS_ORIGINS`, 선택한 공급자의 `STATYEARBOOK_BACKEND_OPENAI_API_KEY` 또는 `STATYEARBOOK_BACKEND_BIZROUTER_API_KEY`
 - admin: `STATYEARBOOK_ADMIN_DSN`, `STATYEARBOOK_ADMIN_API_TOKEN`, BGE-M3 모델 볼륨
 - frontend: 이미지 빌드 인자 `VITE_BACKEND_BASE_URL`
 - db: `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
 
-BGE-M3는 Git과 이미지에 포함하지 않습니다. 호스트의 같은 모델 artifact를 app/admin의 `/service/models/bge-m3:ro`에 마운트하세요. 두 서비스는 1024차원·최대 512토큰·고정 revision을 함께 사용하며 모델 경로·배치 크기·device만 배포 환경에 맞게 설정합니다. admin의 작업 이력과 업로드 작업공간은 각각 `/service/admin/state`, `/service/admin/workspaces`에 있으므로 운영에서는 두 경로에 영속 볼륨을 연결해야 합니다.
+BGE-M3는 Git과 이미지에 포함하지 않습니다. local/test의 app과 로컬 적재를 담당하는 admin은 호스트의 같은 모델 artifact를 사용합니다. 운영 app은 기본적으로 Hugging Face Inference API에서 같은 `BAAI/bge-m3` revision의 query embedding만 생성하므로 모델 볼륨이 필요하지 않습니다. `STATYEARBOOK_APP_EMBED_PROVIDER=local|huggingface`로 실행 provider를 선택하며, Hugging Face를 선택하면 `STATYEARBOOK_APP_HF_TOKEN`을 secret으로 주입해야 합니다. 두 provider는 1024차원·정규화·고정 revision과 같은 DB embedding profile key를 사용합니다.
+
+admin의 작업 이력과 업로드 작업공간은 각각 `/service/admin/state`, `/service/admin/workspaces`에 있으므로 운영에서는 두 경로에 영속 볼륨을 연결해야 합니다.
 
 db 이미지는 **빈 PostgreSQL 데이터 볼륨을 처음 초기화할 때만** `db/schema.sql`을 자동 적용합니다. 이미 생성된 DB는 배포 전에 다음 명령으로 스키마를 갱신하세요. 스키마는 반복 적용해도 기존 데이터를 삭제하지 않습니다.
 

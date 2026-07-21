@@ -9,9 +9,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from utils.embedding import (
+    BGE_M3_MODEL,
     BGE_M3_REVISION,
     EmbeddingConfigurationError,
     EmbeddingSettings,
+    HuggingFaceInferenceProvider,
     LocalSentenceTransformerProvider,
     create_embedding_profile,
 )
@@ -49,9 +51,31 @@ class EmbeddingSettingsTests(unittest.TestCase):
         self.assertEqual(settings.batch_size, 4)
         self.assertEqual(settings.device, "mps")
 
-    def test_rejects_non_local_embedding_provider(self) -> None:
-        with self.assertRaisesRegex(EmbeddingConfigurationError, "local BGE-M3"):
+    def test_rejects_unknown_embedding_provider(self) -> None:
+        with self.assertRaisesRegex(EmbeddingConfigurationError, "provider must be"):
             EmbeddingSettings("remote", "remote-model", 1024)
+
+    def test_huggingface_provider_settings_come_only_from_environment(self) -> None:
+        env = {
+            "STATYEARBOOK_APP_EMBED_PROVIDER": "huggingface",
+            "STATYEARBOOK_APP_HF_TOKEN": "hf_test",
+            "STATYEARBOOK_APP_HF_TIMEOUT_SECONDS": "45",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = embedding_settings_from_env()
+
+        self.assertEqual(settings.provider, "huggingface")
+        self.assertEqual(settings.model, BGE_M3_MODEL)
+        self.assertEqual(settings.revision, BGE_M3_REVISION)
+        self.assertEqual(settings.api_token, "hf_test")
+        self.assertEqual(settings.timeout_seconds, 45)
+
+    def test_huggingface_provider_requires_token(self) -> None:
+        env = {"STATYEARBOOK_APP_EMBED_PROVIDER": "huggingface"}
+        with patch.dict(os.environ, env, clear=True), self.assertRaisesRegex(
+            EmbeddingConfigurationError, "API token"
+        ):
+            embedding_settings_from_env()
 
     def test_local_profile_uses_manifest_identity_instead_of_machine_path(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -76,6 +100,36 @@ class EmbeddingSettingsTests(unittest.TestCase):
         self.assertEqual(profile.model, "BAAI/bge-m3")
         self.assertEqual(profile.revision, BGE_M3_REVISION)
         self.assertEqual(len(profile.profile_key), 64)
+
+    def test_remote_query_profile_matches_locally_loaded_vectors(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            model_dir = Path(root) / "bge-m3"
+            model_dir.mkdir()
+            (model_dir / ".statyearbook-model.json").write_text(
+                json.dumps(
+                    {
+                        "source_model": BGE_M3_MODEL,
+                        "revision": BGE_M3_REVISION,
+                        "dimension": 1024,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            local = EmbeddingSettings(
+                "local", str(model_dir), 1024, revision=BGE_M3_REVISION
+            )
+            remote = EmbeddingSettings(
+                "huggingface",
+                BGE_M3_MODEL,
+                1024,
+                revision=BGE_M3_REVISION,
+                api_token="hf_test",
+            )
+
+            local_profile = create_embedding_profile(local, "statistics-title-v1")
+            remote_profile = create_embedding_profile(remote, "statistics-title-v1")
+
+        self.assertEqual(remote_profile, local_profile)
 
 
 class LocalEmbeddingProviderTests(unittest.TestCase):
@@ -142,6 +196,76 @@ class LocalEmbeddingProviderTests(unittest.TestCase):
             convert_to_numpy=True,
             show_progress_bar=False,
         )
+
+
+class HuggingFaceEmbeddingProviderTests(unittest.TestCase):
+    def _settings(self, batch_size: int = 16) -> EmbeddingSettings:
+        return EmbeddingSettings(
+            "huggingface",
+            BGE_M3_MODEL,
+            1024,
+            batch_size=batch_size,
+            revision=BGE_M3_REVISION,
+            api_token="hf_test",
+            timeout_seconds=30,
+        )
+
+    def test_requests_normalized_bge_m3_embeddings(self) -> None:
+        client_class = MagicMock()
+        client = client_class.return_value
+        vector = [0.0] * 1024
+        vector[0] = 0.6
+        vector[1] = 0.8
+        client.feature_extraction.return_value = ArrayLike([vector])
+        fake_module = types.SimpleNamespace(InferenceClient=client_class)
+
+        with patch.dict(sys.modules, {"huggingface_hub": fake_module}):
+            provider = HuggingFaceInferenceProvider(self._settings())
+            vectors = provider.encode(["행정안전통계연보"])
+
+        self.assertEqual(vectors, [vector])
+        client_class.assert_called_once_with(
+            provider="hf-inference",
+            api_key="hf_test",
+            timeout=30,
+        )
+        client.feature_extraction.assert_called_once_with(
+            ["행정안전통계연보"],
+            model=BGE_M3_MODEL,
+            normalize=True,
+            truncate=True,
+            truncation_direction="right",
+        )
+
+    def test_batches_remote_requests_and_preserves_order(self) -> None:
+        client_class = MagicMock()
+        client = client_class.return_value
+        first = [0.0] * 1024
+        second = [0.0] * 1024
+        third = [0.0] * 1024
+        first[0], second[1], third[2] = 1.0, 1.0, 1.0
+        client.feature_extraction.side_effect = [
+            ArrayLike([first, second]),
+            ArrayLike([third]),
+        ]
+        fake_module = types.SimpleNamespace(InferenceClient=client_class)
+
+        with patch.dict(sys.modules, {"huggingface_hub": fake_module}):
+            provider = HuggingFaceInferenceProvider(self._settings(batch_size=2))
+            vectors = provider.encode(["one", "two", "three"])
+
+        self.assertEqual(vectors, [first, second, third])
+        self.assertEqual(client.feature_extraction.call_count, 2)
+
+    def test_rejects_remote_embedding_with_wrong_dimension(self) -> None:
+        client_class = MagicMock()
+        client_class.return_value.feature_extraction.return_value = ArrayLike([[0.1, 0.2]])
+        fake_module = types.SimpleNamespace(InferenceClient=client_class)
+
+        with patch.dict(sys.modules, {"huggingface_hub": fake_module}):
+            provider = HuggingFaceInferenceProvider(self._settings())
+            with self.assertRaisesRegex(RuntimeError, "embedding dimension 2"):
+                provider.encode(["query"])
 
 
 class DatabaseDimensionTests(unittest.TestCase):
