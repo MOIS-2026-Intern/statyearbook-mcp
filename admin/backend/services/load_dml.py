@@ -4,26 +4,19 @@ from __future__ import annotations
 
 import json
 
+from admin.backend.sql import sql_literal
+from admin.backend.services.table_search_chunks import build_table_search_chunks
+
 YEARBOOK_LOAD_MODES = ("reject", "replace")
 
 
-def sql_literal(value, cast: str | None = None) -> str:
-    if value is None:
-        literal = "NULL"
-    elif isinstance(value, bool):
-        literal = "TRUE" if value else "FALSE"
-    elif isinstance(value, (int, float)):
-        literal = str(value)
-    else:
-        literal = "'" + str(value).replace("'", "''") + "'"
-    return f"{literal}::{cast}" if cast and value is not None else literal
-
-
+# 값 목록을 위치별 선택 형변환이 적용된 SQL 리터럴 목록으로 만든다.
 def _values(values: list[object], casts: dict[int, str] | None = None) -> str:
     casts = casts or {}
     return ", ".join(sql_literal(value, casts.get(index)) for index, value in enumerate(values))
 
 
+# DML 생성에 필요한 발간물 연도·제목·통계 목록의 최소 계약을 검증한다.
 def validate_yearbook(data: dict) -> None:
     publication = data.get("publication") or {}
     year = publication.get("year")
@@ -36,6 +29,7 @@ def validate_yearbook(data: dict) -> None:
         raise ValueError("parsed yearbook contains no statistics")
 
 
+# 한 통계와 표·검색 청크·주석·담당자 INSERT 문을 출력 버퍼에 순서대로 추가한다.
 def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
     stat_values = [
         "v_pub_id",
@@ -43,8 +37,12 @@ def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
         sql_literal(unit.get("ref_id")),
         sql_literal(unit.get("chapter_no")),
         sql_literal(unit.get("section_no")),
+        sql_literal(unit.get("level3_no")),
+        sql_literal(unit.get("level4_no")),
         sql_literal(unit.get("chapter")),
         sql_literal(unit.get("section")),
+        sql_literal(unit.get("level3_title")),
+        sql_literal(unit.get("level4_title")),
         sql_literal(unit.get("title_ko")),
         sql_literal(unit.get("title_en")),
         sql_literal(unit.get("unit")),
@@ -53,7 +51,8 @@ def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
     ]
     lines.extend([
         "    INSERT INTO statistics (",
-        "        pub_id, year, ref_id, chapter_no, section_no, chapter, section,",
+        "        pub_id, year, ref_id, chapter_no, section_no, level3_no, level4_no,",
+        "        chapter, section, level3_title, level4_title,",
         "        title_ko, title_en, unit, base_date, page_start",
         "    ) VALUES (" + ", ".join(stat_values) + ")",
         "    RETURNING stat_id INTO v_stat_id;",
@@ -72,8 +71,26 @@ def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
         lines.append(
             "    INSERT INTO stat_tables "
             "(stat_id, seq, caption, n_rows, n_cols, body, table_md) VALUES ("
-            + ", ".join(values) + ");"
+            + ", ".join(values) + ") RETURNING table_id INTO v_table_id;"
         )
+        for chunk in build_table_search_chunks(unit, table):
+            chunk_values = [
+                "v_table_id",
+                sql_literal(chunk["chunk_no"]),
+                sql_literal(chunk["chunk_kind"]),
+                sql_literal(json.dumps(chunk["search_labels"], ensure_ascii=False), "jsonb"),
+                sql_literal(chunk["search_text"]),
+                sql_literal(chunk["search_text"]),
+            ]
+            lines.append(
+                "    INSERT INTO table_search_chunks "
+                "(table_id, chunk_no, chunk_kind, search_labels, search_text, search_doc) "
+                "VALUES ("
+                + ", ".join(chunk_values[:5])
+                + ", to_tsvector('simple', "
+                + chunk_values[5]
+                + "));"
+            )
 
     for note in unit.get("footnotes", []):
         values = [
@@ -102,21 +119,8 @@ def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
             + ", ".join(values) + ");"
         )
 
-    for image in unit.get("images", []):
-        values = [
-            "v_stat_id",
-            sql_literal(image.get("filename")),
-            sql_literal(image.get("page")),
-            sql_literal(image.get("uri")),
-            sql_literal(image.get("caption")),
-        ]
-        lines.append(
-            "    INSERT INTO statistic_images "
-            "(stat_id, filename, page, uri, caption) VALUES ("
-            + ", ".join(values) + ");"
-        )
 
-
+# 파싱 결과 전체를 재실행 가능한 단일 연도 적재 트랜잭션으로 직렬화한다.
 def build_load_dml(
     data: dict,
     mode: str = "reject",
@@ -136,6 +140,7 @@ def build_load_dml(
         "DECLARE",
         "    v_pub_id BIGINT;",
         "    v_stat_id BIGINT;",
+        "    v_table_id BIGINT;",
         "BEGIN",
         "    PERFORM pg_advisory_xact_lock(7824601025);",
     ])
@@ -169,7 +174,9 @@ def build_load_dml(
         "    SET search_doc = to_tsvector(",
         "        'simple',",
         "        coalesce(title_ko,'') || ' ' || coalesce(title_en,'') || ' ' ||",
-        "        coalesce(chapter,'') || ' ' || coalesce(ref_id,'')",
+        "        coalesce(chapter,'') || ' ' || coalesce(section,'') || ' ' ||",
+        "        coalesce(level3_title,'') || ' ' || coalesce(level4_title,'') || ' ' ||",
+        "        coalesce(ref_id,'')",
         "    )",
         "    WHERE pub_id = v_pub_id;",
         "END",

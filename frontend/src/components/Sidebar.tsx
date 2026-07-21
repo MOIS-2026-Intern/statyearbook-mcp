@@ -10,6 +10,7 @@ interface SidebarProps {
   onSelectConversation: (conversationId: string) => void;
 }
 
+// 대화 목록과 새 채팅·선택·삭제 동작을 사이드바에 표시한다.
 export function Sidebar({
   conversations,
   activeConversationId,

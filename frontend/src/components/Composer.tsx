@@ -8,9 +8,11 @@ interface ComposerProps {
   onSendMessage: (message: string) => void;
 }
 
+// 메시지 입력, 모델 프로필 선택, 전송 상태를 관리하는 작성기를 렌더링한다.
 export function Composer({ disabled, modelProfile, onModelProfileChange, onSendMessage }: ComposerProps) {
   const [value, setValue] = useState("");
 
+  // 빈 입력과 비활성 상태를 제외하고 정리된 메시지를 전송한다.
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     const trimmed = value.trim();
@@ -23,6 +25,7 @@ export function Composer({ disabled, modelProfile, onModelProfileChange, onSendM
     setValue("");
   };
 
+  // Shift 없는 Enter를 줄바꿈 대신 메시지 전송으로 처리한다.
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
       submit(event);

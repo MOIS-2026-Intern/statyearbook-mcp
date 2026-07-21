@@ -7,10 +7,12 @@ interface McpTraceCardProps {
   defaultOpen?: boolean;
 }
 
+// 값이 배열이 아닌 일반 객체인지 검사한다.
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// JSON object·array로 보이는 텍스트만 파싱하고 일반 문자열은 보존한다.
 function tryParseJsonText(value: string) {
   const trimmed = value.trim();
   if (!trimmed || (trimmed[0] !== "{" && trimmed[0] !== "[")) {
@@ -24,6 +26,7 @@ function tryParseJsonText(value: string) {
   }
 }
 
+// trace payload 안의 JSON 문자열을 재귀적으로 풀어 표시용 구조로 정규화한다.
 function normalizePayloadForDisplay(payload: unknown, key?: string): unknown {
   if (typeof payload === "string") {
     const shouldParseJsonText = key === undefined || key === "text";
@@ -44,10 +47,12 @@ function normalizePayloadForDisplay(payload: unknown, key?: string): unknown {
   return payload;
 }
 
+// payload 레벨에 맞는 2칸 들여쓰기 문자열을 만든다.
 function indent(level: number) {
   return "  ".repeat(level);
 }
 
+// 여러 줄 문자열의 마지막 줄에만 구분 문자를 덧붙인다.
 function appendSuffixToLastLine(value: string, suffix: string) {
   if (!suffix) {
     return value;
@@ -58,6 +63,7 @@ function appendSuffixToLastLine(value: string, suffix: string) {
   return lines.join("\n");
 }
 
+// 단일·복수 줄 문자열을 trace payload에 적합한 형식으로 표현한다.
 function formatString(value: string, level: number) {
   if (!value.includes("\n")) {
     return JSON.stringify(value);
@@ -69,6 +75,7 @@ function formatString(value: string, level: number) {
     .join("\n")}`;
 }
 
+// 임의의 JSON 값을 계층과 줄바꿈을 보존하는 읽기 쉬운 텍스트로 바꾼다.
 function formatValue(value: unknown, level = 0): string {
   if (typeof value === "string") {
     return formatString(value, level);
@@ -111,10 +118,12 @@ function formatValue(value: unknown, level = 0): string {
   return JSON.stringify(value);
 }
 
+// trace payload를 정규화한 뒤 화면 표시용 문자열로 변환한다.
 function stringifyPayload(payload: unknown) {
   return formatValue(normalizePayloadForDisplay(payload));
 }
 
+// trace 상태에 맞는 성공·실행·오류·대기 아이콘을 표시한다.
 function StatusIcon({ status }: { status: McpTrace["status"] }) {
   if (status === "success") {
     return <CheckCircle2 size={16} />;
@@ -131,6 +140,7 @@ function StatusIcon({ status }: { status: McpTrace["status"] }) {
   return <Circle size={16} />;
 }
 
+// 값이 있는 MCP 요청 또는 응답 payload를 포맷해 표시한다.
 function PayloadBlock({ label, payload }: { label: string; payload?: unknown }) {
   if (payload === undefined) {
     return null;
@@ -144,6 +154,7 @@ function PayloadBlock({ label, payload }: { label: string; payload?: unknown }) 
   );
 }
 
+// 단일 MCP trace의 상태, 요약, 요청·응답 상세를 카드로 렌더링한다.
 export function McpTraceCard({ trace, dense = false, defaultOpen = false }: McpTraceCardProps) {
   const meta = [trace.server, trace.tool, trace.durationMs ? `${trace.durationMs}ms` : undefined]
     .filter(Boolean)

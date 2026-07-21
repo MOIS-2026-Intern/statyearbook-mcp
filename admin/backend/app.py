@@ -20,12 +20,14 @@ from admin.backend.services.load_workspace import migrate_legacy_workspaces
 from admin.backend.services.publications import PublicationService
 
 
+# 관리자 설정에 맞춰 저장소, 서비스, 라우터와 정적 화면을 한 ASGI 앱으로 조립한다.
 def create_app(config: AdminSettings = settings) -> FastAPI:
     repository = AdminJobRepository(config.db_path)
     migrate_legacy_workspaces(config.workspace_dir, repository)
     ingestion_service = YearbookIngestionService(config, repository)
     orchestrator = AdminJobOrchestrator(ingestion_service)
 
+    # 앱 종료 시 백그라운드 작업 실행기가 스레드 자원을 정리하도록 보장한다.
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
@@ -60,6 +62,7 @@ def create_app(config: AdminSettings = settings) -> FastAPI:
 app = create_app()
 
 
+# 현재 관리자 프로필의 호스트와 포트로 ASGI 서버를 실행한다.
 def run() -> None:
     uvicorn.run(
         "admin.backend.app:app",

@@ -1,0 +1,12 @@
+[
+  {"query": "2024년 사망신고 건수", "expected_ref_id": "2-1-1-5"},
+  {"query": "2024년 출생신고 건수", "expected_ref_id": "2-1-1-6"},
+  {"query": "정부24 열람건수", "expected_ref_id": "2-1-3-1"},
+  {"query": "외국어번역행정사 수", "expected_ref_id": "2-2-1-1"},
+  {"query": "정보공개 부분공개 건수", "expected_ref_id": "2-2-2-1"},
+  {"query": "국방 등 국익 침해 비공개", "expected_ref_id": "2-2-2-3"},
+  {"query": "생활공감정책 참여단 여성 인원", "expected_ref_id": "2-2-6"},
+  {"query": "재외공관 14등급 공무원", "expected_ref_id": "1-2-3-2"},
+  {"query": "중앙행정기관 차관보 수", "expected_ref_id": "1-1-1-4"},
+  {"query": "비영리민간단체 공익사업 신청 금액", "expected_ref_id": "2-2-11-3"}
+]

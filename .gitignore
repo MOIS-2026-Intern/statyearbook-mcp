@@ -1,15 +1,14 @@
 /data/*
-/outputs/
 /models/*
-!/models/.gitkeep
 /admin/state/
 /admin/workspaces/
+.DS_Store
 
 # secrets / local env
 .env
 .env.*
-!.env.example
-!/admin/.env.admin.example
+!**/.env.example
+!frontend/.env.test
 
 # python
 __pycache__/

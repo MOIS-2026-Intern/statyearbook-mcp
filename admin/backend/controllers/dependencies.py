@@ -7,10 +7,12 @@ from fastapi import Header, HTTPException, Request
 from admin.backend.config import AdminSettings
 
 
+# 요청이 속한 앱에서 동일한 관리자 설정 인스턴스를 꺼낸다.
 def admin_settings(request: Request) -> AdminSettings:
     return request.app.state.settings
 
 
+# 토큰이 구성된 배포에서 상수 시간 비교로 관리자 요청을 인증한다.
 def authorize_admin(
     request: Request,
     x_admin_token: str | None = Header(default=None),

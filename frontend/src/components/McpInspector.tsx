@@ -7,6 +7,7 @@ interface McpInspectorProps {
   onClose: () => void;
 }
 
+// 전체 MCP trace 요약과 각 요청·응답 카드를 사이드 패널에 표시한다.
 export function McpInspector({ traces, onClose }: McpInspectorProps) {
   const successCount = traces.filter((trace) => trace.status === "success").length;
 

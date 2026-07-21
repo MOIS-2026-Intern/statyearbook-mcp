@@ -6,17 +6,14 @@ import psycopg
 
 from psycopg.rows import dict_row
 
+from admin.backend.errors import PublicationsNotFoundError
+
 
 PUBLICATION_WRITE_LOCK_ID = 7_824_601_025
 
 
-class PublicationsNotFoundError(LookupError):
-    def __init__(self, pub_ids: list[int]):
-        self.pub_ids = pub_ids
-        super().__init__(f"publications not found: {pub_ids}")
-
-
 class PublicationRepository:
+    # 관리자 화면에 필요한 최소 발간물 메타데이터를 최신순으로 조회한다.
     def select_publications(self, dsn: str) -> list[dict]:
         with psycopg.connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
             cur.execute(
@@ -28,6 +25,7 @@ class PublicationRepository:
             )
             return [dict(row) for row in cur.fetchall()]
 
+    # 발간물과 종속 데이터·고아 profile을 잠금이 걸린 단일 트랜잭션으로 삭제한다.
     def delete_publications(self, dsn: str, pub_ids: list[int]) -> dict:
         selected_ids = sorted(set(pub_ids))
         with psycopg.connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
@@ -57,17 +55,25 @@ class PublicationRepository:
                     (SELECT COUNT(*) FROM selected_statistics) AS statistics,
                     (SELECT COUNT(*) FROM stat_tables t
                      JOIN selected_statistics s ON s.stat_id = t.stat_id) AS stat_tables,
+                    (SELECT COUNT(*) FROM table_search_chunks c
+                     JOIN stat_tables t ON t.table_id = c.table_id
+                     JOIN selected_statistics s ON s.stat_id = t.stat_id) AS table_search_chunks,
                     (SELECT COUNT(*) FROM footnotes f
                      JOIN selected_statistics s ON s.stat_id = f.stat_id) AS footnotes,
                     (SELECT COUNT(*) FROM contacts c
-                     JOIN selected_statistics s ON s.stat_id = c.stat_id) AS contacts,
-                    (SELECT COUNT(*) FROM statistic_images i
-                     JOIN selected_statistics s ON s.stat_id = i.stat_id) AS statistic_images
+                     JOIN selected_statistics s ON s.stat_id = c.stat_id) AS contacts
                 """,
                 (selected_ids,),
             )
             related_counts = dict(cur.fetchone())
-            source_names = [f"statistics:{row['year']}" for row in publications]
+            source_names = [
+                source_name
+                for row in publications
+                for source_name in (
+                    f"statistics:{row['year']}",
+                    f"table_search:{row['year']}",
+                )
+            ]
             cur.execute(
                 """
                 SELECT DISTINCT profile_key
@@ -77,8 +83,14 @@ class PublicationRepository:
                 SELECT DISTINCT embedding_profile_key
                 FROM statistics
                 WHERE pub_id = ANY(%s) AND embedding_profile_key IS NOT NULL
+                UNION
+                SELECT DISTINCT c.embedding_profile_key
+                FROM table_search_chunks c
+                JOIN stat_tables t ON t.table_id = c.table_id
+                JOIN statistics s ON s.stat_id = t.stat_id
+                WHERE s.pub_id = ANY(%s) AND c.embedding_profile_key IS NOT NULL
                 """,
-                (source_names, selected_ids),
+                (source_names, selected_ids, selected_ids),
             )
             profile_keys = [row["profile_key"] for row in cur.fetchall()]
 
@@ -106,6 +118,10 @@ class PublicationRepository:
                       AND NOT EXISTS (
                           SELECT 1 FROM statistics s
                           WHERE s.embedding_profile_key = p.profile_key
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM table_search_chunks c
+                          WHERE c.embedding_profile_key = p.profile_key
                       )
                       AND NOT EXISTS (
                           SELECT 1 FROM embedding_jobs j

@@ -38,7 +38,8 @@ class ModelProviderConfigTests(unittest.TestCase):
 
         self.assertFalse(settings.model_configured)
         with self.assertRaisesRegex(
-            BizRouterConfigurationError, "BIZROUTER_API_KEY is not configured"
+            BizRouterConfigurationError,
+            "STATYEARBOOK_BACKEND_BIZROUTER_API_KEY is not configured",
         ):
             create_model_gateway(settings)
 

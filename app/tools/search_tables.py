@@ -9,7 +9,10 @@ from app.tool_descriptions import SEARCH_TABLES
 
 
 STAT_SQL = """
-    SELECT stat_id, year AS publication_year, title_ko, title_en, unit, base_date, ref_id
+    SELECT stat_id, year AS publication_year, ref_id,
+           chapter_no, section_no, level3_no, level4_no,
+           chapter, section, level3_title, level4_title,
+           title_ko, title_en, unit, base_date, page_start
     FROM statistics
     WHERE stat_id = %s
 """
@@ -33,14 +36,23 @@ SOURCE_SQL = """
 
 
 # stat_id에 해당하는 통계표 원천 데이터를 조회한다.
-def fetch_table_data(stat_id: int) -> tuple[dict | None, list, list, list]:
+def fetch_table_data(
+    stat_id: int,
+    table_seq: int | None = None,
+) -> tuple[dict | None, list, list, list]:
     with connect() as conn, conn.cursor() as cur:
         cur.execute(STAT_SQL, (stat_id,))
         stat = cur.fetchone()
         if stat is None:
             return None, [], [], []
 
-        cur.execute(TABLES_SQL, (stat_id,))
+        if table_seq is None:
+            cur.execute(TABLES_SQL, (stat_id,))
+        else:
+            cur.execute(
+                TABLES_SQL.replace("ORDER BY seq", "AND seq = %s ORDER BY seq"),
+                (stat_id, table_seq),
+            )
         tables = cur.fetchall()
 
         cur.execute(FOOTNOTES_SQL, (stat_id,))
@@ -61,10 +73,19 @@ def cached_table(stat: dict, row: dict) -> dict:
         "stat_id": stat["stat_id"],
         "ref_id": stat["ref_id"],
         "publication_year": stat["publication_year"],
+        "chapter_no": stat["chapter_no"],
+        "section_no": stat["section_no"],
+        "level3_no": stat["level3_no"],
+        "level4_no": stat["level4_no"],
+        "chapter": stat["chapter"],
+        "section": stat["section"],
+        "level3_title": stat["level3_title"],
+        "level4_title": stat["level4_title"],
         "title_ko": stat["title_ko"],
         "title_en": stat["title_en"],
         "unit": stat["unit"],
         "base_date": stat["base_date"],
+        "page_start": stat["page_start"],
         "table_seq": row["seq"],
         "caption": row["caption"],
         "n_rows": row["n_rows"],
@@ -114,10 +135,19 @@ def build_response(stat: dict, tables: list, footnotes: list, source: list) -> d
         "stat_id": stat["stat_id"],
         "ref_id": stat["ref_id"],
         "publication_year": stat["publication_year"],
+        "chapter_no": stat["chapter_no"],
+        "section_no": stat["section_no"],
+        "level3_no": stat["level3_no"],
+        "level4_no": stat["level4_no"],
+        "chapter": stat["chapter"],
+        "section": stat["section"],
+        "level3_title": stat["level3_title"],
+        "level4_title": stat["level4_title"],
         "title_ko": stat["title_ko"],
         "title_en": stat["title_en"],
         "unit": stat["unit"],
         "base_date": stat["base_date"],
+        "page_start": stat["page_start"],
         "tables": [table_result(stat, row) for row in tables],
         "footnotes": [footnote_result(row) for row in footnotes],
         "source": [source_result(row) for row in source],
@@ -128,8 +158,8 @@ def build_response(stat: dict, tables: list, footnotes: list, source: list) -> d
 def register(mcp: FastMCP) -> None:
     # stat_id에 해당하는 표 본문과 메타데이터를 가져온다.
     @mcp.tool(description=SEARCH_TABLES)
-    def search_tables(stat_id: int) -> dict:
-        stat, tables, footnotes, source = fetch_table_data(stat_id)
+    def search_tables(stat_id: int, table_seq: int | None = None) -> dict:
+        stat, tables, footnotes, source = fetch_table_data(stat_id, table_seq)
         if stat is None:
             return {"found": False, "stat_id": stat_id, "tables": []}
         return build_response(stat, tables, footnotes, source)

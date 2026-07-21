@@ -2,39 +2,31 @@
 # DB 직접 저장과 DML 전용 생성 모드를 분리해 호출자가 적재 방식을 선택하게 한다.
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+
 from typing import Callable, Literal, Protocol
 
+from admin.backend.models.embedding import (
+    EmbeddingBatch,
+    EmbeddingRunResult,
+    WeightedEmbeddingTexts,
+)
 from admin.backend.repositories.embedding_jobs import EmbeddingJobRepository
-from app.embedding import EmbeddingProfile, EmbeddingProvider
-
-
-
-@dataclass(frozen=True)
-class EmbeddingBatch:
-    rows: list[dict]
-    last_source_id: int
-
-
-@dataclass(frozen=True)
-class EmbeddingRunResult:
-    job_id: int | None
-    target_count: int
-    processed_count: int
-    max_source_id: int
-    profile_key: str
-    dry_run: bool
+from utils.embedding import EmbeddingProfile, EmbeddingProvider
 
 
 class EmbeddingSource(Protocol):
     name: str
 
+    # 저장 대상 vector 열이 모델 차원을 수용하는지 검증한다.
     def select_and_validate_dimension(self, conn, expected_dimension: int) -> None:
         ...
 
+    # 실행 범위를 고정할 현재 최대 source ID를 반환한다.
     def select_max_source_id(self, conn) -> int:
         ...
 
+    # profile과 강제 실행 여부에 맞는 전체 후보 수를 반환한다.
     def select_candidate_count(
         self,
         conn,
@@ -44,6 +36,7 @@ class EmbeddingSource(Protocol):
     ) -> int:
         ...
 
+    # source ID 커서 뒤의 다음 후보 배치를 읽는다.
     def select_candidate_batch(
         self,
         conn,
@@ -55,9 +48,14 @@ class EmbeddingSource(Protocol):
     ) -> EmbeddingBatch:
         ...
 
-    def select_embedding_texts(self, rows: list[dict]) -> list[str]:
+    # 후보 행을 단일 또는 가중치 기반 모델 입력으로 변환한다.
+    def select_embedding_texts(
+        self,
+        rows: list[dict],
+    ) -> list[str] | WeightedEmbeddingTexts:
         ...
 
+    # 행과 같은 순서의 벡터를 저장 대상에 반영한다.
     def update_embedding_batch(
         self,
         conn,
@@ -69,6 +67,7 @@ class EmbeddingSource(Protocol):
 
 
 class EmbeddingRunner:
+    # provider, profile과 저장소를 하나의 배치 실행 단위로 묶는다.
     def __init__(
         self,
         provider: EmbeddingProvider,
@@ -81,6 +80,47 @@ class EmbeddingRunner:
         self.source = source
         self.jobs = jobs or EmbeddingJobRepository()
 
+    # 일반 입력은 그대로 인코딩하고 가중 입력은 합성 후 단위 벡터로 정규화한다.
+    def _encode_texts(
+        self,
+        inputs: list[str] | WeightedEmbeddingTexts,
+    ) -> list[list[float]]:
+        if isinstance(inputs, list):
+            return self.provider.encode(inputs)
+        if not inputs.groups:
+            return []
+
+        expected_count = len(inputs.groups[0][1])
+        total_weight = sum(weight for weight, _texts in inputs.groups)
+        if total_weight <= 0:
+            raise ValueError("embedding weights must sum to a positive value")
+
+        encoded_groups: list[tuple[float, list[list[float]]]] = []
+        for weight, texts in inputs.groups:
+            if weight < 0:
+                raise ValueError("embedding weights must not be negative")
+            if len(texts) != expected_count:
+                raise ValueError("weighted embedding groups must have the same row count")
+            if weight:
+                encoded_groups.append((weight / total_weight, self.provider.encode(texts)))
+
+        combined: list[list[float]] = []
+        for row_index in range(expected_count):
+            dimensions = {len(vectors[row_index]) for _weight, vectors in encoded_groups}
+            if len(dimensions) != 1:
+                raise RuntimeError("weighted embedding vectors have different dimensions")
+            dimension = dimensions.pop()
+            vector = [
+                sum(weight * vectors[row_index][index] for weight, vectors in encoded_groups)
+                for index in range(dimension)
+            ]
+            norm = math.sqrt(sum(value * value for value in vector))
+            if norm == 0:
+                raise RuntimeError("weighted embedding produced a zero vector")
+            combined.append([value / norm for value in vector])
+        return combined
+
+    # 고정된 후보 범위를 배치 처리하며 DB 저장 또는 이관용 callback 출력을 수행한다.
     def run(
         self,
         conn,
@@ -145,7 +185,7 @@ class EmbeddingRunner:
                 )
                 if not batch.rows:
                     break
-                vectors = self.provider.encode(self.source.select_embedding_texts(batch.rows))
+                vectors = self._encode_texts(self.source.select_embedding_texts(batch.rows))
                 if on_batch:
                     on_batch(batch.rows, vectors, self.profile)
                 if writes_database:

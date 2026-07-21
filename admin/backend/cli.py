@@ -1,4 +1,4 @@
-# 이 파일은 ingest, serve, promote를 제공하는 관리자 통합 CLI를 정의한다.
+# 이 파일은 ingest와 serve를 제공하는 관리자 통합 CLI를 정의한다.
 # 모든 명령은 backend service와 repository를 조합해 실행한다.
 import argparse
 import shutil
@@ -11,10 +11,10 @@ from admin.backend.models.ingestion_job import ARTIFACT_NAMES, IngestionOptions
 from admin.backend.repositories.admin_jobs import AdminJobRepository
 from admin.backend.services.load_dml import YEARBOOK_LOAD_MODES
 from admin.backend.services.load_pipeline import YearbookIngestionService
-from admin.backend.services.load_promotion import ProductionPromotionService
 from admin.backend.services.load_workspace import create_workspace, migrate_legacy_workspaces
 
 
+# 관리자 서버와 적재 명령이 공유하는 CLI 인자 구조를 만든다.
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="StatYearbook administrator")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -27,21 +27,14 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--year", type=int, required=True)
     ingest.add_argument("--title", default=None)
     ingest.add_argument("--pub-no", default=None)
-    ingest.add_argument("--target", choices=("local", "production"), default="local")
     ingest.add_argument("--mode", choices=YEARBOOK_LOAD_MODES, default="reject")
     ingest.add_argument("--embedding", choices=("bge-m3", "skip"), default="bge-m3")
-    ingest.add_argument("--extract-images", action="store_true")
     commands.add_parser("serve", help="run isolated administrator web server")
 
-    promote = commands.add_parser(
-        "promote",
-        help="apply reviewed SQL artifacts from a completed local job to production",
-    )
-    promote.add_argument("job_id")
-    promote.add_argument("--confirm-year", type=int, required=True)
     return parser
 
 
+# HWPX를 격리된 작업공간에 복사하고 전체 적재 파이프라인을 동기 실행한다.
 def run_ingestion_command(args) -> int:
     source = Path(args.hwpx_path).expanduser().resolve()
     if not source.is_file():
@@ -55,10 +48,9 @@ def run_ingestion_command(args) -> int:
         year=args.year,
         title=args.title or f"{args.year} 행정안전통계연보",
         pub_no=args.pub_no,
-        target=args.target,
+        target=settings.default_target,
         load_mode=args.mode,
         embedding_model=args.embedding,
-        extract_images=args.extract_images,
     )
     repository = AdminJobRepository(settings.db_path)
     migrate_legacy_workspaces(settings.workspace_dir, repository)
@@ -73,20 +65,7 @@ def run_ingestion_command(args) -> int:
     return 0 if result["status"] == "completed" else 1
 
 
-def run_promotion_command(args) -> int:
-    repository = AdminJobRepository(settings.db_path)
-    migrate_legacy_workspaces(settings.workspace_dir, repository)
-    result = ProductionPromotionService(settings, repository).promote(
-        args.job_id,
-        args.confirm_year,
-    )
-    print(
-        "production promotion completed: "
-        f"job={result['job_id']} year={result['year']}"
-    )
-    return 0
-
-
+# 선택한 하위 명령을 실행하고 CLI에 맞는 종료 코드와 오류 메시지를 전달한다.
 def main() -> None:
     args = build_parser().parse_args()
     if args.command == "serve":
@@ -95,11 +74,7 @@ def main() -> None:
         run_server()
         return
     try:
-        status = (
-            run_promotion_command(args)
-            if args.command == "promote"
-            else run_ingestion_command(args)
-        )
+        status = run_ingestion_command(args)
         raise SystemExit(status)
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc

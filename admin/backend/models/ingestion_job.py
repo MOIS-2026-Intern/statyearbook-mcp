@@ -13,8 +13,8 @@ class IngestionOptions:
     target: str = "local"
     load_mode: str = "reject"
     embedding_model: str = "bge-m3"
-    extract_images: bool = False
 
+    # 불변 작업 옵션을 SQLite JSON 저장에 적합한 일반 사전으로 변환한다.
     def as_dict(self) -> dict:
         return asdict(self)
 
@@ -26,6 +26,7 @@ class WorkspaceArtifactNames:
     review_markdown: str = "yearbook_review.md"
     load_dml: str = "yearbook_load.sql"
     embedding_dml: str = "yearbook_title_embeddings.sql"
+    table_embedding_dml: str = "yearbook_table_search_embeddings.sql"
 
 
 ARTIFACT_NAMES = WorkspaceArtifactNames()

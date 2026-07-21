@@ -499,6 +499,7 @@ def column_family(requested: str | None, profiles: list[dict[str, Any]]) -> list
 
 # 상위 헤더를 제거해 차트에 표시할 하위 범주 라벨을 만든다.
 def family_category_label(column: str) -> str:
+    # 다국어·복합 헤더 조각에서 사람이 읽기 좋은 표시명을 고른다.
     def part_label(part: str) -> str:
         cleaned = clean_label(part)
         bilingual = re.match(r"^(.+?)\s+(?=[A-Za-z]+(?:\s|$)|\d+s\b)", cleaned)

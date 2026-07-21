@@ -1,47 +1,76 @@
-# statyearbook-mcp
-행정안전통계연보를 챗봇으로도 만나보세요
+# 행정안전통계연보 챗봇
 
+통계연보를 검색하고 원자료 표와 Vega-Lite 시각화를 제공하는 서비스입니다.
 
-## 채팅 실행 구조
+## 서비스 구조
 
-- `frontend/`: React 채팅 UI
-- `backend/`: FastAPI REST API, 채팅 모델 provider adapter, MCP host
-- `server.py`: 기존 statyearbook MCP server
+| 디렉터리 | 배포 단위 |
+|---|---|
+| `admin/` | 연보 파싱·적재·임베딩 관리자 |
+| `app/` | 통계 도구를 제공하는 HTTP MCP 서버 |
+| `backend/` | 채팅 모델과 MCP를 연결하는 REST API |
+| `frontend/` | React 채팅 UI |
+| `db/` | pgvector PostgreSQL schema |
 
-백엔드는 프론트의 `POST /api/chat` 요청을 받아 `STATYEARBOOK_MODEL_PROVIDER`로 선택된 모델 host를 호출하고, 모델이 필요하다고 판단한 MCP 도구를 로컬 `server.py`에 stdio로 연결해 실행합니다. 기본 provider는 `openai`입니다.
+`utils/`에는 서비스 공통 프로필 로더와 순수 임베딩·벡터 유틸리티만 있습니다. `data/`, `models/`, `docs/`는 서비스 코드가 아니며 각 서비스 이미지에 복사되지 않습니다.
 
-```bash
-source .venv/bin/activate
-pip install -r requirements.txt
-python -m backend
-```
+## 환경 프로필
 
-프론트는 `frontend/.env.local`에 실제 API 주소를 지정한 뒤 실행합니다.
+모든 Python 서비스는 `APP_PROFILE=local|test|main`을 사용합니다. 기본값은 `local`, CI는 `test`, Docker 배포 이미지는 `main`입니다. 각 서비스의 `profiles/<profile>.env` 기본값보다 운영체제·배포 환경변수와 서비스별 `.env.<profile>`이 우선합니다.
 
-```bash
-VITE_API_BASE_URL=http://127.0.0.1:8000
-VITE_USE_MOCK_API=false
-```
+frontend는 Vite의 `development|test|production` 모드를 사용합니다. `test`는 저장소의 `.env.test`로 로컬 test backend를 바라보고, `production`은 빌드 인자로 URL을 받습니다.
 
 ```bash
-cd frontend
-npm run dev
+cp app/.env.example app/.env.local
+cp backend/.env.example backend/.env.local
+cp admin/.env.example admin/.env.local
+cp frontend/.env.example frontend/.env.development.local
 ```
 
-## 관리자 통합 적재
+`main` 배포에는 서비스별로 다음 값을 secret 또는 배포 환경변수로 주입하세요.
 
-새 통계연보의 파싱, 누적 적재 DML 생성·실행, 임베딩 DML 생성·실행과 검증은 관리자
-애플리케이션으로 분리되어 있습니다.
+- app: `STATYEARBOOK_APP_DSN`, 아래 BGE-M3 모델 볼륨
+- backend: `STATYEARBOOK_BACKEND_MCP_URL`, `STATYEARBOOK_BACKEND_CORS_ORIGINS`, 선택한 공급자의 `STATYEARBOOK_BACKEND_OPENAI_API_KEY` 또는 `STATYEARBOOK_BACKEND_BIZROUTER_API_KEY`
+- admin: `STATYEARBOOK_ADMIN_DSN`, `STATYEARBOOK_ADMIN_API_TOKEN`, BGE-M3 모델 볼륨
+- frontend: 이미지 빌드 인자 `VITE_BACKEND_BASE_URL`
+- db: `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
+
+BGE-M3는 Git과 이미지에 포함하지 않습니다. 호스트의 같은 모델 artifact를 app/admin의 `/service/models/bge-m3:ro`에 마운트하세요. 두 서비스는 1024차원·최대 512토큰·고정 revision을 함께 사용하며 모델 경로·배치 크기·device만 배포 환경에 맞게 설정합니다. admin의 작업 이력과 업로드 작업공간은 각각 `/service/admin/state`, `/service/admin/workspaces`에 있으므로 운영에서는 두 경로에 영속 볼륨을 연결해야 합니다.
+
+db 이미지는 **빈 PostgreSQL 데이터 볼륨을 처음 초기화할 때만** `db/schema.sql`을 자동 적용합니다. 이미 생성된 DB는 배포 전에 다음 명령으로 스키마를 갱신하세요. 스키마는 반복 적용해도 기존 데이터를 삭제하지 않습니다.
 
 ```bash
-python -m admin ingest data/2026_통계연보.hwpx --year 2026
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/schema.sql
 ```
 
-관리자 웹은 사용자용 백엔드와 다른 프로세스와 포트를 사용합니다.
+## 로컬 실행
 
 ```bash
-python -m admin serve
-# http://127.0.0.1:8100
+python -m pip install -r app/requirements.txt -r backend/requirements.txt -r admin/requirements.txt
+psql -d statyearbook_mcp -v ON_ERROR_STOP=1 -f db/schema.sql
+python -m app             # http://127.0.0.1:8001/mcp
+python -m backend         # http://127.0.0.1:8000
+python -m admin serve     # http://127.0.0.1:8100
+cd frontend && npm ci && npm run dev
 ```
 
-환경 분리와 운영 DB 활성화 절차는 `admin/README.md`를 참고하세요.
+새 연보는 관리자 화면 또는 다음 명령으로 적재합니다.
+
+```bash
+python -m admin ingest data/통계연보.hwpx --year 2026 --embedding bge-m3
+```
+
+기본 적재, 두 임베딩과 검증은 하나의 DB 트랜잭션으로 실행되어 중간 실패 시 모두 롤백됩니다.
+
+## 검증과 이미지 빌드
+
+```bash
+APP_PROFILE=test python -m unittest discover -s tests -v
+cd frontend && npm run build:test
+
+docker build -f admin/Dockerfile -t statyearbook-admin .
+docker build -f app/Dockerfile -t statyearbook-app .
+docker build -f backend/Dockerfile -t statyearbook-backend .
+docker build -f frontend/Dockerfile -t statyearbook-frontend --build-arg VITE_BACKEND_BASE_URL=https://backend.example frontend
+docker build -f db/Dockerfile -t statyearbook-db db
+```

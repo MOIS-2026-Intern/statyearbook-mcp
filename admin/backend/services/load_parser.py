@@ -1,21 +1,23 @@
 # 이 파일은 HWPX 문서 구조를 통계연보 JSON으로 파싱하고 검수용 Markdown을 렌더링한다.
-# 표 병합 셀, 본문, 주석, 연락처와 이미지 메타데이터 추출을 담당한다.
+# 목차 계층, 표 병합 셀, 본문, 주석과 연락처 추출을 담당한다.
 from __future__ import annotations
 
 import html
 import json
 import os
 import re
-import shutil
 import zipfile
 from copy import deepcopy
 from xml.etree import ElementTree as ET
 
 HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-HC = "{http://www.hancom.co.kr/hwpml/2011/core}"
 
 RE_SECTION_XML = re.compile(r"^Contents/section(\d+)\.xml$")
 RE_REFID = re.compile(r"^(\d+-\d+-\d+(?:-\d+)?)\s*(.+)$", re.S)
+RE_REFID_ANYWHERE = re.compile(r"(?<![\d-])(\d+-\d+-\d+(?:-\d+)?)(?![\d-])")
+RE_TOC_SECTION = re.compile(r"^제\s*(\d+)\s*절\s*(.+)$")
+RE_TOC_LEVEL3 = re.compile(r"^(\d+-\d+-\d+)\s+(.+)$")
+RE_TOC_LEVEL4 = re.compile(r"^(\d+)\.\s*(.+)$")
 RE_BASEDATE = re.compile(r"\(?\s*(\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.?)\s*기준\s*\)?")
 RE_UNIT = re.compile(r"\(?\s*단위\s*[:：]\s*([^)\n]+?)\s*\)")
 RE_PHONE = re.compile(r"0\d{1,2}[-)]\s?\d{3,4}[-]\d{4}")
@@ -24,7 +26,6 @@ RE_NOTE_NO = re.compile(r"^#?\s*(주\d*\))")
 RE_PAGE_SUFFIX = re.compile(r"\s+\d{1,4}$")
 RE_KO_EN_BOUNDARY = re.compile(r"(?<=[가-힣)\]）])\s*(?=[A-Z][A-Za-z])")
 RE_EN_SPLIT = re.compile(r"\s(?=(?:[A-Z][A-Za-z-]|\d+-[A-Za-z]))")
-RE_NESTED_REF = re.compile(r"\s+\d+-\d+-\d+(?:-\d+)?\s*")
 
 TEXT_SKIP_IN_PARAGRAPH = {HP + "tbl", HP + "pic", HP + "rect", HP + "ctrl"}
 TEXT_SKIP_IN_CELL = {HP + "tbl", HP + "pic", HP + "ctrl"}
@@ -36,6 +37,7 @@ HEADER_HINTS = (
 )
 
 
+# XML 정수 속성을 읽고 누락되거나 손상된 값은 지정 기본값으로 대체한다.
 def xml_int(value: str | None, default: int = 0) -> int:
     try:
         return int(value) if value is not None else default
@@ -43,6 +45,7 @@ def xml_int(value: str | None, default: int = 0) -> int:
         return default
 
 
+# HWPX 특수 공백과 줄바꿈을 일관된 저장용 텍스트로 정규화한다.
 def clean_text(value: str, keep_newlines: bool = False) -> str:
     value = (
         value.replace("\r", "\n")
@@ -57,11 +60,13 @@ def clean_text(value: str, keep_newlines: bool = False) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+# 제외할 개체를 건너뛰며 XML 하위 노드의 화면 표시 텍스트를 순서대로 모은다.
 def visible_text(element: ET.Element, skip_tags: set[str] | None = None,
                  keep_newlines: bool = False) -> str:
     skip_tags = skip_tags or set()
     out: list[str] = []
 
+    # 탭·줄바꿈·tail을 보존하면서 현재 노드 트리를 깊이 우선으로 순회한다.
     def walk(node: ET.Element) -> None:
         if node.tag in skip_tags:
             return
@@ -81,10 +86,7 @@ def visible_text(element: ET.Element, skip_tags: set[str] | None = None,
     return clean_text("".join(out), keep_newlines=keep_newlines)
 
 
-def paragraph_text(paragraph: ET.Element) -> str:
-    return visible_text(paragraph, TEXT_SKIP_IN_PARAGRAPH, keep_newlines=True)
-
-
+# 표 셀의 문단별 텍스트를 추출하고 문단 구조가 없으면 셀 전체로 대체한다.
 def cell_paragraphs(cell: ET.Element) -> list[str]:
     sublist = cell.find(HP + "subList")
     paragraph_parent = sublist if sublist is not None else cell
@@ -100,10 +102,12 @@ def cell_paragraphs(cell: ET.Element) -> list[str]:
     return [fallback] if fallback else []
 
 
+# 셀 안의 문단 경계를 줄바꿈으로 보존한 단일 문자열을 만든다.
 def norm_cell_text(paragraphs: list[str]) -> str:
     return "\n".join(paragraphs).strip()
 
 
+# 비어 있지 않은 셀 텍스트를 행 순서대로 이어 표의 검색용 평문을 만든다.
 def table_plain_text(table: dict, separator: str = " ") -> str:
     values: list[str] = []
     for row in table.get("cells", []):
@@ -114,39 +118,7 @@ def table_plain_text(table: dict, separator: str = " ") -> str:
     return clean_text(separator.join(values))
 
 
-def bin_member_for_id(zip_file: zipfile.ZipFile, binary_id: str | None) -> str | None:
-    if not binary_id:
-        return None
-    prefix = f"BinData/{binary_id}."
-    for name in zip_file.namelist():
-        if name.startswith(prefix):
-            return name
-    return None
-
-
-def parse_image(pic: ET.Element, zip_file: zipfile.ZipFile, image_dir: str | None,
-                page_number: int, image_seq: int) -> dict:
-    img = pic.find(".//" + HC + "img")
-    binary_id = img.get("binaryItemIDRef") if img is not None else None
-    member = bin_member_for_id(zip_file, binary_id)
-    filename = os.path.basename(member) if member else f"image_{image_seq:03d}"
-    uri = None
-
-    if image_dir and member:
-        os.makedirs(image_dir, exist_ok=True)
-        uri = os.path.join(image_dir, filename)
-        with zip_file.open(member) as source, open(uri, "wb") as target:
-            shutil.copyfileobj(source, target)
-
-    return {
-        "filename": filename,
-        "binary_id": binary_id,
-        "page": page_number,
-        "uri": uri,
-        "caption": None,
-    }
-
-
+# 명시된 셀 주소를 읽고 없으면 현재 순회 위치를 안전한 좌표로 사용한다.
 def cell_addr(cell: ET.Element, row_index: int, col_index: int) -> tuple[int, int]:
     addr = cell.find(HP + "cellAddr")
     if addr is None:
@@ -157,6 +129,7 @@ def cell_addr(cell: ET.Element, row_index: int, col_index: int) -> tuple[int, in
     )
 
 
+# 셀의 열·행 병합 범위를 최소 1로 보정해 반환한다.
 def cell_span(cell: ET.Element) -> tuple[int, int]:
     span = cell.find(HP + "cellSpan")
     if span is None:
@@ -167,6 +140,7 @@ def cell_span(cell: ET.Element) -> tuple[int, int]:
     )
 
 
+# 존재하는 경우 셀의 원본 너비와 높이를 정수 메타데이터로 추출한다.
 def cell_size(cell: ET.Element) -> dict:
     size = cell.find(HP + "cellSz")
     if size is None:
@@ -177,6 +151,7 @@ def cell_size(cell: ET.Element) -> dict:
     }
 
 
+# HWPX 표 XML을 병합 좌표와 출처가 보존된 구조화 표로 변환한다.
 def parse_table(tbl: ET.Element, section_name: str, page_number: int) -> dict:
     row_count = xml_int(tbl.get("rowCnt"), 0)
     col_count = xml_int(tbl.get("colCnt"), 0)
@@ -228,6 +203,7 @@ def parse_table(tbl: ET.Element, section_name: str, page_number: int) -> dict:
     return table
 
 
+# 병합 셀의 값을 차지하는 모든 좌표에 펼쳐 직사각형 문자열 grid를 만든다.
 def cells_to_grid(table: dict) -> list[list[str]]:
     n_rows = table.get("rows", 0)
     n_cols = table.get("cols", 0)
@@ -246,6 +222,7 @@ def cells_to_grid(table: dict) -> list[list[str]]:
     return grid
 
 
+# 실제 텍스트 셀이 시작되는 열만 골라 불필요한 빈 열을 제외한다.
 def active_column_indexes(table: dict) -> list[int]:
     columns = {
         cell.get("col", 0)
@@ -258,6 +235,7 @@ def active_column_indexes(table: dict) -> list[int]:
     return sorted(column for column in columns if 0 <= column < table.get("cols", 0))
 
 
+# 표 전체를 가로지르는 제목·기준일·단위 행을 데이터 행과 분리한다.
 def caption_row_indexes(table: dict) -> set[int]:
     n_cols = table.get("cols", 0)
     indexes: set[int] = set()
@@ -273,10 +251,12 @@ def caption_row_indexes(table: dict) -> set[int]:
     return indexes
 
 
+# 임의 셀 값을 비교와 헤더 생성에 쓰는 정규화된 문자열로 만든다.
 def clean_label(value: object) -> str:
     return clean_text(str(value or ""))
 
 
+# 쉼표·백분율·회계식 음수를 허용해 숫자 셀만 실수로 해석한다.
 def parse_number(value: object) -> float | None:
     text = clean_label(value)
     if not text or text in {"-", "－", "—", "–"}:
@@ -296,11 +276,13 @@ def parse_number(value: object) -> float | None:
     return float(normalized)
 
 
+# 셀 앞부분의 1800~2099년 표기를 연도로 인식한다.
 def parse_year(value: object) -> int | None:
     match = re.match(r"^\s*((?:18|19|20)\d{2})", str(value or ""))
     return int(match.group(1)) if match else None
 
 
+# 행의 비어 있지 않은 값, 숫자, 연도 개수를 헤더 판별 특징으로 계산한다.
 def numeric_profile(row: list[str]) -> tuple[int, int, int]:
     nonempty = [clean_label(value) for value in row if clean_label(value)]
     numeric_count = sum(1 for value in nonempty if parse_number(value) is not None)
@@ -308,6 +290,7 @@ def numeric_profile(row: list[str]) -> tuple[int, int, int]:
     return len(nonempty), numeric_count, year_count
 
 
+# 알려진 헤더 단어와 연도 패턴을 이용해 머리글 행 가능성을 판정한다.
 def looks_like_header_row(row: list[str]) -> bool:
     nonempty_count, numeric_count, year_count = numeric_profile(row)
     text = " ".join(clean_label(value).lower() for value in row)
@@ -318,6 +301,7 @@ def looks_like_header_row(row: list[str]) -> bool:
     return False
 
 
+# 숫자 밀도를 기준으로 실제 관측값 행 가능성을 판정한다.
 def looks_like_data_row(row: list[str]) -> bool:
     nonempty_count, numeric_count, _ = numeric_profile(row)
     if nonempty_count == 0:
@@ -325,6 +309,7 @@ def looks_like_data_row(row: list[str]) -> bool:
     return numeric_count >= 2 or (numeric_count >= 1 and nonempty_count >= 2)
 
 
+# caption과 빈 행을 제외하고 활성 열만 남긴 원본 행 번호·값 쌍을 만든다.
 def usable_grid_rows(table: dict) -> list[tuple[int, list[str]]]:
     caption_rows = set(table.get("caption_rows", []))
     active_cols = table.get("active_cols") or list(range(table.get("cols", 0)))
@@ -338,6 +323,7 @@ def usable_grid_rows(table: dict) -> list[tuple[int, list[str]]]:
     return rows
 
 
+# 첫 실제 데이터 행을 찾아 그 앞 행들을 다단 헤더로 분리할 경계를 정한다.
 def first_data_row_offset(rows: list[list[str]]) -> int:
     if len(rows) <= 1:
         return 0
@@ -349,6 +335,7 @@ def first_data_row_offset(rows: list[list[str]]) -> int:
     return 1
 
 
+# 다단 헤더의 열별 조각을 중복 없이 합쳐 평면 컬럼 이름을 만든다.
 def combine_header_rows(header_rows: list[list[str]], width: int) -> list[str]:
     headers: list[str] = []
     for col_index in range(width):
@@ -361,6 +348,7 @@ def combine_header_rows(header_rows: list[list[str]], width: int) -> list[str]:
     return unique_headers(headers)
 
 
+# 빈 헤더를 보완하고 중복 이름에 순번을 붙여 레코드 키 충돌을 막는다.
 def unique_headers(headers: list[str]) -> list[str]:
     seen: dict[str, int] = {}
     result: list[str] = []
@@ -372,12 +360,14 @@ def unique_headers(headers: list[str]) -> list[str]:
     return result
 
 
+# 페이지 중간에 반복된 헤더 행을 컬럼 일치 비율로 식별한다.
 def repeated_header(row: list[str], columns: list[str]) -> bool:
     cleaned = [clean_label(value) for value in row]
     matches = sum(1 for left, right in zip(cleaned, columns) if left == right)
     return matches >= max(2, len(columns) // 2)
 
 
+# 표 grid를 헤더·데이터 행 번호, 고유 컬럼과 레코드 목록으로 구조화한다.
 def table_records(table: dict) -> tuple[list[int], list[int], list[str], list[dict[str, str]]]:
     usable = usable_grid_rows(table)
     if not usable:
@@ -406,14 +396,17 @@ def table_records(table: dict) -> tuple[list[int], list[int], list[str], list[di
     return [index for index, _ in header_pairs], data_indexes, columns, records
 
 
+# 셀의 파이프와 줄바꿈을 Markdown 표 안에서 안전한 표현으로 바꾼다.
 def markdown_cell(value: object) -> str:
     return str(value or "").replace("|", "\\|").replace("\n", "<br>")
 
 
+# 셀 목록을 하나의 GitHub Markdown 표 행으로 직렬화한다.
 def markdown_row(cells: list[object]) -> str:
     return "| " + " | ".join(markdown_cell(cell) for cell in cells) + " |"
 
 
+# 구조화된 컬럼과 레코드를 검수 가능한 Markdown 표로 렌더링한다.
 def records_to_markdown(columns: list[str], records: list[dict[str, str]]) -> str:
     if not columns or not records:
         return ""
@@ -423,6 +416,7 @@ def records_to_markdown(columns: list[str], records: list[dict[str, str]]) -> st
     return "\n".join(lines)
 
 
+# 레코드 추론이 실패한 표를 활성 grid 기반 Markdown으로 보존한다.
 def grid_to_markdown(table: dict) -> str:
     active_cols = table.get("active_cols") or list(range(table.get("cols", 0)))
     rows = [
@@ -439,6 +433,7 @@ def grid_to_markdown(table: dict) -> str:
     return "\n".join(lines)
 
 
+# 원본 병합 범위와 추론된 헤더 셀을 보존한 HTML 표를 생성한다.
 def table_to_html(table: dict) -> str:
     header_rows = set(table.get("header_rows", []))
     out = ["<table>"]
@@ -459,6 +454,7 @@ def table_to_html(table: dict) -> str:
     return "\n".join(out)
 
 
+# 파싱 표에 grid, 행 역할, 레코드와 HTML 파생 표현을 제자리에서 추가한다.
 def enrich_table_body(table: dict) -> None:
     table["grid"] = cells_to_grid(table)
     table["active_cols"] = active_column_indexes(table)
@@ -471,22 +467,27 @@ def enrich_table_body(table: dict) -> None:
     table["html"] = table_to_html(table)
 
 
+# 단일 열 제목 표의 가장 깊은 ref_id와 뒤따르는 제목을 추출한다.
 def title_from_table(table: dict) -> tuple[str, str] | None:
     if table.get("cols") != 1:
         return None
     text = table_plain_text(table)
-    match = RE_REFID.match(text)
-    if not match:
+    matches = list(RE_REFID_ANYWHERE.finditer(text))
+    if not matches:
         return None
-    raw_title = RE_NESTED_REF.split(match.group(2).strip(), maxsplit=1)[0]
-    return match.group(1), raw_title
+    # 상위 제목과 첫 하위 제목이 한 표에 함께 있으면 실제 통계 단위인 가장
+    # 깊은(마지막) ref_id를 선택한다. 제목 자체는 아래 목차 catalog가 보정한다.
+    match = matches[-1]
+    return match.group(1), text[match.end():].strip()
 
 
+# 목차 제목 끝의 페이지 번호를 제거하고 공백을 정규화한다.
 def strip_title_page(raw_title: str) -> str:
     title = clean_text(raw_title)
     return RE_PAGE_SUFFIX.sub("", title).strip()
 
 
+# 줄바꿈과 한·영 경계 패턴으로 한국어 제목과 선택 영문 제목을 나눈다.
 def split_title(raw_title: str) -> tuple[str, str | None]:
     text = strip_title_page(raw_title)
     if "\n" in text:
@@ -498,23 +499,48 @@ def split_title(raw_title: str) -> tuple[str, str | None]:
     return text, None
 
 
-def ref_numbers(ref_id: str) -> tuple[int | None, int | None]:
+# 하이픈 ref_id를 장·절·3계층·4계층 정수 번호로 분해한다.
+def ref_numbers(
+    ref_id: str,
+) -> tuple[int | None, int | None, int | None, int | None]:
     nums = ref_id.split("-")
     chapter_no = int(nums[0]) if len(nums) > 0 and nums[0].isdigit() else None
     section_no = int(nums[1]) if len(nums) > 1 and nums[1].isdigit() else None
-    return chapter_no, section_no
+    level3_no = int(nums[2]) if len(nums) > 2 and nums[2].isdigit() else None
+    level4_no = int(nums[3]) if len(nums) > 3 and nums[3].isdigit() else None
+    return chapter_no, section_no, level3_no, level4_no
 
 
+# 본문 제목과 목차 보정값을 합쳐 새 통계 단위의 기본 구조를 만든다.
 def make_unit(ref_id: str, raw_title: str, page_start: int | None,
-              chapter: str | None, section: str | None) -> dict:
+              chapter: str | None, section: str | None,
+              toc_entry: dict | None = None) -> dict:
     title_ko, title_en = split_title(raw_title)
-    chapter_no, section_no = ref_numbers(ref_id)
+    chapter_no, section_no, level3_no, level4_no = ref_numbers(ref_id)
+    if toc_entry:
+        chapter_no = toc_entry.get("chapter_no", chapter_no)
+        section_no = toc_entry.get("section_no", section_no)
+        level3_no = toc_entry.get("level3_no", level3_no)
+        level4_no = toc_entry.get("level4_no", level4_no)
+        chapter = toc_entry.get("chapter") or chapter
+        section = toc_entry.get("section") or section
+        level3_title = toc_entry.get("level3_title") or title_ko or ref_id
+        level4_title = toc_entry.get("level4_title") or level3_title
+        title_ko = level4_title
+        title_en = toc_entry.get("level4_title_en") or title_en
+    else:
+        level3_title = title_ko or ref_id
+        level4_title = title_ko or level3_title
     return {
         "ref_id": ref_id,
         "chapter_no": chapter_no,
         "section_no": section_no,
+        "level3_no": level3_no,
+        "level4_no": level4_no,
         "chapter": chapter,
         "section": section,
+        "level3_title": level3_title,
+        "level4_title": level4_title,
         "title_ko": title_ko or ref_id,
         "title_en": title_en,
         "unit": None,
@@ -523,16 +549,17 @@ def make_unit(ref_id: str, raw_title: str, page_start: int | None,
         "tables": [],
         "footnotes": [],
         "contacts": [],
-        "images": [],
     }
 
 
+# 최소 2×2이며 텍스트가 하나 이상 있는 표만 통계 데이터 표로 인정한다.
 def data_table(table: dict) -> bool:
     if table.get("cols", 0) < 2 or table.get("rows", 0) < 2:
         return False
     return any(clean_label(cell.get("text")) for row in table.get("cells", []) for cell in row)
 
 
+# caption 또는 표 평문에서 기준일, 단위와 표시용 caption을 추출한다.
 def extract_meta_from_table(table: dict) -> tuple[str | None, str | None, str | None]:
     caption_parts = []
     for row_index in table.get("caption_rows", []):
@@ -550,6 +577,7 @@ def extract_meta_from_table(table: dict) -> tuple[str | None, str | None, str | 
     return base_date, unit_name, caption
 
 
+# 원본 표 파생 구조와 최선의 Markdown 표현을 저장용 레코드로 묶는다.
 def table_record(table: dict, seq: int, caption: str | None) -> dict:
     body = deepcopy(table)
     table_md = records_to_markdown(body.get("columns", []), body.get("records", []))
@@ -565,6 +593,7 @@ def table_record(table: dict, seq: int, caption: str | None) -> dict:
     }
 
 
+# 통계 단위의 기준일과 단위를 최초로 발견한 표 값으로만 채운다.
 def apply_table_meta(unit: dict, base_date: str | None, unit_name: str | None) -> None:
     if base_date and not unit.get("base_date"):
         unit["base_date"] = base_date
@@ -572,12 +601,14 @@ def apply_table_meta(unit: dict, base_date: str | None, unit_name: str | None) -
         unit["unit"] = unit_name
 
 
+# 표 메타데이터를 통계 단위에 반영하고 다음 순번의 표 레코드를 추가한다.
 def add_table(unit: dict, table: dict) -> None:
     base_date, unit_name, caption = extract_meta_from_table(table)
     apply_table_meta(unit, base_date, unit_name)
     unit["tables"].append(table_record(table, len(unit["tables"]) + 1, caption))
 
 
+# 문장에서 국내 전화번호를 찾아 일관된 하이픈 형식으로 정규화한다.
 def norm_phone(text: str) -> str | None:
     match = RE_PHONE.search(text)
     if not match:
@@ -586,6 +617,7 @@ def norm_phone(text: str) -> str | None:
     return re.sub(r"-+", "-", phone).strip("-")
 
 
+# 슬래시 뒤 출처 설명과 URL을 담당자 문구에서 분리한다.
 def split_source(text: str) -> tuple[str, str | None, str | None]:
     if "/" not in text:
         return text, None, None
@@ -596,6 +628,7 @@ def split_source(text: str) -> tuple[str, str | None, str | None]:
     return left.strip(), source_system, source_url
 
 
+# 전화번호 앞 담당자 문구를 부서와 담당자 이름으로 나눈다.
 def split_officer(text: str, phone: str | None) -> tuple[str | None, str | None]:
     who = RE_PHONE.split(text)[0].strip() if phone else text
     who = who.strip(" ()")
@@ -605,6 +638,7 @@ def split_officer(text: str, phone: str | None) -> tuple[str | None, str | None]
     return parts[0], " ".join(parts[1:]) or None
 
 
+# 별표로 시작하는 출처 문단을 부서·담당자·전화·시스템 필드로 구조화한다.
 def parse_contact(text: str) -> dict:
     body = text.lstrip("*").strip()
     phone = norm_phone(body)
@@ -619,10 +653,12 @@ def parse_contact(text: str) -> dict:
     }
 
 
+# 문단이 통계 주석 번호 패턴으로 시작하는지 판별한다.
 def is_note_text(text: str) -> bool:
     return text.startswith("#주") or bool(RE_NOTE_NO.match(text))
 
 
+# 주석 문단을 순번, 선택 주석 번호와 정리된 본문으로 변환한다.
 def note_record(text: str, seq: int) -> dict:
     match = RE_NOTE_NO.match(text)
     return {
@@ -632,6 +668,7 @@ def note_record(text: str, seq: int) -> dict:
     }
 
 
+# 본문 문단을 주석·연속 주석·출처로 분류해 현재 통계 단위에 반영한다.
 def handle_paragraph(unit: dict, text: str, pending_note: dict | None) -> dict | None:
     if not text:
         return pending_note
@@ -649,6 +686,7 @@ def handle_paragraph(unit: dict, text: str, pending_note: dict | None) -> dict |
     return None
 
 
+# 제목용 단일 열 표에서 현재 장·절 문맥을 갱신하되 통계 ref 표는 제외한다.
 def context_from_title_table(table: dict, chapter: str | None,
                              section: str | None) -> tuple[str | None, str | None]:
     if table.get("cols") != 1:
@@ -663,11 +701,176 @@ def context_from_title_table(table: dict, chapter: str | None,
     return chapter, section
 
 
+# 목차 행이 장 번호와 한·영 제목으로 구성됐는지 해석한다.
+def toc_chapter_row(row: list[dict]) -> tuple[int, str, str | None] | None:
+    values = [clean_text(cell.get("text") or "", keep_newlines=True) for cell in row]
+    if len(values) < 2 or not values[0].isdigit():
+        return None
+    raw_title = next((value for value in values[1:] if value), "")
+    if not raw_title:
+        return None
+    title_ko, title_en = split_title(raw_title)
+    return int(values[0]), title_ko, title_en
+
+
+# 목차 표를 순회해 각 leaf ref_id의 장·절·3·4계층 제목 catalog를 만든다.
+def build_toc_catalog(tables: list[dict]) -> dict[str, dict]:
+    """목차 표에서 실제 통계 leaf별 4계층 제목 catalog를 만든다."""
+    chapters: dict[int, dict] = {}
+    groups: dict[str, dict] = {}
+    entries: dict[str, dict] = {}
+    chapter_no: int | None = None
+    chapter: str | None = None
+    section_no: int | None = None
+    section: str | None = None
+    current_group: dict | None = None
+    pending: dict | None = None
+
+    # 여러 셀·줄에 걸친 목차 제목을 합쳐 한·영 제목으로 정규화한다.
+    def normalized_pending_title(parts: list[str]) -> tuple[str, str | None]:
+        raw = " ".join(strip_title_page(part) for part in parts if part)
+        return split_title(raw)
+
+    # 대기 중인 목차 항목을 현재 계층 상태와 최종 catalog에 확정한다.
+    def finish_pending() -> None:
+        nonlocal pending, section_no, section, current_group
+        if not pending:
+            return
+        title_ko, title_en = normalized_pending_title(pending["parts"])
+        if pending["kind"] == "section":
+            section_no = pending["number"]
+            section = title_ko
+            current_group = None
+        elif pending["kind"] == "level3":
+            ref_id = pending["ref_id"]
+            ref_chapter, ref_section, level3_no, _ = ref_numbers(ref_id)
+            current_group = {
+                "ref_id": ref_id,
+                "chapter_no": ref_chapter or chapter_no,
+                "section_no": ref_section or section_no,
+                "level3_no": level3_no,
+                "chapter": (chapters.get(ref_chapter or chapter_no or -1) or {}).get(
+                    "title", chapter
+                ),
+                "section": section,
+                "level3_title": title_ko or ref_id,
+                "level3_title_en": title_en,
+                "children": [],
+            }
+            groups[ref_id] = current_group
+        elif pending["kind"] == "level4" and current_group:
+            level4_no = pending["number"]
+            ref_id = f'{current_group["ref_id"]}-{level4_no}'
+            entry = {
+                key: value for key, value in current_group.items() if key != "children"
+            }
+            entry.update({
+                "ref_id": ref_id,
+                "level4_no": level4_no,
+                "level4_title": title_ko or current_group["level3_title"],
+                "level4_title_en": title_en,
+            })
+            entries[ref_id] = entry
+            current_group["children"].append(ref_id)
+        pending = None
+
+    # 목차 한 줄을 절·3계층·4계층 시작 또는 이전 제목의 연속 줄로 소비한다.
+    def consume_line(line: str) -> None:
+        nonlocal pending
+        line = clean_text(line)
+        if not line:
+            return
+        match = RE_TOC_SECTION.match(line)
+        if match:
+            finish_pending()
+            pending = {
+                "kind": "section",
+                "number": int(match.group(1)),
+                "parts": [match.group(2)],
+            }
+            return
+        match = RE_TOC_LEVEL3.match(line)
+        if match:
+            finish_pending()
+            pending = {
+                "kind": "level3",
+                "ref_id": match.group(1),
+                "parts": [match.group(2)],
+            }
+            return
+        match = RE_TOC_LEVEL4.match(line)
+        if match:
+            finish_pending()
+            pending = {
+                "kind": "level4",
+                "number": int(match.group(1)),
+                "parts": [match.group(2)],
+            }
+            return
+        if pending:
+            pending["parts"].append(line)
+
+    for table in tables:
+        for row in table.get("cells", []):
+            chapter_record = toc_chapter_row(row)
+            if chapter_record:
+                finish_pending()
+                chapter_no, chapter, chapter_en = chapter_record
+                chapters[chapter_no] = {
+                    "title": chapter,
+                    "title_en": chapter_en,
+                }
+                section_no = None
+                section = None
+                current_group = None
+                continue
+            for cell in row:
+                text = cell.get("text") or ""
+                if not ("제" in text or RE_REFID_ANYWHERE.search(text)):
+                    continue
+                for line in text.splitlines():
+                    consume_line(line)
+    finish_pending()
+
+    # 하위 항목이 없는 n-n-n은 그 자체가 실제 표 제목이다. 이때 4계층 제목은
+    # 요구사항대로 3계층 제목과 동일하게 채우고 level4_no만 NULL로 둔다.
+    for ref_id, group in groups.items():
+        if group["children"]:
+            continue
+        entry = {key: value for key, value in group.items() if key != "children"}
+        entry.update({
+            "level4_no": None,
+            "level4_title": group["level3_title"],
+            "level4_title_en": group.get("level3_title_en"),
+        })
+        entries[ref_id] = entry
+    return entries
+
+
+# 문서 앞부분에서 장 행과 ref_id를 함께 가진 연속 목차 표만 수집한다.
+def toc_tables(hwpx_path: str) -> list[dict]:
+    tables: list[dict] = []
+    for block in iter_blocks(hwpx_path):
+        if block["type"] != "table":
+            continue
+        table = block["table"]
+        has_chapter_row = any(toc_chapter_row(row) for row in table.get("cells", []))
+        has_toc_refs = bool(RE_REFID_ANYWHERE.search(table_plain_text(table)))
+        if has_chapter_row and has_toc_refs:
+            tables.append(table)
+            continue
+        if tables:
+            break
+    return tables
+
+
+# 데이터 표가 하나 이상 있는 완성 통계 단위만 결과에 추가한다.
 def append_unit(units: list[dict], unit: dict | None) -> None:
     if unit and unit.get("tables"):
         units.append(unit)
 
 
+# HWPX ZIP 안의 본문 section XML 이름을 숫자 순서로 정렬한다.
 def section_names(zip_file: zipfile.ZipFile) -> list[str]:
     names = []
     for name in zip_file.namelist():
@@ -676,8 +879,8 @@ def section_names(zip_file: zipfile.ZipFile) -> list[str]:
     return sorted(names, key=lambda value: int(RE_SECTION_XML.match(value).group(1)))
 
 
-def iter_blocks(hwpx_path: str, image_dir: str | None = None):
-    image_seq = 0
+# HWPX 본문을 원래 순서와 페이지 번호가 붙은 문단·표 block으로 스트리밍한다.
+def iter_blocks(hwpx_path: str):
     page_number = 1
     with zipfile.ZipFile(hwpx_path) as zip_file:
         for section_name in section_names(zip_file):
@@ -688,6 +891,7 @@ def iter_blocks(hwpx_path: str, image_dir: str | None = None):
 
                 text_parts: list[str] = []
 
+                # 표·이미지 경계 전까지 모인 run 텍스트를 하나의 문단 block으로 비운다.
                 def flush_text():
                     if not text_parts:
                         return None
@@ -712,12 +916,7 @@ def iter_blocks(hwpx_path: str, image_dir: str | None = None):
                             block = flush_text()
                             if block:
                                 yield block
-                            image_seq += 1
-                            yield {
-                                "type": "image",
-                                "image": parse_image(child, zip_file, image_dir, page_number, image_seq),
-                                "pageNumber": page_number,
-                            }
+                            # 통계표 파싱에는 이미지를 사용하지 않으며 산출물/DB에도 저장하지 않는다.
                         elif child.tag not in TEXT_SKIP_IN_PARAGRAPH:
                             text_parts.append(visible_text(child, TEXT_SKIP_IN_PARAGRAPH, keep_newlines=True))
 
@@ -726,6 +925,7 @@ def iter_blocks(hwpx_path: str, image_dir: str | None = None):
                     yield block
 
 
+# 호출자가 덮어쓸 수 있는 기본 발간물 메타데이터를 페이지 수와 함께 만든다.
 def default_publication(page_count: int | None) -> dict:
     return {
         "year": 2025,
@@ -735,6 +935,7 @@ def default_publication(page_count: int | None) -> dict:
     }
 
 
+# 모든 section의 명시적 pageBreak를 합산해 문서 페이지 수를 추정한다.
 def estimate_page_count(hwpx_path: str) -> int | None:
     page_count = 1
     with zipfile.ZipFile(hwpx_path) as zip_file:
@@ -744,9 +945,9 @@ def estimate_page_count(hwpx_path: str) -> int | None:
     return page_count
 
 
+# HWPX 목차와 본문 block을 결합해 적재 가능한 발간물·통계 JSON을 생성한다.
 def parse(
     hwpx_path: str,
-    image_dir: str | None = None,
     publication_year: int | None = None,
     publication_title: str | None = None,
     publication_no: str | None = None,
@@ -756,8 +957,9 @@ def parse(
     pending_note: dict | None = None
     chapter: str | None = None
     section: str | None = None
+    toc_catalog = build_toc_catalog(toc_tables(hwpx_path))
 
-    for block in iter_blocks(hwpx_path, image_dir):
+    for block in iter_blocks(hwpx_path):
         block_type = block["type"]
 
         if block_type == "table":
@@ -766,7 +968,14 @@ def parse(
             if title:
                 append_unit(units, current)
                 ref_id, raw_title = title
-                current = make_unit(ref_id, raw_title, block.get("pageNumber"), chapter, section)
+                current = make_unit(
+                    ref_id,
+                    raw_title,
+                    block.get("pageNumber"),
+                    chapter,
+                    section,
+                    toc_catalog.get(ref_id),
+                )
                 pending_note = None
                 continue
 
@@ -781,8 +990,6 @@ def parse(
 
         if block_type == "paragraph":
             pending_note = handle_paragraph(current, block.get("text") or "", pending_note)
-        elif block_type == "image":
-            current["images"].append(block["image"])
 
     append_unit(units, current)
     publication = default_publication(estimate_page_count(hwpx_path))
@@ -801,7 +1008,8 @@ def parse(
             "source": os.path.abspath(hwpx_path),
             "parser": "admin/backend/services/load_parser.py",
             "method": (
-                "HWPX ZIP의 Contents/section*.xml을 문서 순서대로 순회하고, "
+                "HWPX 목차에서 chapter/section/3계층/4계층 제목 catalog를 만든 뒤 "
+                "Contents/section*.xml 본문의 ref_id와 매칭하고, "
                 "hp:cellAddr/hp:cellSpan으로 병합 셀을 보존한 뒤 grid/records/markdown을 생성"
             ),
         },
@@ -809,6 +1017,7 @@ def parse(
     }
 
 
+# 파싱 결과를 통계·표·주석·출처 순서의 사람이 검수할 Markdown으로 렌더링한다.
 def parsed_to_markdown(data: dict) -> str:
     out = [f"# {data['publication']['title']}", ""]
     for unit in data.get("statistics", []):
@@ -853,12 +1062,14 @@ def parsed_to_markdown(data: dict) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+# 대상 디렉터리를 보장하고 파싱 결과를 읽기 쉬운 UTF-8 JSON으로 저장한다.
 def write_json(path: str, data: dict) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8") as file:
         json.dump(data, file, ensure_ascii=False, indent=2)
 
 
+# 대상 디렉터리를 보장하고 주어진 검수 텍스트를 UTF-8로 저장한다.
 def write_text(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8") as file:
