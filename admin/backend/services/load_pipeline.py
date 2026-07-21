@@ -61,11 +61,15 @@ class YearbookIngestionService:
                 raise ValueError("유효한 HWPX 파일이 아닙니다.")
             dsn = self.settings.target_dsn(options.target)
 
-            self._step(job_id, "parse", 10, "HWPX 구조와 통계표를 파싱하고 있습니다.")
-            image_dir = str(workspace / "images") if options.extract_images else None
+            self._step(job_id, "schema_ddl", 7, f"{options.target} DB에 최종 schema를 적용하고 있습니다.")
+            schema_sql = artifact_service.save_schema_ddl()
+            artifacts["schema_ddl"] = schema_sql.name
+            self.store.update_job(job_id, artifacts=artifacts)
+            self.dml_repository.execute_dml_file(dsn, schema_sql)
+
+            self._step(job_id, "parse", 12, "HWPX 구조와 통계표를 파싱하고 있습니다.")
             parsed = parse(
                 str(input_path),
-                image_dir=image_dir,
                 publication_year=options.year,
                 publication_title=options.title,
                 publication_no=options.pub_no,

@@ -10,13 +10,14 @@ import {
 const ingestionStages = [
   ["validate", "파일 확인", "형식·대상 환경 검증"],
   ["parse", "구조 파싱", "JSON·검수 Markdown 생성"],
+  ["schema_ddl", "Schema 적용", "db/schema.sql 실행 및 로컬·운영 공통 DDL 보존"],
   ["load_dml", "적재 SQL 생성", "누적 적재 DML 보존"],
   ["load_db", "DB 적재", "선택 연도 트랜잭션 실행"],
   ["embedding_dml", "임베딩 SQL 생성", "제목 벡터를 DML 산출물로 보존"],
   ["embedding_db", "임베딩 DB 적재", "생성된 임베딩 DML 실행"],
   ["verify", "결과 검증", "건수·모델 profile 확인"],
 ];
-const artifactLabels = { parsed_json:"파싱 JSON", review_markdown:"검수 Markdown", load_dml:"적재 SQL", embedding_dml:"임베딩 SQL" };
+const artifactLabels = { parsed_json:"파싱 JSON", review_markdown:"검수 Markdown", schema_ddl:"Schema SQL", load_dml:"적재 SQL", embedding_dml:"임베딩 SQL" };
 let currentJobId = null;
 let pollTimer = null;
 const $ = (id) => document.getElementById(id);
@@ -109,7 +110,7 @@ $("ingestionForm").addEventListener("submit", async (event) => {
   event.preventDefault(); $("formError").hidden = true; $("submitButton").disabled = true;
   const form = new FormData(); const file = $("fileInput").files[0];
   if (!file) { $("formError").hidden = false; $("formError").textContent = "HWPX 파일을 선택하세요."; $("submitButton").disabled = false; return; }
-  form.append("file", file); form.append("year", $("yearInput").value); form.append("title", $("titleInput").value); form.append("pub_no", $("pubNoInput").value); form.append("target", $("targetSelect").value); form.append("load_mode", $("loadModeSelect").value); form.append("embedding_model", document.querySelector("input[name=embedding_model]:checked").value); form.append("extract_images", $("extractImages").checked);
+  form.append("file", file); form.append("year", $("yearInput").value); form.append("title", $("titleInput").value); form.append("pub_no", $("pubNoInput").value); form.append("target", $("targetSelect").value); form.append("load_mode", $("loadModeSelect").value); form.append("embedding_model", document.querySelector("input[name=embedding_model]:checked").value);
   try { const job = await (await api(`${adminApiBasePath}/jobs`, { method:"POST", body:form })).json(); renderJob(job); await loadJobs(); pollTimer = setInterval(() => loadJob(job.job_id).catch(console.error), 1000); }
   catch (error) { $("formError").hidden = false; $("formError").textContent = error.message; $("submitButton").disabled = false; }
 });

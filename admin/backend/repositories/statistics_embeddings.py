@@ -48,7 +48,7 @@ class StatisticsEmbeddingRepository:
         if actual_type != expected_type:
             raise EmbeddingConfigurationError(
                 f"statistics.embedding is {actual_type}, but the configured model requires "
-                f"{expected_type}; apply the pgvector migration before re-embedding"
+                f"{expected_type}; apply db/schema.sql before re-embedding"
             )
 
     def select_max_source_id(self, conn) -> int:

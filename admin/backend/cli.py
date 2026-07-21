@@ -30,7 +30,6 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--target", choices=("local", "production"), default="local")
     ingest.add_argument("--mode", choices=YEARBOOK_LOAD_MODES, default="reject")
     ingest.add_argument("--embedding", choices=("bge-m3", "skip"), default="bge-m3")
-    ingest.add_argument("--extract-images", action="store_true")
     commands.add_parser("serve", help="run isolated administrator web server")
 
     promote = commands.add_parser(
@@ -58,7 +57,6 @@ def run_ingestion_command(args) -> int:
         target=args.target,
         load_mode=args.mode,
         embedding_model=args.embedding,
-        extract_images=args.extract_images,
     )
     repository = AdminJobRepository(settings.db_path)
     migrate_legacy_workspaces(settings.workspace_dir, repository)

@@ -43,8 +43,12 @@ def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
         sql_literal(unit.get("ref_id")),
         sql_literal(unit.get("chapter_no")),
         sql_literal(unit.get("section_no")),
+        sql_literal(unit.get("level3_no")),
+        sql_literal(unit.get("level4_no")),
         sql_literal(unit.get("chapter")),
         sql_literal(unit.get("section")),
+        sql_literal(unit.get("level3_title")),
+        sql_literal(unit.get("level4_title")),
         sql_literal(unit.get("title_ko")),
         sql_literal(unit.get("title_en")),
         sql_literal(unit.get("unit")),
@@ -53,7 +57,8 @@ def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
     ]
     lines.extend([
         "    INSERT INTO statistics (",
-        "        pub_id, year, ref_id, chapter_no, section_no, chapter, section,",
+        "        pub_id, year, ref_id, chapter_no, section_no, level3_no, level4_no,",
+        "        chapter, section, level3_title, level4_title,",
         "        title_ko, title_en, unit, base_date, page_start",
         "    ) VALUES (" + ", ".join(stat_values) + ")",
         "    RETURNING stat_id INTO v_stat_id;",
@@ -99,20 +104,6 @@ def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
         lines.append(
             "    INSERT INTO contacts "
             "(stat_id, dept, officer, phone, source_system, source_url) VALUES ("
-            + ", ".join(values) + ");"
-        )
-
-    for image in unit.get("images", []):
-        values = [
-            "v_stat_id",
-            sql_literal(image.get("filename")),
-            sql_literal(image.get("page")),
-            sql_literal(image.get("uri")),
-            sql_literal(image.get("caption")),
-        ]
-        lines.append(
-            "    INSERT INTO statistic_images "
-            "(stat_id, filename, page, uri, caption) VALUES ("
             + ", ".join(values) + ");"
         )
 

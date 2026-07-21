@@ -1,4 +1,4 @@
-# 이 파일은 작업별 파싱 결과, 검수 문서와 두 종류 DML 산출물을 저장한다.
+# 이 파일은 작업별 schema, 파싱 결과, 검수 문서와 두 종류 DML 산출물을 저장한다.
 # workspace 파일명 규칙을 통합 적재 service에서 분리한다.
 from pathlib import Path
 
@@ -6,6 +6,7 @@ from admin.backend.models.ingestion_job import ARTIFACT_NAMES
 from admin.backend.services.load_dml import build_load_dml
 from admin.backend.services.load_embedding_dml import TitleEmbeddingDmlWriter
 from admin.backend.services.load_parser import parsed_to_markdown, write_json, write_text
+from admin.backend.services.load_schema import build_schema_ddl
 from app.embedding import EmbeddingProfile
 
 
@@ -27,6 +28,11 @@ class YearbookArtifactService:
         dml = build_load_dml(parsed, load_mode)
         path = self.workspace / ARTIFACT_NAMES.load_dml
         path.write_text(dml, encoding="utf-8")
+        return path
+
+    def save_schema_ddl(self) -> Path:
+        path = self.workspace / ARTIFACT_NAMES.schema_ddl
+        path.write_text(build_schema_ddl(), encoding="utf-8")
         return path
 
     def embedding_dml_writer(self, profile: EmbeddingProfile) -> TitleEmbeddingDmlWriter:

@@ -31,8 +31,10 @@ class ProductionPromotionService:
 
         dsn = self.settings.target_dsn("production")
         workspace = self.settings.workspace_dir / job_id
+        schema_ddl_path = workspace / job["artifacts"]["schema_ddl"]
         load_dml_path = workspace / job["artifacts"]["load_dml"]
         embedding_dml_name = job["artifacts"].get("embedding_dml")
+        self.dml_repository.execute_dml_file(dsn, schema_ddl_path)
         self.dml_repository.execute_dml_file(dsn, load_dml_path)
         if embedding_dml_name:
             self.dml_repository.execute_dml_file(dsn, workspace / embedding_dml_name)

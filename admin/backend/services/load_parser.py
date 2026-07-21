@@ -1,21 +1,23 @@
 # 이 파일은 HWPX 문서 구조를 통계연보 JSON으로 파싱하고 검수용 Markdown을 렌더링한다.
-# 표 병합 셀, 본문, 주석, 연락처와 이미지 메타데이터 추출을 담당한다.
+# 목차 계층, 표 병합 셀, 본문, 주석과 연락처 추출을 담당한다.
 from __future__ import annotations
 
 import html
 import json
 import os
 import re
-import shutil
 import zipfile
 from copy import deepcopy
 from xml.etree import ElementTree as ET
 
 HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-HC = "{http://www.hancom.co.kr/hwpml/2011/core}"
 
 RE_SECTION_XML = re.compile(r"^Contents/section(\d+)\.xml$")
 RE_REFID = re.compile(r"^(\d+-\d+-\d+(?:-\d+)?)\s*(.+)$", re.S)
+RE_REFID_ANYWHERE = re.compile(r"(?<![\d-])(\d+-\d+-\d+(?:-\d+)?)(?![\d-])")
+RE_TOC_SECTION = re.compile(r"^제\s*(\d+)\s*절\s*(.+)$")
+RE_TOC_LEVEL3 = re.compile(r"^(\d+-\d+-\d+)\s+(.+)$")
+RE_TOC_LEVEL4 = re.compile(r"^(\d+)\.\s*(.+)$")
 RE_BASEDATE = re.compile(r"\(?\s*(\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.?)\s*기준\s*\)?")
 RE_UNIT = re.compile(r"\(?\s*단위\s*[:：]\s*([^)\n]+?)\s*\)")
 RE_PHONE = re.compile(r"0\d{1,2}[-)]\s?\d{3,4}[-]\d{4}")
@@ -24,7 +26,6 @@ RE_NOTE_NO = re.compile(r"^#?\s*(주\d*\))")
 RE_PAGE_SUFFIX = re.compile(r"\s+\d{1,4}$")
 RE_KO_EN_BOUNDARY = re.compile(r"(?<=[가-힣)\]）])\s*(?=[A-Z][A-Za-z])")
 RE_EN_SPLIT = re.compile(r"\s(?=(?:[A-Z][A-Za-z-]|\d+-[A-Za-z]))")
-RE_NESTED_REF = re.compile(r"\s+\d+-\d+-\d+(?:-\d+)?\s*")
 
 TEXT_SKIP_IN_PARAGRAPH = {HP + "tbl", HP + "pic", HP + "rect", HP + "ctrl"}
 TEXT_SKIP_IN_CELL = {HP + "tbl", HP + "pic", HP + "ctrl"}
@@ -112,39 +113,6 @@ def table_plain_text(table: dict, separator: str = " ") -> str:
             if text:
                 values.append(text)
     return clean_text(separator.join(values))
-
-
-def bin_member_for_id(zip_file: zipfile.ZipFile, binary_id: str | None) -> str | None:
-    if not binary_id:
-        return None
-    prefix = f"BinData/{binary_id}."
-    for name in zip_file.namelist():
-        if name.startswith(prefix):
-            return name
-    return None
-
-
-def parse_image(pic: ET.Element, zip_file: zipfile.ZipFile, image_dir: str | None,
-                page_number: int, image_seq: int) -> dict:
-    img = pic.find(".//" + HC + "img")
-    binary_id = img.get("binaryItemIDRef") if img is not None else None
-    member = bin_member_for_id(zip_file, binary_id)
-    filename = os.path.basename(member) if member else f"image_{image_seq:03d}"
-    uri = None
-
-    if image_dir and member:
-        os.makedirs(image_dir, exist_ok=True)
-        uri = os.path.join(image_dir, filename)
-        with zip_file.open(member) as source, open(uri, "wb") as target:
-            shutil.copyfileobj(source, target)
-
-    return {
-        "filename": filename,
-        "binary_id": binary_id,
-        "page": page_number,
-        "uri": uri,
-        "caption": None,
-    }
 
 
 def cell_addr(cell: ET.Element, row_index: int, col_index: int) -> tuple[int, int]:
@@ -475,11 +443,13 @@ def title_from_table(table: dict) -> tuple[str, str] | None:
     if table.get("cols") != 1:
         return None
     text = table_plain_text(table)
-    match = RE_REFID.match(text)
-    if not match:
+    matches = list(RE_REFID_ANYWHERE.finditer(text))
+    if not matches:
         return None
-    raw_title = RE_NESTED_REF.split(match.group(2).strip(), maxsplit=1)[0]
-    return match.group(1), raw_title
+    # 상위 제목과 첫 하위 제목이 한 표에 함께 있으면 실제 통계 단위인 가장
+    # 깊은(마지막) ref_id를 선택한다. 제목 자체는 아래 목차 catalog가 보정한다.
+    match = matches[-1]
+    return match.group(1), text[match.end():].strip()
 
 
 def strip_title_page(raw_title: str) -> str:
@@ -498,23 +468,46 @@ def split_title(raw_title: str) -> tuple[str, str | None]:
     return text, None
 
 
-def ref_numbers(ref_id: str) -> tuple[int | None, int | None]:
+def ref_numbers(
+    ref_id: str,
+) -> tuple[int | None, int | None, int | None, int | None]:
     nums = ref_id.split("-")
     chapter_no = int(nums[0]) if len(nums) > 0 and nums[0].isdigit() else None
     section_no = int(nums[1]) if len(nums) > 1 and nums[1].isdigit() else None
-    return chapter_no, section_no
+    level3_no = int(nums[2]) if len(nums) > 2 and nums[2].isdigit() else None
+    level4_no = int(nums[3]) if len(nums) > 3 and nums[3].isdigit() else None
+    return chapter_no, section_no, level3_no, level4_no
 
 
 def make_unit(ref_id: str, raw_title: str, page_start: int | None,
-              chapter: str | None, section: str | None) -> dict:
+              chapter: str | None, section: str | None,
+              toc_entry: dict | None = None) -> dict:
     title_ko, title_en = split_title(raw_title)
-    chapter_no, section_no = ref_numbers(ref_id)
+    chapter_no, section_no, level3_no, level4_no = ref_numbers(ref_id)
+    if toc_entry:
+        chapter_no = toc_entry.get("chapter_no", chapter_no)
+        section_no = toc_entry.get("section_no", section_no)
+        level3_no = toc_entry.get("level3_no", level3_no)
+        level4_no = toc_entry.get("level4_no", level4_no)
+        chapter = toc_entry.get("chapter") or chapter
+        section = toc_entry.get("section") or section
+        level3_title = toc_entry.get("level3_title") or title_ko or ref_id
+        level4_title = toc_entry.get("level4_title") or level3_title
+        title_ko = level4_title
+        title_en = toc_entry.get("level4_title_en") or title_en
+    else:
+        level3_title = title_ko or ref_id
+        level4_title = title_ko or level3_title
     return {
         "ref_id": ref_id,
         "chapter_no": chapter_no,
         "section_no": section_no,
+        "level3_no": level3_no,
+        "level4_no": level4_no,
         "chapter": chapter,
         "section": section,
+        "level3_title": level3_title,
+        "level4_title": level4_title,
         "title_ko": title_ko or ref_id,
         "title_en": title_en,
         "unit": None,
@@ -523,7 +516,6 @@ def make_unit(ref_id: str, raw_title: str, page_start: int | None,
         "tables": [],
         "footnotes": [],
         "contacts": [],
-        "images": [],
     }
 
 
@@ -663,6 +655,163 @@ def context_from_title_table(table: dict, chapter: str | None,
     return chapter, section
 
 
+def toc_chapter_row(row: list[dict]) -> tuple[int, str, str | None] | None:
+    values = [clean_text(cell.get("text") or "", keep_newlines=True) for cell in row]
+    if len(values) < 2 or not values[0].isdigit():
+        return None
+    raw_title = next((value for value in values[1:] if value), "")
+    if not raw_title:
+        return None
+    title_ko, title_en = split_title(raw_title)
+    return int(values[0]), title_ko, title_en
+
+
+def build_toc_catalog(tables: list[dict]) -> dict[str, dict]:
+    """목차 표에서 실제 통계 leaf별 4계층 제목 catalog를 만든다."""
+    chapters: dict[int, dict] = {}
+    groups: dict[str, dict] = {}
+    entries: dict[str, dict] = {}
+    chapter_no: int | None = None
+    chapter: str | None = None
+    section_no: int | None = None
+    section: str | None = None
+    current_group: dict | None = None
+    pending: dict | None = None
+
+    def normalized_pending_title(parts: list[str]) -> tuple[str, str | None]:
+        raw = " ".join(strip_title_page(part) for part in parts if part)
+        return split_title(raw)
+
+    def finish_pending() -> None:
+        nonlocal pending, section_no, section, current_group
+        if not pending:
+            return
+        title_ko, title_en = normalized_pending_title(pending["parts"])
+        if pending["kind"] == "section":
+            section_no = pending["number"]
+            section = title_ko
+            current_group = None
+        elif pending["kind"] == "level3":
+            ref_id = pending["ref_id"]
+            ref_chapter, ref_section, level3_no, _ = ref_numbers(ref_id)
+            current_group = {
+                "ref_id": ref_id,
+                "chapter_no": ref_chapter or chapter_no,
+                "section_no": ref_section or section_no,
+                "level3_no": level3_no,
+                "chapter": (chapters.get(ref_chapter or chapter_no or -1) or {}).get(
+                    "title", chapter
+                ),
+                "section": section,
+                "level3_title": title_ko or ref_id,
+                "level3_title_en": title_en,
+                "children": [],
+            }
+            groups[ref_id] = current_group
+        elif pending["kind"] == "level4" and current_group:
+            level4_no = pending["number"]
+            ref_id = f'{current_group["ref_id"]}-{level4_no}'
+            entry = {
+                key: value for key, value in current_group.items() if key != "children"
+            }
+            entry.update({
+                "ref_id": ref_id,
+                "level4_no": level4_no,
+                "level4_title": title_ko or current_group["level3_title"],
+                "level4_title_en": title_en,
+            })
+            entries[ref_id] = entry
+            current_group["children"].append(ref_id)
+        pending = None
+
+    def consume_line(line: str) -> None:
+        nonlocal pending
+        line = clean_text(line)
+        if not line:
+            return
+        match = RE_TOC_SECTION.match(line)
+        if match:
+            finish_pending()
+            pending = {
+                "kind": "section",
+                "number": int(match.group(1)),
+                "parts": [match.group(2)],
+            }
+            return
+        match = RE_TOC_LEVEL3.match(line)
+        if match:
+            finish_pending()
+            pending = {
+                "kind": "level3",
+                "ref_id": match.group(1),
+                "parts": [match.group(2)],
+            }
+            return
+        match = RE_TOC_LEVEL4.match(line)
+        if match:
+            finish_pending()
+            pending = {
+                "kind": "level4",
+                "number": int(match.group(1)),
+                "parts": [match.group(2)],
+            }
+            return
+        if pending:
+            pending["parts"].append(line)
+
+    for table in tables:
+        for row in table.get("cells", []):
+            chapter_record = toc_chapter_row(row)
+            if chapter_record:
+                finish_pending()
+                chapter_no, chapter, chapter_en = chapter_record
+                chapters[chapter_no] = {
+                    "title": chapter,
+                    "title_en": chapter_en,
+                }
+                section_no = None
+                section = None
+                current_group = None
+                continue
+            for cell in row:
+                text = cell.get("text") or ""
+                if not ("제" in text or RE_REFID_ANYWHERE.search(text)):
+                    continue
+                for line in text.splitlines():
+                    consume_line(line)
+    finish_pending()
+
+    # 하위 항목이 없는 n-n-n은 그 자체가 실제 표 제목이다. 이때 4계층 제목은
+    # 요구사항대로 3계층 제목과 동일하게 채우고 level4_no만 NULL로 둔다.
+    for ref_id, group in groups.items():
+        if group["children"]:
+            continue
+        entry = {key: value for key, value in group.items() if key != "children"}
+        entry.update({
+            "level4_no": None,
+            "level4_title": group["level3_title"],
+            "level4_title_en": group.get("level3_title_en"),
+        })
+        entries[ref_id] = entry
+    return entries
+
+
+def toc_tables(hwpx_path: str) -> list[dict]:
+    tables: list[dict] = []
+    for block in iter_blocks(hwpx_path):
+        if block["type"] != "table":
+            continue
+        table = block["table"]
+        has_chapter_row = any(toc_chapter_row(row) for row in table.get("cells", []))
+        has_toc_refs = bool(RE_REFID_ANYWHERE.search(table_plain_text(table)))
+        if has_chapter_row and has_toc_refs:
+            tables.append(table)
+            continue
+        if tables:
+            break
+    return tables
+
+
 def append_unit(units: list[dict], unit: dict | None) -> None:
     if unit and unit.get("tables"):
         units.append(unit)
@@ -676,8 +825,7 @@ def section_names(zip_file: zipfile.ZipFile) -> list[str]:
     return sorted(names, key=lambda value: int(RE_SECTION_XML.match(value).group(1)))
 
 
-def iter_blocks(hwpx_path: str, image_dir: str | None = None):
-    image_seq = 0
+def iter_blocks(hwpx_path: str):
     page_number = 1
     with zipfile.ZipFile(hwpx_path) as zip_file:
         for section_name in section_names(zip_file):
@@ -712,12 +860,7 @@ def iter_blocks(hwpx_path: str, image_dir: str | None = None):
                             block = flush_text()
                             if block:
                                 yield block
-                            image_seq += 1
-                            yield {
-                                "type": "image",
-                                "image": parse_image(child, zip_file, image_dir, page_number, image_seq),
-                                "pageNumber": page_number,
-                            }
+                            # 통계표 파싱에는 이미지를 사용하지 않으며 산출물/DB에도 저장하지 않는다.
                         elif child.tag not in TEXT_SKIP_IN_PARAGRAPH:
                             text_parts.append(visible_text(child, TEXT_SKIP_IN_PARAGRAPH, keep_newlines=True))
 
@@ -746,7 +889,6 @@ def estimate_page_count(hwpx_path: str) -> int | None:
 
 def parse(
     hwpx_path: str,
-    image_dir: str | None = None,
     publication_year: int | None = None,
     publication_title: str | None = None,
     publication_no: str | None = None,
@@ -756,8 +898,9 @@ def parse(
     pending_note: dict | None = None
     chapter: str | None = None
     section: str | None = None
+    toc_catalog = build_toc_catalog(toc_tables(hwpx_path))
 
-    for block in iter_blocks(hwpx_path, image_dir):
+    for block in iter_blocks(hwpx_path):
         block_type = block["type"]
 
         if block_type == "table":
@@ -766,7 +909,14 @@ def parse(
             if title:
                 append_unit(units, current)
                 ref_id, raw_title = title
-                current = make_unit(ref_id, raw_title, block.get("pageNumber"), chapter, section)
+                current = make_unit(
+                    ref_id,
+                    raw_title,
+                    block.get("pageNumber"),
+                    chapter,
+                    section,
+                    toc_catalog.get(ref_id),
+                )
                 pending_note = None
                 continue
 
@@ -781,8 +931,6 @@ def parse(
 
         if block_type == "paragraph":
             pending_note = handle_paragraph(current, block.get("text") or "", pending_note)
-        elif block_type == "image":
-            current["images"].append(block["image"])
 
     append_unit(units, current)
     publication = default_publication(estimate_page_count(hwpx_path))
@@ -801,7 +949,8 @@ def parse(
             "source": os.path.abspath(hwpx_path),
             "parser": "admin/backend/services/load_parser.py",
             "method": (
-                "HWPX ZIP의 Contents/section*.xml을 문서 순서대로 순회하고, "
+                "HWPX 목차에서 chapter/section/3계층/4계층 제목 catalog를 만든 뒤 "
+                "Contents/section*.xml 본문의 ref_id와 매칭하고, "
                 "hp:cellAddr/hp:cellSpan으로 병합 셀을 보존한 뒤 grid/records/markdown을 생성"
             ),
         },

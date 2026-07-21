@@ -116,7 +116,7 @@ class AdminSettings:
                 model="text-embedding-3-small",
                 dimension=1536,
                 enabled=False,
-                description="현재 DB가 vector(1024)이므로 별도 차원 migration 전에는 선택할 수 없습니다.",
+                description="현재 schema가 vector(1024)이므로 별도 schema 변경 전에는 선택할 수 없습니다.",
             ),
         ]
 

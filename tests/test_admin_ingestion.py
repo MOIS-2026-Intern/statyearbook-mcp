@@ -14,6 +14,7 @@ from admin.backend.services.load_workspace import (
 )
 from admin.backend.services.load_dml import build_load_dml
 from admin.backend.services.load_embedding_dml import TitleEmbeddingDmlWriter
+from admin.backend.services.load_schema import build_schema_ddl
 from app.embedding import EmbeddingProfile
 
 
@@ -30,8 +31,12 @@ def parsed_yearbook(year: int = 2026) -> dict:
                 "ref_id": "1-1-1",
                 "chapter_no": 1,
                 "section_no": 1,
+                "level3_no": 1,
+                "level4_no": None,
                 "chapter": "일반행정",
                 "section": "정부조직",
+                "level3_title": "행정기관 위원회",
+                "level4_title": "행정기관 위원회",
                 "title_ko": "행정기관 위원회",
                 "title_en": "Administration Committees",
                 "unit": "개",
@@ -49,7 +54,6 @@ def parsed_yearbook(year: int = 2026) -> dict:
                 ],
                 "footnotes": [],
                 "contacts": [],
-                "images": [],
             }
         ],
     }
@@ -64,6 +68,9 @@ class YearbookDmlTests(unittest.TestCase):
         self.assertIn("publication year 2026 already exists", dml)
         self.assertIn("RETURNING pub_id INTO v_pub_id", dml)
         self.assertIn("RETURNING stat_id INTO v_stat_id", dml)
+        self.assertIn("level3_no, level4_no", dml)
+        self.assertIn("level3_title, level4_title", dml)
+        self.assertNotIn("statistic_images", dml)
         self.assertIn("pg_advisory_xact_lock", dml)
         self.assertIn("BEGIN;", dml)
         self.assertTrue(dml.endswith("COMMIT;\n"))
@@ -97,6 +104,24 @@ class PostgresDmlRepositoryTests(unittest.TestCase):
             repository.executions,
             [("postgresql:///test", "BEGIN; SELECT 1; COMMIT;\n")],
         )
+
+
+class SchemaDdlTests(unittest.TestCase):
+    def test_schema_ddl_contains_final_schema_without_migration_operations(self) -> None:
+        ddl = build_schema_ddl()
+
+        self.assertIn("CREATE TABLE IF NOT EXISTS statistics", ddl)
+        self.assertIn("level3_title", ddl)
+        self.assertIn("level4_title", ddl)
+        self.assertRegex(ddl, r"embedding\s+vector\(1024\)")
+        self.assertNotIn("ALTER TABLE", ddl)
+        self.assertNotIn("DROP TABLE", ddl)
+        self.assertNotIn("statistic_images", ddl)
+
+    def test_schema_artifact_is_exact_copy_of_canonical_schema(self) -> None:
+        schema_path = Path(__file__).resolve().parents[1] / "db" / "schema.sql"
+
+        self.assertEqual(build_schema_ddl(), schema_path.read_text(encoding="utf-8"))
 
 
 class EmbeddingDmlTests(unittest.TestCase):

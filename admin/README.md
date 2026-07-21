@@ -34,10 +34,11 @@ python -m admin ingest data/2026_통계연보.hwpx \
 - `yearbook_source.hwpx`: 업로드 원본
 - `yearbook_parsed.json`: 구조화 파싱 결과
 - `yearbook_review.md`: 사람 검수용 문서
+- `yearbook_schema.sql`: 로컬 검증 DB와 운영 DB에 동일하게 적용할 DDL
 - `yearbook_load.sql`: ID에 독립적인 누적 적재 DML
 - `yearbook_title_embeddings.sql`: 모델 profile과 실제 벡터를 포함한 임베딩 DML
 
-로컬 DB 적재는 두 SQL 산출물을 그대로 실행하는 방식입니다. Python 코드는 HWPX 파싱,
+로컬 DB 적재는 schema DDL과 두 DML 산출물을 그대로 실행하는 방식입니다. Python 코드는 HWPX 파싱,
 적재 SQL 생성과 임베딩 벡터 계산·SQL 생성을 담당하며, 통계 데이터와 임베딩 벡터는 각각
 `yearbook_load.sql`, `yearbook_title_embeddings.sql`을 실행할 때만 DB에 반영됩니다.
 
@@ -56,7 +57,7 @@ python -m admin serve
 
 왼쪽 메뉴의 `DB 데이터 삭제`에서는 대상 DB의 publication 목록을 조회하고 여러 발간물을
 선택해 삭제할 수 있습니다. 삭제 API는 선택한 publication의 statistics를 먼저 삭제하여
-표, 주석, 연락처와 이미지를 cascade로 정리하고, 관련 임베딩 작업과 더 이상 참조되지 않는
+표, 주석과 연락처를 cascade로 정리하고, 관련 임베딩 작업과 더 이상 참조되지 않는
 profile까지 같은 트랜잭션에서 제거합니다.
 
 관리자 상태는 Python 표준 라이브러리인 `sqlite3`로
@@ -83,16 +84,40 @@ STATYEARBOOK_ADMIN_PRODUCTION_DSN=postgresql://...
 docker build -f admin/Dockerfile -t statyearbook-admin .
 ```
 
-로컬에서 완료된 job의 SQL을 검수한 뒤에는 모델을 다시 실행하지 않고 두 DML만 운영 DB에
+로컬에서 완료된 job의 SQL을 검수한 뒤에는 모델을 다시 실행하지 않고 같은 DDL/DML을 운영 DB에
 적용할 수 있습니다. 운영 대상 환경변수와 확인 연도가 모두 맞아야 실행됩니다.
 
 ```bash
 python -m admin promote <job-id> --confirm-year 2026
 ```
 
-이 명령은 완료된 job의 `yearbook_load.sql`을 먼저 적용하고, 존재하면
+이 명령은 완료된 job의 `yearbook_schema.sql`, `yearbook_load.sql` 순서로 적용하고, 존재하면
 `yearbook_title_embeddings.sql`을 이어서
 적용합니다. 따라서 운영 서버에는 Hugging Face 접속이나 모델 추론 장치가 없어도 됩니다.
+
+`yearbook_schema.sql`은 작업 시점의 `db/schema.sql`을 그대로 보존한 산출물입니다.
+관리자 적재는 이 schema를 가장 먼저 실행하고, 검수를 마친 동일 파일을 운영 승격에도 사용합니다.
+
+## DB schema 직접 적용
+
+관리자 적재 명령은 `yearbook_schema.sql`을 생성해 HWPX 파싱과 DML보다 먼저 자동 실행합니다. DDL만
+로컬 PostgreSQL에 먼저 적용하려면 프로젝트 루트에서 다음 명령을 실행합니다.
+
+```bash
+psql -d statyearbook_mcp -v ON_ERROR_STOP=1 \
+  -f db/schema.sql
+```
+
+이 파일은 최종 schema를 직접 선언하며 과거 schema를 `ALTER`하거나 삭제하지 않습니다. 따라서
+기존의 과거 구조 DB에는 새 컬럼이 자동 추가되지 않습니다. 기존 데이터가 필요 없다면 최초 한 번
+DB를 새로 만든 뒤 `db/schema.sql`을 적용하고 HWPX를 적재합니다.
+
+적용 여부는 다음 쿼리로 확인할 수 있습니다.
+
+```bash
+psql -d statyearbook_mcp -c \
+  "SELECT column_name FROM information_schema.columns WHERE table_name = 'statistics' AND column_name LIKE 'level%' ORDER BY ordinal_position; SELECT to_regclass('public.statistic_images');"
+```
 
 향후에는 현재 SQLite 작업 큐를 Redis/Celery 또는 사내 작업 큐 adapter로 교체하면 여러
 관리자 인스턴스로 확장할 수 있습니다. 전체 흐름은 `YearbookIngestionService`에

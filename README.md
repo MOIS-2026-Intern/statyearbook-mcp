@@ -6,6 +6,7 @@
 
 - `frontend/`: React 채팅 UI
 - `backend/`: FastAPI REST API, 채팅 모델 provider adapter, MCP host
+- `db/`: 로컬 PostgreSQL·운영 Supabase 공통 최종 `schema.sql`과 DB 설정
 - `server.py`: 기존 statyearbook MCP server
 
 백엔드는 프론트의 `POST /api/chat` 요청을 받아 `STATYEARBOOK_MODEL_PROVIDER`로 선택된 모델 host를 호출하고, 모델이 필요하다고 판단한 MCP 도구를 로컬 `server.py`에 stdio로 연결해 실행합니다. 기본 provider는 `openai`입니다.

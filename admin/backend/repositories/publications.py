@@ -60,9 +60,7 @@ class PublicationRepository:
                     (SELECT COUNT(*) FROM footnotes f
                      JOIN selected_statistics s ON s.stat_id = f.stat_id) AS footnotes,
                     (SELECT COUNT(*) FROM contacts c
-                     JOIN selected_statistics s ON s.stat_id = c.stat_id) AS contacts,
-                    (SELECT COUNT(*) FROM statistic_images i
-                     JOIN selected_statistics s ON s.stat_id = i.stat_id) AS statistic_images
+                     JOIN selected_statistics s ON s.stat_id = c.stat_id) AS contacts
                 """,
                 (selected_ids,),
             )

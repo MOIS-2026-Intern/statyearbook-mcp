@@ -13,7 +13,6 @@ class IngestionOptions:
     target: str = "local"
     load_mode: str = "reject"
     embedding_model: str = "bge-m3"
-    extract_images: bool = False
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -24,6 +23,7 @@ class WorkspaceArtifactNames:
     source_yearbook: str = "yearbook_source.hwpx"
     parsed_json: str = "yearbook_parsed.json"
     review_markdown: str = "yearbook_review.md"
+    schema_ddl: str = "yearbook_schema.sql"
     load_dml: str = "yearbook_load.sql"
     embedding_dml: str = "yearbook_title_embeddings.sql"
 

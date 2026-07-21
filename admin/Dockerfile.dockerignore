@@ -11,7 +11,5 @@ admin/state
 admin/workspaces
 frontend
 data
-db
 docs
 tests
-supabase

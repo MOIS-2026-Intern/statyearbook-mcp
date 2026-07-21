@@ -46,7 +46,6 @@ async def create_job(
     target: str = Form(default="local"),
     load_mode: str = Form(default="reject"),
     embedding_model: str = Form(default="bge-m3"),
-    extract_images: bool = Form(default=False),
 ) -> dict:
     settings = request.app.state.settings
     if not 1900 <= year <= 2200:
@@ -86,7 +85,6 @@ async def create_job(
         target=target,
         load_mode=load_mode,
         embedding_model=embedding_model,
-        extract_images=extract_images,
     )
     job = request.app.state.job_repository.insert_job(job_id, options.as_dict())
     request.app.state.job_orchestrator.submit(job_id)

@@ -92,7 +92,7 @@ async function deleteSelectedPublications() {
     const counts = result.deleted_counts;
     await loadPublications();
     showMessage(
-      `${counts.publications}개 발간물 삭제 완료 · 통계 ${counts.statistics} · 표 ${counts.stat_tables} · 주석 ${counts.footnotes} · 연락처 ${counts.contacts} · 이미지 ${counts.statistic_images}`,
+      `${counts.publications}개 발간물 삭제 완료 · 통계 ${counts.statistics} · 표 ${counts.stat_tables} · 주석 ${counts.footnotes} · 연락처 ${counts.contacts}`,
     );
   } catch (error) {
     showMessage(`삭제 실패: ${error.message}`, "error");
