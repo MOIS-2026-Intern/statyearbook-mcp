@@ -42,4 +42,7 @@ mcp = create_app()
 # MCP 앱을 Streamable HTTP transport로 실행한다.
 def main() -> None:
     logging.getLogger("mcp.server.lowlevel.server").setLevel(logging.WARNING)
-    mcp.run(transport="streamable-http")
+    try:
+        mcp.run(transport="streamable-http")
+    except KeyboardInterrupt:
+        return
