@@ -13,14 +13,17 @@ class OpenAIConfigurationError(ModelGatewayConfigurationError):
 
 
 class OpenAIGateway(OpenAICompatibleGateway):
+    # OpenAI 인증 정보와 타임아웃을 적용한 클라이언트를 구성한다.
     def __init__(self, settings: Settings):
         if not settings.openai_api_key:
-            raise OpenAIConfigurationError("OPENAI_API_KEY is not configured")
+            raise OpenAIConfigurationError(
+                "STATYEARBOOK_BACKEND_OPENAI_API_KEY is not configured"
+            )
 
         super().__init__(
             settings,
             AsyncOpenAI(
                 api_key=settings.openai_api_key,
-                timeout=settings.openai_timeout_seconds,
+                timeout=settings.model_timeout_seconds,
             ),
         )

@@ -23,11 +23,13 @@ router = APIRouter(
 )
 
 
+# 최근 관리자 적재 작업을 최신순으로 반환한다.
 @router.get("")
 def list_jobs(request: Request) -> list[dict]:
     return request.app.state.job_repository.select_jobs()
 
 
+# 단일 작업과 이벤트를 조회하고 없는 ID는 HTTP 404로 변환한다.
 @router.get("/{job_id}")
 def get_job(job_id: str, request: Request) -> dict:
     try:
@@ -36,6 +38,7 @@ def get_job(job_id: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail="job not found") from exc
 
 
+# 업로드와 옵션을 검증한 뒤 격리된 작업을 만들고 비동기 실행을 예약한다.
 @router.post("", status_code=202)
 async def create_job(
     request: Request,
@@ -43,11 +46,12 @@ async def create_job(
     year: int = Form(...),
     title: str = Form(...),
     pub_no: str | None = Form(default=None),
-    target: str = Form(default="local"),
+    target: str | None = Form(default=None),
     load_mode: str = Form(default="reject"),
     embedding_model: str = Form(default="bge-m3"),
 ) -> dict:
     settings = request.app.state.settings
+    target = target or settings.default_target
     if not 1900 <= year <= 2200:
         raise HTTPException(status_code=422, detail="invalid publication year")
     if not title.strip():

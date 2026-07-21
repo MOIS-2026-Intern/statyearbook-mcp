@@ -1,6 +1,6 @@
 import unittest
 
-from shared.table_search import build_table_search_chunks
+from admin.backend.services.table_search_chunks import build_table_search_chunks
 
 
 class TableSearchChunkTests(unittest.TestCase):

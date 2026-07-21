@@ -1,7 +1,7 @@
 # 이 파일은 임베딩 batch 실행기의 DB 저장 모드와 DML 생성 모드를 검증한다.
 import unittest
 
-from shared.embedding import EmbeddingProfile, EmbeddingSettings
+from utils.embedding import EmbeddingProfile, EmbeddingSettings
 from admin.backend.models.embedding import (
     EmbeddingBatch,
     WeightedEmbeddingTexts,

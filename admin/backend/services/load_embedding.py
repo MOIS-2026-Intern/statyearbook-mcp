@@ -12,18 +12,21 @@ from admin.backend.models.embedding import (
     WeightedEmbeddingTexts,
 )
 from admin.backend.repositories.embedding_jobs import EmbeddingJobRepository
-from shared.embedding import EmbeddingProfile, EmbeddingProvider
+from utils.embedding import EmbeddingProfile, EmbeddingProvider
 
 
 class EmbeddingSource(Protocol):
     name: str
 
+    # 저장 대상 vector 열이 모델 차원을 수용하는지 검증한다.
     def select_and_validate_dimension(self, conn, expected_dimension: int) -> None:
         ...
 
+    # 실행 범위를 고정할 현재 최대 source ID를 반환한다.
     def select_max_source_id(self, conn) -> int:
         ...
 
+    # profile과 강제 실행 여부에 맞는 전체 후보 수를 반환한다.
     def select_candidate_count(
         self,
         conn,
@@ -33,6 +36,7 @@ class EmbeddingSource(Protocol):
     ) -> int:
         ...
 
+    # source ID 커서 뒤의 다음 후보 배치를 읽는다.
     def select_candidate_batch(
         self,
         conn,
@@ -44,12 +48,14 @@ class EmbeddingSource(Protocol):
     ) -> EmbeddingBatch:
         ...
 
+    # 후보 행을 단일 또는 가중치 기반 모델 입력으로 변환한다.
     def select_embedding_texts(
         self,
         rows: list[dict],
     ) -> list[str] | WeightedEmbeddingTexts:
         ...
 
+    # 행과 같은 순서의 벡터를 저장 대상에 반영한다.
     def update_embedding_batch(
         self,
         conn,
@@ -61,6 +67,7 @@ class EmbeddingSource(Protocol):
 
 
 class EmbeddingRunner:
+    # provider, profile과 저장소를 하나의 배치 실행 단위로 묶는다.
     def __init__(
         self,
         provider: EmbeddingProvider,
@@ -73,6 +80,7 @@ class EmbeddingRunner:
         self.source = source
         self.jobs = jobs or EmbeddingJobRepository()
 
+    # 일반 입력은 그대로 인코딩하고 가중 입력은 합성 후 단위 벡터로 정규화한다.
     def _encode_texts(
         self,
         inputs: list[str] | WeightedEmbeddingTexts,
@@ -112,6 +120,7 @@ class EmbeddingRunner:
             combined.append([value / norm for value in vector])
         return combined
 
+    # 고정된 후보 범위를 배치 처리하며 DB 저장 또는 이관용 callback 출력을 수행한다.
     def run(
         self,
         conn,

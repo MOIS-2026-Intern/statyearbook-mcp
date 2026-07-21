@@ -1,28 +1,38 @@
 # 이 파일은 적재된 발간연도의 통계표·원자료 표·임베딩 건수를 검증한다.
 # 검증 결과가 model profile과 다르면 관리자 작업을 실패 처리한다.
-import psycopg
+
+
+# dict-row와 tuple-row 모두에서 단일 집계값을 읽는다.
+def _first_value(row):
+    return next(iter(row.values())) if isinstance(row, dict) else row[0]
 
 
 class YearbookVerificationService:
-    def verify(
+    # 호출자가 연 트랜잭션에서 적재 건수와 두 임베딩 프로필을 교차 검증한다.
+    def verify_connection(
         self,
-        dsn: str,
+        conn,
         year: int,
         profile_key: str | None,
         table_profile_key: str | None = None,
     ) -> dict:
-        with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT COUNT(*) AS statistics_count,
                        COALESCE(SUM((
                            SELECT COUNT(*) FROM stat_tables t WHERE t.stat_id = s.stat_id
-                       )), 0)
+                       )), 0) AS table_count
                 FROM statistics s WHERE s.year = %s
                 """,
                 (year,),
             )
-            statistics_count, table_count = cur.fetchone()
+            counts = cur.fetchone()
+            if isinstance(counts, dict):
+                statistics_count = counts["statistics_count"]
+                table_count = counts["table_count"]
+            else:
+                statistics_count, table_count = counts
             current_count = 0
             table_chunk_count = 0
             current_table_count = 0
@@ -35,7 +45,7 @@ class YearbookVerificationService:
                     """,
                     (year, profile_key),
                 )
-                current_count = cur.fetchone()[0]
+                current_count = _first_value(cur.fetchone())
             cur.execute(
                 """
                 SELECT COUNT(*)
@@ -46,7 +56,7 @@ class YearbookVerificationService:
                 """,
                 (year,),
             )
-            table_chunk_count = cur.fetchone()[0]
+            table_chunk_count = _first_value(cur.fetchone())
             if table_profile_key:
                 cur.execute(
                     """
@@ -59,7 +69,7 @@ class YearbookVerificationService:
                     """,
                     (year, table_profile_key),
                 )
-                current_table_count = cur.fetchone()[0]
+                current_table_count = _first_value(cur.fetchone())
         if profile_key and current_count != statistics_count:
             raise RuntimeError(
                 f"embedding verification failed: {current_count}/{statistics_count}"

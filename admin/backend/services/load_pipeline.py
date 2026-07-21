@@ -7,7 +7,7 @@ import zipfile
 
 from pathlib import Path
 
-from shared.embedding import (
+from utils.embedding import (
     STATISTICS_CONTENT_VERSION,
     TABLE_SEARCH_CONTENT_VERSION,
     EmbeddingSettings,
@@ -27,6 +27,7 @@ from admin.backend.services.load_verification import YearbookVerificationService
 
 
 class YearbookIngestionService:
+    # 설정, 상태 저장소와 검증·DML 경계를 통합 적재 흐름으로 조립한다.
     def __init__(
         self,
         settings: AdminSettings,
@@ -39,6 +40,7 @@ class YearbookIngestionService:
         self.verification = verification or YearbookVerificationService()
         self.dml_repository = dml_repository or PostgresDmlRepository()
 
+    # 작업의 현재 단계와 사용자용 이벤트를 같은 시점에 갱신한다.
     def _step(self, job_id: str, stage: str, progress: int, message: str) -> None:
         self.store.update_job(
             job_id,
@@ -49,6 +51,7 @@ class YearbookIngestionService:
         )
         self.store.insert_event(job_id, stage, message)
 
+    # 한 작업을 검증부터 적재·임베딩·검증까지 실행하고 실패도 상태로 영속화한다.
     def run(self, job_id: str) -> dict:
         job = self.store.select_job(job_id)
         options = IngestionOptions(**job["options"])
@@ -63,13 +66,35 @@ class YearbookIngestionService:
                 raise ValueError("유효한 HWPX 파일이 아닙니다.")
             dsn = self.settings.target_dsn(options.target)
 
-            self._step(job_id, "schema_ddl", 7, f"{options.target} DB에 최종 schema를 적용하고 있습니다.")
-            schema_sql = artifact_service.save_schema_ddl()
-            artifacts["schema_ddl"] = schema_sql.name
-            self.store.update_job(job_id, artifacts=artifacts)
-            self.dml_repository.execute_dml_file(dsn, schema_sql)
+            embedding_runtime = None
+            if options.embedding_model != "skip":
+                model = self.settings.embedding_model(options.embedding_model)
+                embed_settings = EmbeddingSettings(
+                    provider=str(model.provider),
+                    model=str(model.model),
+                    dimension=int(model.dimension),
+                    batch_size=16,
+                    device=model.device,
+                    max_length=512,
+                    revision=model.revision,
+                )
+                profile = create_embedding_profile(
+                    embed_settings,
+                    STATISTICS_CONTENT_VERSION,
+                )
+                table_profile = create_embedding_profile(
+                    embed_settings,
+                    TABLE_SEARCH_CONTENT_VERSION,
+                )
+                provider = create_embedding_provider(embed_settings)
+                embedding_runtime = (
+                    embed_settings,
+                    profile,
+                    table_profile,
+                    provider,
+                )
 
-            self._step(job_id, "parse", 12, "HWPX 구조와 통계표를 파싱하고 있습니다.")
+            self._step(job_id, "parse", 10, "HWPX 구조와 통계표를 파싱하고 있습니다.")
             parsed = parse(
                 str(input_path),
                 publication_year=options.year,
@@ -84,47 +109,34 @@ class YearbookIngestionService:
             artifacts["load_dml"] = load_sql.name
             self.store.update_job(job_id, artifacts=artifacts)
 
-            self._step(job_id, "load_db", 48, f"{options.target} DB에 {options.year}년 연보를 적재하고 있습니다.")
-            self.dml_repository.execute_dml_file(dsn, load_sql)
-
             embedding_profile_key = None
             embedding_count = 0
             table_embedding_profile_key = None
             table_embedding_count = 0
-            if options.embedding_model != "skip":
-                model = self.settings.embedding_model(options.embedding_model)
-                embed_settings = EmbeddingSettings(
-                    provider=str(model.provider),
-                    model=str(model.model),
-                    dimension=int(model.dimension),
-                    batch_size=16,
-                    device=model.device,
-                    max_length=512,
-                    revision=model.revision,
-                )
-                profile = create_embedding_profile(embed_settings, STATISTICS_CONTENT_VERSION)
-                table_profile = create_embedding_profile(
-                    embed_settings,
-                    TABLE_SEARCH_CONTENT_VERSION,
-                )
-                provider = create_embedding_provider(embed_settings)
-                source = StatisticsEmbeddingRepository(options.year)
-                runner = EmbeddingRunner(provider, profile, source)
-                writer = artifact_service.embedding_dml_writer(profile)
-                embedding_sql = writer.path
-                artifacts["embedding_dml"] = embedding_sql.name
-                self.store.update_job(job_id, artifacts=artifacts)
+            with self.dml_repository.transaction(dsn) as conn:
                 self._step(
                     job_id,
-                    "embedding_dml",
-                    60,
-                    "제목 벡터와 임베딩 적재 SQL을 생성하고 있습니다.",
+                    "load_db",
+                    48,
+                    f"{options.target} DB에 {options.year}년 연보를 적재하고 있습니다.",
                 )
-                try:
-                    import psycopg
-                    from psycopg.rows import dict_row
+                self.dml_repository.execute_dml_file(conn, load_sql)
 
-                    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+                if embedding_runtime is not None:
+                    embed_settings, profile, table_profile, provider = embedding_runtime
+                    source = StatisticsEmbeddingRepository(options.year)
+                    runner = EmbeddingRunner(provider, profile, source)
+                    writer = artifact_service.embedding_dml_writer(profile)
+                    embedding_sql = writer.path
+                    artifacts["embedding_dml"] = embedding_sql.name
+                    self.store.update_job(job_id, artifacts=artifacts)
+                    self._step(
+                        job_id,
+                        "embedding_dml",
+                        60,
+                        "제목 벡터와 임베딩 적재 SQL을 생성하고 있습니다.",
+                    )
+                    try:
                         result = runner.run(
                             conn,
                             batch_size=embed_settings.batch_size,
@@ -136,42 +148,38 @@ class YearbookIngestionService:
                             ),
                             on_batch=writer.write_batch,
                         )
-                    writer.complete(
-                        source_name=source.name,
-                        target_count=result.target_count,
-                        processed_count=result.processed_count,
-                        max_source_id=result.max_source_id,
+                        writer.complete(
+                            source_name=source.name,
+                            target_count=result.target_count,
+                            processed_count=result.processed_count,
+                            max_source_id=result.max_source_id,
+                        )
+                    except Exception as exc:
+                        writer.abort(exc)
+                        raise
+                    embedding_profile_key = result.profile_key
+                    embedding_count = result.processed_count
+                    self._step(
+                        job_id,
+                        "embedding_db",
+                        90,
+                        f"생성된 임베딩 SQL을 {options.target} DB에 실행하고 있습니다.",
                     )
-                except Exception as exc:
-                    writer.abort(exc)
-                    raise
-                embedding_profile_key = result.profile_key
-                embedding_count = result.processed_count
-                self._step(
-                    job_id,
-                    "embedding_db",
-                    90,
-                    f"생성된 임베딩 SQL을 {options.target} DB에 실행하고 있습니다.",
-                )
-                self.dml_repository.execute_dml_file(dsn, embedding_sql)
+                    self.dml_repository.execute_dml_file(conn, embedding_sql)
 
-                table_source = TableSearchEmbeddingRepository(options.year)
-                table_runner = EmbeddingRunner(provider, table_profile, table_source)
-                table_writer = artifact_service.table_embedding_dml_writer(table_profile)
-                table_embedding_sql = table_writer.path
-                artifacts["table_embedding_dml"] = table_embedding_sql.name
-                self.store.update_job(job_id, artifacts=artifacts)
-                self._step(
-                    job_id,
-                    "table_embedding_dml",
-                    92,
-                    "표 컬럼·분류 검색 벡터와 이관 SQL을 생성하고 있습니다.",
-                )
-                try:
-                    import psycopg
-                    from psycopg.rows import dict_row
-
-                    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+                    table_source = TableSearchEmbeddingRepository(options.year)
+                    table_runner = EmbeddingRunner(provider, table_profile, table_source)
+                    table_writer = artifact_service.table_embedding_dml_writer(table_profile)
+                    table_embedding_sql = table_writer.path
+                    artifacts["table_embedding_dml"] = table_embedding_sql.name
+                    self.store.update_job(job_id, artifacts=artifacts)
+                    self._step(
+                        job_id,
+                        "table_embedding_dml",
+                        92,
+                        "표 컬럼·분류 검색 벡터와 이관 SQL을 생성하고 있습니다.",
+                    )
+                    try:
                         table_result = table_runner.run(
                             conn,
                             batch_size=embed_settings.batch_size,
@@ -183,32 +191,37 @@ class YearbookIngestionService:
                             ),
                             on_batch=table_writer.write_batch,
                         )
-                    table_writer.complete(
-                        source_name=table_source.name,
-                        target_count=table_result.target_count,
-                        processed_count=table_result.processed_count,
-                        max_source_id=table_result.max_source_id,
+                        table_writer.complete(
+                            source_name=table_source.name,
+                            target_count=table_result.target_count,
+                            processed_count=table_result.processed_count,
+                            max_source_id=table_result.max_source_id,
+                        )
+                    except Exception as exc:
+                        table_writer.abort(exc)
+                        raise
+                    table_embedding_profile_key = table_result.profile_key
+                    table_embedding_count = table_result.processed_count
+                    self._step(
+                        job_id,
+                        "table_embedding_db",
+                        96,
+                        f"표 검색 임베딩 SQL을 {options.target} DB에 실행하고 있습니다.",
                     )
-                except Exception as exc:
-                    table_writer.abort(exc)
-                    raise
-                table_embedding_profile_key = table_result.profile_key
-                table_embedding_count = table_result.processed_count
+                    self.dml_repository.execute_dml_file(conn, table_embedding_sql)
+
                 self._step(
                     job_id,
-                    "table_embedding_db",
-                    96,
-                    f"표 검색 임베딩 SQL을 {options.target} DB에 실행하고 있습니다.",
+                    "verify",
+                    98,
+                    "적재 건수와 임베딩 profile을 검증하고 있습니다.",
                 )
-                self.dml_repository.execute_dml_file(dsn, table_embedding_sql)
-
-            self._step(job_id, "verify", 98, "적재 건수와 임베딩 profile을 검증하고 있습니다.")
-            verification = self.verification.verify(
-                dsn,
-                options.year,
-                embedding_profile_key,
-                table_embedding_profile_key,
-            )
+                verification = self.verification.verify_connection(
+                    conn,
+                    options.year,
+                    embedding_profile_key,
+                    table_embedding_profile_key,
+                )
             result_payload = {
                 "publication_year": options.year,
                 "publication_title": options.title,

@@ -1,16 +1,18 @@
 # 이 파일은 PostgreSQL의 임베딩 profile과 batch job 이력을 관리한다.
 # advisory lock으로 동시에 두 임베딩 작업이 실행되지 않도록 한다.
-from shared.embedding import EmbeddingProfile
+from utils.embedding import EmbeddingProfile
 
 
 EMBEDDING_JOB_LOCK_ID = 7_824_601_024
 
 
+# tuple과 dict 형식의 psycopg 행에서 첫 스칼라 값을 동일하게 꺼낸다.
 def _first_value(row):
     return next(iter(row.values())) if isinstance(row, dict) else row[0]
 
 
 class EmbeddingJobRepository:
+    # 데이터베이스 전역 advisory lock을 획득해 임베딩 작업 중복 실행을 막는다.
     def acquire_lock(self, conn) -> None:
         with conn.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(%s)", (EMBEDDING_JOB_LOCK_ID,))
@@ -18,10 +20,12 @@ class EmbeddingJobRepository:
         if not acquired:
             raise RuntimeError("another embedding job is already running")
 
+    # 작업 종료 후 세션 advisory lock을 명시적으로 해제한다.
     def release_lock(self, conn) -> None:
         with conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_unlock(%s)", (EMBEDDING_JOB_LOCK_ID,))
 
+    # 동일 profile key의 모델 메타데이터를 최초 한 번만 등록한다.
     def insert_embedding_profile(self, conn, profile: EmbeddingProfile) -> None:
         with conn.cursor() as cur:
             cur.execute(
@@ -39,6 +43,7 @@ class EmbeddingJobRepository:
                 profile.as_record(),
             )
 
+    # 처리 범위가 고정된 실행 이력을 생성하고 새 작업 ID를 반환한다.
     def insert_embedding_job(
         self,
         conn,
@@ -62,6 +67,7 @@ class EmbeddingJobRepository:
             )
             return int(_first_value(cur.fetchone()))
 
+    # 완료된 배치 수를 실행 이력에 반영한다.
     def update_embedding_job_progress(self, conn, job_id: int, processed_count: int) -> None:
         with conn.cursor() as cur:
             cur.execute(
@@ -69,6 +75,7 @@ class EmbeddingJobRepository:
                 (processed_count, job_id),
             )
 
+    # 정상 종료 상태, 최종 처리 수와 완료 시각을 함께 기록한다.
     def update_embedding_job_completed(self, conn, job_id: int, processed_count: int) -> None:
         with conn.cursor() as cur:
             cur.execute(
@@ -80,6 +87,7 @@ class EmbeddingJobRepository:
                 (processed_count, job_id),
             )
 
+    # 실패 시 진행량과 길이가 제한된 오류 메시지를 실행 이력에 남긴다.
     def update_embedding_job_failed(
         self,
         conn,
@@ -97,23 +105,3 @@ class EmbeddingJobRepository:
                 """,
                 (processed_count, str(error)[:4000], job_id),
             )
-
-    def select_latest_embedding_jobs(
-        self,
-        conn,
-        source_name: str,
-        limit: int = 5,
-    ) -> list[dict]:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT job_id, status, target_count, processed_count,
-                       started_at, finished_at, error_message
-                FROM embedding_jobs
-                WHERE source_name = %s
-                ORDER BY job_id DESC
-                LIMIT %s
-                """,
-                (source_name, limit),
-            )
-            return cur.fetchall()

@@ -9,11 +9,13 @@ from admin.backend.controllers.dependencies import authorize_admin
 router = APIRouter(prefix=ADMIN_API_PREFIX, dependencies=[Depends(authorize_admin)])
 
 
+# 관리자 서비스의 최소 생존 상태를 외부 점검용으로 반환한다.
 @router.get("/health")
 def health() -> dict:
     return {"status": "ok", "service": "statyearbook-admin"}
 
 
+# 내부 비밀값을 제외하고 화면에서 선택 가능한 운영 옵션만 직렬화한다.
 @router.get("/options")
 def options(request: Request) -> dict:
     settings = request.app.state.settings

@@ -1,17 +1,24 @@
-# 이 파일은 사용자용 서버와 분리된 관리자 backend/frontend 이미지를 빌드한다.
-# 로컬 모델과 관리자 코드만 포함하며 기본 포트는 8100이다.
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    APP_PROFILE=main \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+WORKDIR /service
+RUN groupadd --system app && useradd --system --gid app --home-dir /service app
+
+COPY admin/requirements.txt /tmp/requirements.txt
+RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
 
 COPY admin ./admin
-COPY db ./db
-COPY models ./models
-COPY shared ./shared
+COPY utils ./utils
+RUN mkdir -p /service/models /service/admin/state /service/admin/workspaces \
+    && chown -R app:app /service
 
+USER app
+VOLUME ["/service/models", "/service/admin/state", "/service/admin/workspaces"]
 EXPOSE 8100
 CMD ["python", "-m", "admin", "serve"]

@@ -5,16 +5,18 @@ from __future__ import annotations
 import json
 
 from admin.backend.sql import sql_literal
-from shared.table_search import build_table_search_chunks
+from admin.backend.services.table_search_chunks import build_table_search_chunks
 
 YEARBOOK_LOAD_MODES = ("reject", "replace")
 
 
+# 값 목록을 위치별 선택 형변환이 적용된 SQL 리터럴 목록으로 만든다.
 def _values(values: list[object], casts: dict[int, str] | None = None) -> str:
     casts = casts or {}
     return ", ".join(sql_literal(value, casts.get(index)) for index, value in enumerate(values))
 
 
+# DML 생성에 필요한 발간물 연도·제목·통계 목록의 최소 계약을 검증한다.
 def validate_yearbook(data: dict) -> None:
     publication = data.get("publication") or {}
     year = publication.get("year")
@@ -27,6 +29,7 @@ def validate_yearbook(data: dict) -> None:
         raise ValueError("parsed yearbook contains no statistics")
 
 
+# 한 통계와 표·검색 청크·주석·담당자 INSERT 문을 출력 버퍼에 순서대로 추가한다.
 def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
     stat_values = [
         "v_pub_id",
@@ -117,6 +120,7 @@ def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
         )
 
 
+# 파싱 결과 전체를 재실행 가능한 단일 연도 적재 트랜잭션으로 직렬화한다.
 def build_load_dml(
     data: dict,
     mode: str = "reject",

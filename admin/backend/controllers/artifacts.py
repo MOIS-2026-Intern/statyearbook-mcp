@@ -13,6 +13,7 @@ router = APIRouter(
 )
 
 
+# 작업에 등록된 산출물만 workspace 경계 안에서 내려준다.
 @router.get("/{artifact_name}")
 def download_artifact(job_id: str, artifact_name: str, request: Request):
     repository = request.app.state.job_repository

@@ -47,11 +47,13 @@ _QUERY_STOP_TOKENS = {
 }
 
 
+# 질의를 두 글자 이상의 검색 토큰으로 나눈다.
 def _tokenize(query: str) -> list[str]:
     raw = re.split(r"[\s,()·/]+", query.strip())
     return [token.strip() for token in raw if len(token.strip()) >= 2]
 
 
+# 검색 의도와 무관한 요청 표현과 연도 토큰을 제거한다.
 def _lexical_query(query: str) -> str:
     tokens = [
         token
@@ -62,17 +64,20 @@ def _lexical_query(query: str) -> str:
     return " ".join(tokens)
 
 
+# 후보 행의 검색 대상 필드를 비교 가능한 단일 문자열로 합친다.
 def _row_text(row: dict) -> str:
     values = [row.get(column) or "" for column in SEARCH_TEXT_COLUMNS]
     values.append(row.get("matched_text") or "")
     return " ".join(map(str, values)).lower()
 
 
+# 후보 행에 실제로 포함된 원문 질의 토큰만 추린다.
 def _matched_tokens(tokens: list[str], row: dict) -> list[str]:
     text = _row_text(row)
     return [token for token in tokens if token.lower() in text]
 
 
+# 임베딩 프로필과 선택적 발간연도를 강제하는 WHERE 절을 만든다.
 def _where_sql(publication_year: int | None, alias: str = "") -> str:
     prefix = f"{alias}." if alias else ""
     where = [
@@ -84,6 +89,7 @@ def _where_sql(publication_year: int | None, alias: str = "") -> str:
     return " AND ".join(where)
 
 
+# 제목 벡터 검색 SQL의 placeholder 순서에 맞춰 인자를 조립한다.
 def _params(
     query_vec: str,
     profile_key: str,
@@ -97,6 +103,7 @@ def _params(
     return params
 
 
+# 통계 제목 임베딩의 최근접 후보를 조회하는 SQL을 만든다.
 def _search_sql(publication_year: int | None) -> str:
     where_sql = _where_sql(publication_year)
     return f"""
@@ -112,6 +119,7 @@ def _search_sql(publication_year: int | None) -> str:
     """
 
 
+# 표 청크 검색 결과가 공통으로 반환할 통계·표 메타데이터를 정의한다.
 def _table_metadata_sql() -> str:
     return """
         s.stat_id, s.year AS publication_year, s.ref_id,
@@ -122,6 +130,7 @@ def _table_metadata_sql() -> str:
     """
 
 
+# 표 헤더와 행 라벨을 대상으로 전문 검색 SQL을 만든다.
 def _table_lexical_sql(publication_year: int | None) -> str:
     year_filter = " AND s.year = %s" if publication_year is not None else ""
     return f"""
@@ -137,6 +146,7 @@ def _table_lexical_sql(publication_year: int | None) -> str:
     """
 
 
+# 동일 프로필의 표 검색 청크를 벡터 거리로 조회하는 SQL을 만든다.
 def _table_vector_sql(publication_year: int | None) -> str:
     year_filter = " AND s.year = %s" if publication_year is not None else ""
     return f"""
@@ -153,6 +163,8 @@ def _table_vector_sql(publication_year: int | None) -> str:
     """
 
 
+# 제목 벡터·표 전문·표 벡터의 세 후보군을 한 트랜잭션에서 조회한다.
+# 점진 배포 중 표 청크 schema가 없으면 제목 후보만 유지한다.
 def _fetch_rows(
     query: str,
     query_vec: str,
@@ -193,6 +205,7 @@ def _fetch_rows(
         return title_rows, lexical_rows, vector_rows
 
 
+# DB의 JSON 또는 배열 라벨 값을 문자열 목록으로 정규화한다.
 def _labels(row: dict) -> list[str]:
     labels = row.get("search_labels") or []
     if isinstance(labels, str):
@@ -200,10 +213,12 @@ def _labels(row: dict) -> list[str]:
     return [str(label) for label in labels]
 
 
+# 띄어쓰기와 구분자를 제거해 라벨 부분 일치를 비교하기 쉽게 만든다.
 def _compact_match_text(value: str) -> str:
     return re.sub(r"[\s·･_/-]+", "", value.casefold())
 
 
+# 질의 토큰과 가장 잘 맞는 표 라벨 및 일치 범위를 계산한다.
 def _best_matched_text(
     query: str,
     row: dict,
@@ -219,6 +234,7 @@ def _best_matched_text(
     search_tokens = _tokenize(_lexical_query(query))
     compact_tokens = [_compact_match_text(token) for token in search_tokens]
 
+    # 정규화한 라벨에 포함된 질의 토큰 수를 센다.
     def matched_count(label: str) -> int:
         compact_label = _compact_match_text(label)
         return sum(token in compact_label for token in compact_tokens)
@@ -235,6 +251,7 @@ def _best_matched_text(
     return matched, exact, coverage
 
 
+# 통계 행을 여러 검색 경로가 공유할 랭킹 후보로 초기화한다.
 def _base_candidate(row: dict) -> dict:
     return {
         "stat_id": row["stat_id"],
@@ -262,6 +279,7 @@ def _base_candidate(row: dict) -> dict:
     }
 
 
+# 검색 경로별 최고 기여도와 우선순위가 높은 일치 메타데이터를 반영한다.
 def _add_candidate(
     candidates: dict[int, dict],
     row: dict,
@@ -284,6 +302,7 @@ def _add_candidate(
         candidate["table_seq"] = row.get("table_seq")
 
 
+# 세 후보군을 가중 RRF로 합치고 같은 통계표를 중복 제거한다.
 def _merge_candidates(
     query: str,
     title_rows: list[dict],
@@ -361,6 +380,7 @@ def _merge_candidates(
     return results
 
 
+# 검색할 수 없는 질의에 대해 일관된 빈 응답을 만든다.
 def _empty_response(query: str, publication_year: int | None = None) -> dict:
     return {
         "query": query,
@@ -374,6 +394,8 @@ def _empty_response(query: str, publication_year: int | None = None) -> dict:
     }
 
 
+# 자연어 질의를 임베딩하고 후보군을 결합해 최종 통계 검색 결과를 만든다.
+# 지정 연도에 결과가 없을 때만 연도 필터를 풀어 한 번 더 검색한다.
 def search_statistics_data(
     query: str,
     publication_year: int | None = None,
@@ -426,7 +448,9 @@ def search_statistics_data(
     }
 
 
+# search_statistics MCP 도구를 앱에 등록한다.
 def register(mcp: FastMCP) -> None:
+    # 입력 제약을 적용하고 내부 통계 검색 응답을 그대로 반환한다.
     @mcp.tool(description=SEARCH_STATISTICS)
     def search_statistics(
         query: Annotated[str, Field(description=SEARCH_STATISTICS_FIELDS["query"])],

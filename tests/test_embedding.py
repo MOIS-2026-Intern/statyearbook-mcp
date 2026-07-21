@@ -8,14 +8,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from shared.embedding import (
+from utils.embedding import (
     BGE_M3_REVISION,
     EmbeddingConfigurationError,
     EmbeddingSettings,
     LocalSentenceTransformerProvider,
-    OpenAIEmbeddingProvider,
     create_embedding_profile,
 )
+from app.config import embedding_settings_from_env
 from admin.backend.repositories.statistics_embeddings import StatisticsEmbeddingRepository
 
 
@@ -25,38 +25,33 @@ class ArrayLike(list):
 
 
 class EmbeddingSettingsTests(unittest.TestCase):
-    def test_defaults_preserve_existing_openai_configuration(self) -> None:
+    def test_defaults_use_local_bge_m3_database_dimension(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            settings = EmbeddingSettings.from_env()
+            settings = embedding_settings_from_env()
 
-        self.assertEqual(settings.provider, "openai")
-        self.assertEqual(settings.model, "text-embedding-3-small")
-        self.assertEqual(settings.dimension, 1536)
+        self.assertEqual(settings.provider, "local")
+        self.assertEqual(settings.model, "models/bge-m3")
+        self.assertEqual(settings.dimension, 1024)
 
-    def test_bge_m3_local_defaults_use_pinned_revision(self) -> None:
+    def test_bge_m3_identity_is_fixed_while_runtime_options_are_configurable(self) -> None:
         env = {
-            "STATYEARBOOK_EMBED_PROVIDER": "local",
-            "STATYEARBOOK_EMBED_MODEL": "models/bge-m3",
-            "STATYEARBOOK_EMBED_DIMENSION": "1024",
+            "STATYEARBOOK_APP_EMBED_MODEL": "models/bge-m3",
+            "STATYEARBOOK_APP_EMBED_BATCH_SIZE": "4",
+            "STATYEARBOOK_APP_EMBED_DEVICE": "mps",
         }
         with patch.dict(os.environ, env, clear=True):
-            settings = EmbeddingSettings.from_env()
+            settings = embedding_settings_from_env()
 
         self.assertEqual(settings.provider, "local")
         self.assertEqual(settings.dimension, 1024)
+        self.assertEqual(settings.max_length, 512)
         self.assertEqual(settings.revision, BGE_M3_REVISION)
+        self.assertEqual(settings.batch_size, 4)
+        self.assertEqual(settings.device, "mps")
 
-    def test_unknown_model_requires_explicit_dimension(self) -> None:
-        env = {
-            "STATYEARBOOK_EMBED_PROVIDER": "openai",
-            "STATYEARBOOK_EMBED_MODEL": "another-model",
-        }
-        with patch.dict(os.environ, env, clear=True):
-            with self.assertRaisesRegex(
-                EmbeddingConfigurationError,
-                "STATYEARBOOK_EMBED_DIMENSION is required",
-            ):
-                EmbeddingSettings.from_env()
+    def test_rejects_non_local_embedding_provider(self) -> None:
+        with self.assertRaisesRegex(EmbeddingConfigurationError, "local BGE-M3"):
+            EmbeddingSettings("remote", "remote-model", 1024)
 
     def test_local_profile_uses_manifest_identity_instead_of_machine_path(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -81,26 +76,6 @@ class EmbeddingSettingsTests(unittest.TestCase):
         self.assertEqual(profile.model, "BAAI/bge-m3")
         self.assertEqual(profile.revision, BGE_M3_REVISION)
         self.assertEqual(len(profile.profile_key), 64)
-
-
-class OpenAIEmbeddingProviderTests(unittest.TestCase):
-    @patch("openai.OpenAI")
-    def test_uses_configured_model_and_dimension(self, client_class) -> None:
-        client = client_class.return_value
-        item = MagicMock(embedding=[0.1, 0.2])
-        client.embeddings.create.return_value.data = [item]
-        settings = EmbeddingSettings("openai", "test-model", 2)
-
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
-            provider = OpenAIEmbeddingProvider(settings)
-            vectors = provider.encode(["질의"])
-
-        self.assertEqual(vectors, [[0.1, 0.2]])
-        client.embeddings.create.assert_called_once_with(
-            model="test-model",
-            input=["질의"],
-            dimensions=2,
-        )
 
 
 class LocalEmbeddingProviderTests(unittest.TestCase):

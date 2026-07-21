@@ -22,11 +22,13 @@ LEGACY_ARTIFACT_NAMES = {
 }
 
 
+# 정렬 가능하면서 마이크로초까지 구분되는 로컬 시각 기반 작업 ID를 만든다.
 def create_workspace_id(now: datetime | None = None) -> str:
     timestamp = now or datetime.now().astimezone()
     return timestamp.strftime(WORKSPACE_ID_FORMAT)
 
 
+# 중복 생성을 허용하지 않는 새 작업 디렉터리를 만들고 ID와 경로를 반환한다.
 def create_workspace(root: Path, now: datetime | None = None) -> tuple[str, Path]:
     workspace_id = create_workspace_id(now)
     workspace = root / workspace_id
@@ -34,6 +36,7 @@ def create_workspace(root: Path, now: datetime | None = None) -> tuple[str, Path
     return workspace_id, workspace
 
 
+# UUID 기반 과거 작업과 산출물 이름을 현재 규칙으로 손실 없이 이관한다.
 def migrate_legacy_workspaces(
     root: Path,
     repository: AdminJobRepository,

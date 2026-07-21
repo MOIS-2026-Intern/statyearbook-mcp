@@ -54,6 +54,7 @@ TOOL_RESULT_PROMPTS = {
 }
 
 
+# 실제로 사용한 도구의 결과 규칙만 기본 시스템 프롬프트에 덧붙인다.
 def build_system_prompt(tool_names: list[str] | tuple[str, ...] = ()) -> str:
     """직전 도구 결과에 필요한 응답 규칙만 공통 프롬프트에 덧붙인다."""
     sections = [SYSTEM_PROMPT]

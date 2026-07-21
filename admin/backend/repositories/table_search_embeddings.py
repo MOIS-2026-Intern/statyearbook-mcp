@@ -1,21 +1,18 @@
 # 이 파일은 표 검색 청크 생성, 임베딩 대상 조회와 벡터 저장을 담당한다.
 from __future__ import annotations
 
-import json
-
-from psycopg.types.json import Jsonb
-
 from admin.backend.models.embedding import EmbeddingBatch
-from shared.embedding import EmbeddingConfigurationError
-from shared.table_search import build_table_search_chunks
-from shared.vector import vector_literal
+from utils.embedding import EmbeddingConfigurationError
+from utils.vector import vector_literal
 
 
+# tuple과 dict 결과 모두에서 단일 집계값을 꺼낸다.
 def _first_value(row):
     return next(iter(row.values())) if isinstance(row, dict) else row[0]
 
 
 class TableSearchEmbeddingRepository:
+    # 표 검색 임베딩 작업을 선택한 발간연도에 한정한다.
     def __init__(self, publication_year: int | None = None):
         self.publication_year = publication_year
         self.name = (
@@ -24,12 +21,15 @@ class TableSearchEmbeddingRepository:
             else "table_search"
         )
 
+    # statistics 별칭을 기준으로 선택적 연도 범위 조건을 만든다.
     def _scope_sql(self) -> str:
         return "s.year = %s" if self.publication_year is not None else "TRUE"
 
+    # 연도 범위 조건에 필요한 인자만 순서대로 반환한다.
     def _scope_params(self) -> list:
         return [self.publication_year] if self.publication_year is not None else []
 
+    # 표 검색 벡터 열의 실제 차원이 모델과 일치하는지 쓰기 전에 확인한다.
     def select_and_validate_dimension(self, conn, expected_dimension: int) -> None:
         with conn.cursor() as cur:
             cur.execute(
@@ -49,9 +49,11 @@ class TableSearchEmbeddingRepository:
         if actual_type != expected_type:
             raise EmbeddingConfigurationError(
                 f"table_search_chunks.embedding is {actual_type}, but the configured "
-                f"model requires {expected_type}; apply db/schema.sql before re-embedding"
+                f"model requires {expected_type}; provision the matching database schema "
+                "before re-embedding"
             )
 
+    # 실행 중 새 청크가 섞이지 않도록 시작 시점의 최대 청크 ID를 고정한다.
     def select_max_source_id(self, conn) -> int:
         with conn.cursor() as cur:
             cur.execute(
@@ -66,11 +68,13 @@ class TableSearchEmbeddingRepository:
             )
             return int(_first_value(cur.fetchone()))
 
+    # 강제 실행 또는 profile 불일치에 맞는 후보 SQL 조건을 반환한다.
     def _candidate_sql(self, force: bool) -> str:
         if force:
             return "TRUE"
         return "(c.embedding IS NULL OR c.embedding_profile_key IS DISTINCT FROM %s)"
 
+    # 현재 연도와 고정된 최대 ID 안에서 처리 대상 청크 수를 센다.
     def select_candidate_count(
         self,
         conn,
@@ -96,6 +100,7 @@ class TableSearchEmbeddingRepository:
             )
             return int(_first_value(cur.fetchone()))
 
+    # 청크 ID 커서를 사용해 다음 검색 문구 배치를 안정적으로 조회한다.
     def select_candidate_batch(
         self,
         conn,
@@ -130,9 +135,11 @@ class TableSearchEmbeddingRepository:
         last_source_id = int(rows[-1]["chunk_id"]) if rows else after_source_id
         return EmbeddingBatch(rows=rows, last_source_id=last_source_id)
 
+    # 저장된 표 검색 문구를 모델 입력 순서 그대로 추출한다.
     def select_embedding_texts(self, rows: list[dict]) -> list[str]:
         return [str(row["search_text"]) for row in rows]
 
+    # 생성된 벡터와 profile key를 대응하는 검색 청크에 일괄 반영한다.
     def update_embedding_batch(
         self,
         conn,
@@ -153,86 +160,3 @@ class TableSearchEmbeddingRepository:
                 """,
                 params,
             )
-
-    def select_embedding_status(self, conn, profile_key: str) -> dict:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT COUNT(*) AS total_count,
-                       COUNT(c.embedding) AS embedded_count,
-                       COUNT(*) FILTER (
-                           WHERE c.embedding IS NOT NULL
-                             AND c.embedding_profile_key = %s
-                       ) AS current_count
-                FROM table_search_chunks c
-                JOIN stat_tables t ON t.table_id = c.table_id
-                JOIN statistics s ON s.stat_id = t.stat_id
-                WHERE {self._scope_sql()}
-                """,
-                [profile_key, *self._scope_params()],
-            )
-            row = cur.fetchone()
-        status = dict(row) if isinstance(row, dict) else {
-            "total_count": row[0],
-            "embedded_count": row[1],
-            "current_count": row[2],
-        }
-        status["pending_count"] = status["total_count"] - status["current_count"]
-        return status
-
-    def rebuild_chunks(self, conn) -> int:
-        """기존 stat_tables.body에서 검색 청크를 idempotent하게 다시 만든다."""
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT s.stat_id, s.year, s.ref_id, s.chapter, s.section,
-                       s.level3_title, s.level4_title, s.title_ko, s.title_en,
-                       t.table_id, t.seq, t.caption, t.body
-                FROM stat_tables t
-                JOIN statistics s ON s.stat_id = t.stat_id
-                WHERE {self._scope_sql()}
-                ORDER BY t.table_id
-                """,
-                self._scope_params(),
-            )
-            tables = cur.fetchall()
-            if self.publication_year is None:
-                cur.execute("DELETE FROM table_search_chunks")
-            else:
-                cur.execute(
-                    """
-                    DELETE FROM table_search_chunks c
-                    USING stat_tables t, statistics s
-                    WHERE c.table_id = t.table_id
-                      AND t.stat_id = s.stat_id
-                      AND s.year = %s
-                    """,
-                    (self.publication_year,),
-                )
-
-            inserted = 0
-            for row in tables:
-                body = row["body"]
-                if isinstance(body, str):
-                    body = json.loads(body)
-                table = {"body": body, "caption": row.get("caption"), "seq": row["seq"]}
-                for chunk in build_table_search_chunks(dict(row), table):
-                    cur.execute(
-                        """
-                        INSERT INTO table_search_chunks (
-                            table_id, chunk_no, chunk_kind, search_labels,
-                            search_text, search_doc
-                        ) VALUES (%s, %s, %s, %s, %s, to_tsvector('simple', %s))
-                        """,
-                        (
-                            row["table_id"],
-                            chunk["chunk_no"],
-                            chunk["chunk_kind"],
-                            Jsonb(chunk["search_labels"]),
-                            chunk["search_text"],
-                            chunk["search_text"],
-                        ),
-                    )
-                    inserted += 1
-        conn.commit()
-        return inserted

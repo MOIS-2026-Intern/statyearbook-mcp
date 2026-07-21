@@ -13,6 +13,7 @@ PUBLICATION_WRITE_LOCK_ID = 7_824_601_025
 
 
 class PublicationRepository:
+    # 관리자 화면에 필요한 최소 발간물 메타데이터를 최신순으로 조회한다.
     def select_publications(self, dsn: str) -> list[dict]:
         with psycopg.connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
             cur.execute(
@@ -24,6 +25,7 @@ class PublicationRepository:
             )
             return [dict(row) for row in cur.fetchall()]
 
+    # 발간물과 종속 데이터·고아 profile을 잠금이 걸린 단일 트랜잭션으로 삭제한다.
     def delete_publications(self, dsn: str, pub_ids: list[int]) -> dict:
         selected_ids = sorted(set(pub_ids))
         with psycopg.connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:

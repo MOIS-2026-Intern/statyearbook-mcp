@@ -14,6 +14,7 @@ class IngestionOptions:
     load_mode: str = "reject"
     embedding_model: str = "bge-m3"
 
+    # 불변 작업 옵션을 SQLite JSON 저장에 적합한 일반 사전으로 변환한다.
     def as_dict(self) -> dict:
         return asdict(self)
 
@@ -23,7 +24,6 @@ class WorkspaceArtifactNames:
     source_yearbook: str = "yearbook_source.hwpx"
     parsed_json: str = "yearbook_parsed.json"
     review_markdown: str = "yearbook_review.md"
-    schema_ddl: str = "yearbook_schema.sql"
     load_dml: str = "yearbook_load.sql"
     embedding_dml: str = "yearbook_title_embeddings.sql"
     table_embedding_dml: str = "yearbook_table_search_embeddings.sql"

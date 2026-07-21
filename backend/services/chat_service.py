@@ -21,10 +21,12 @@ from backend.serializers.mcp_result_serializer import (
 
 
 class ChatService:
+    # 대화 설정과 선택된 모델 gateway를 서비스에 연결한다.
     def __init__(self, settings: Settings, model_gateway: ModelGateway | None = None):
         self._settings = settings
         self._model = model_gateway or create_model_gateway(settings)
 
+    # MCP 도구 발견과 모델 루프를 실행해 최종 채팅 응답을 구성한다.
     async def respond(self, request: ChatRequest) -> ChatResponse:
         traces: list[McpTrace] = []
         messages = _model_messages_from_request(request, self._settings.tool_output_max_chars)
@@ -54,6 +56,7 @@ class ChatService:
             traces=returned_traces,
         )
 
+    # MCP 도구 목록을 조회하고 성공 또는 실패 trace를 남긴다.
     async def _list_tools(self, mcp: McpGateway, traces: list[McpTrace]) -> list[ToolSpec]:
         started = time.perf_counter()
         trace_id = str(uuid4())
@@ -92,6 +95,7 @@ class ChatService:
         )
         return tools
 
+    # 모델이 답을 완성하거나 최대 횟수에 도달할 때까지 도구 호출을 반복한다.
     async def _run_model_loop(
         self,
         *,
@@ -140,6 +144,7 @@ class ChatService:
         )
         return final_turn.text
 
+    # 단일 MCP 도구 호출을 실행·캐시하고 모델 결과와 trace를 함께 생성한다.
     async def _execute_tool_call(
         self,
         mcp: McpGateway,
@@ -215,19 +220,20 @@ class ChatService:
             )
             return ToolResult(call_id=call.id, name=call.name, result=error_payload, is_error=True)
 
+    # trace에 표시할 현재 MCP 연결 정보를 구성한다.
     def _mcp_connection_info(self) -> dict[str, Any]:
         return {
-            "transport": "stdio",
-            "command": self._settings.mcp_command,
-            "args": self._settings.mcp_args,
-            "cwd": self._settings.mcp_cwd,
+            "transport": "streamable-http",
+            "url": self._settings.mcp_url,
         }
 
 
+# 성공한 도구 결과에서 호출 순서대로 도구 이름을 추출한다.
 def _successful_tool_names(results: list[ToolResult]) -> tuple[str, ...]:
     return tuple(result.name for result in results if not result.is_error)
 
 
+# 새 도구 결과가 있으면 과거 도구 컨텍스트보다 우선한다.
 def _response_tool_names(
     current_results: list[ToolResult],
     historical_names: tuple[str, ...],
@@ -236,6 +242,7 @@ def _response_tool_names(
     return _successful_tool_names(current_results) or historical_names
 
 
+# 가장 최근 도구 사용 assistant 턴의 성공한 도구 이름을 복원한다.
 def _historical_tool_names(request: ChatRequest) -> tuple[str, ...]:
     """가장 최근 도구 사용 assistant 턴의 성공한 도구 이름을 복원한다."""
     trace_by_id = {trace.id: trace for trace in request.traces}
@@ -259,6 +266,7 @@ def _historical_tool_names(request: ChatRequest) -> tuple[str, ...]:
     return ()
 
 
+# 구조화 결과나 text content에서 trace용 짧은 실행 요약을 만든다.
 def _tool_summary(result: dict[str, Any]) -> str:
     structured = result.get("structuredContent")
     if isinstance(structured, dict):
@@ -293,6 +301,7 @@ def _tool_summary(result: dict[str, Any]) -> str:
     return "MCP 도구 호출 완료"
 
 
+# 후속 판단에 필요한 핵심만 모델에 넘기고 프런트엔드 trace용 원본은 보존한다.
 def _model_result_for_tool(tool_name: str | None, result: dict[str, Any]) -> dict[str, Any]:
     """모델에는 후속 판단에 필요한 내용만 전달하고 프론트엔드 trace는 원본을 보존한다."""
     if result.get("isError"):
@@ -349,6 +358,7 @@ def _model_result_for_tool(tool_name: str | None, result: dict[str, Any]) -> dic
     }
 
 
+# 구조화 필드를 우선하고 없으면 text content의 JSON object를 찾는다.
 def _structured_content_from_result(result: dict[str, Any]) -> dict[str, Any] | None:
     structured = result.get("structuredContent")
     if isinstance(structured, dict):
@@ -366,12 +376,14 @@ def _structured_content_from_result(result: dict[str, Any]) -> dict[str, Any] | 
     return None
 
 
+# 딕셔너리에서 값이 있는 요청 키만 선택한다.
 def _select_keys(value: Any, *keys: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     return {key: value[key] for key in keys if value.get(key) is not None}
 
 
+# 대화 이력과 연관 trace를 모델 입력 메시지로 구성한다.
 def _model_messages_from_request(request: ChatRequest, max_trace_chars: int) -> list[ModelMessage]:
     trace_by_id = {trace.id: trace for trace in request.traces}
     messages: list[ModelMessage] = []
@@ -395,6 +407,7 @@ def _model_messages_from_request(request: ChatRequest, max_trace_chars: int) -> 
     return messages
 
 
+# assistant 메시지가 참조한 trace만 모델에 전달할 컨텍스트로 축약한다.
 def _trace_context_for_message(
     message: ChatMessage,
     trace_by_id: dict[str, McpTrace],
@@ -423,9 +436,11 @@ def _trace_context_for_message(
     return context
 
 
+# 현재 UTC 시각을 API 타임스탬프용 ISO 8601 문자열로 반환한다.
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+# 시작 시각부터의 경과 시간을 밀리초로 계산한다.
 def _elapsed_ms(started: float) -> int:
     return round((time.perf_counter() - started) * 1000)

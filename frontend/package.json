@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "dev": "vite --host 0.0.0.0 --mode development",
+    "build": "npm run build:main",
+    "build:test": "tsc --noEmit && vite build --mode test",
+    "build:main": "tsc --noEmit && vite build --mode production",
+    "preview": "vite preview --host 0.0.0.0 --mode production"
   },
   "dependencies": {
     "lucide-react": "^0.475.0",

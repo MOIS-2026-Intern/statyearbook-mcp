@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.mcp_app import create_app
+from app.server import create_app
 from app.tools.search_statistics import _search_sql, search_statistics_data
 
 

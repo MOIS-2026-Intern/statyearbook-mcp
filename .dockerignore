@@ -7,15 +7,18 @@ __pycache__
 .mypy_cache
 
 .env
-.env.*
-!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 
 frontend
 data
 db
 docs
-supabase
 tests
+models
+admin/state
+admin/workspaces
 
 README.md
-backend/README.md
+**/README.md

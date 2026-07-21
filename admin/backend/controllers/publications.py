@@ -14,6 +14,7 @@ router = APIRouter(
 )
 
 
+# 현재 프로필에서 허용된 DB의 발간물 목록을 반환한다.
 @router.get("")
 def select_publications(
     request: Request,
@@ -25,6 +26,7 @@ def select_publications(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+# 선택한 발간물과 종속 통계를 원자적으로 삭제하고 도메인 오류를 HTTP 오류로 바꾼다.
 @router.delete("")
 def delete_publications(
     payload: DeletePublicationsRequest,
