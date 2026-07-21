@@ -119,6 +119,20 @@ psql -d statyearbook_mcp -c \
   "SELECT column_name FROM information_schema.columns WHERE table_name = 'statistics' AND column_name LIKE 'level%' ORDER BY ordinal_position; SELECT to_regclass('public.statistic_images');"
 ```
 
+기존 DB의 `stat_tables.body`에서 컬럼명과 숫자가 아닌 행·분류 항목 검색 청크를 만들고
+표 검색 임베딩을 생성하려면 프로젝트 루트에서 다음 명령을 실행합니다. 새 관리자 적재 작업은
+이 과정을 자동으로 수행하므로 별도 실행이 필요하지 않습니다.
+
+```bash
+.venv/bin/python scripts/backfill_table_search.py --target local --embedding bge-m3
+```
+
+검색 회귀 질문 세트의 Recall@1/3/5는 다음 명령으로 확인합니다.
+
+```bash
+.venv/bin/python scripts/evaluate_search_recall.py
+```
+
 향후에는 현재 SQLite 작업 큐를 Redis/Celery 또는 사내 작업 큐 adapter로 교체하면 여러
 관리자 인스턴스로 확장할 수 있습니다. 전체 흐름은 `YearbookIngestionService`에
 있으므로 CLI와 웹 API는 그대로 유지할 수 있습니다.

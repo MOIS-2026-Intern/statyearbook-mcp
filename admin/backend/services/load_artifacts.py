@@ -4,7 +4,10 @@ from pathlib import Path
 
 from admin.backend.models.ingestion_job import ARTIFACT_NAMES
 from admin.backend.services.load_dml import build_load_dml
-from admin.backend.services.load_embedding_dml import TitleEmbeddingDmlWriter
+from admin.backend.services.load_embedding_dml import (
+    TableSearchEmbeddingDmlWriter,
+    TitleEmbeddingDmlWriter,
+)
 from admin.backend.services.load_parser import parsed_to_markdown, write_json, write_text
 from admin.backend.services.load_schema import build_schema_ddl
 from shared.embedding import EmbeddingProfile
@@ -38,5 +41,14 @@ class YearbookArtifactService:
     def embedding_dml_writer(self, profile: EmbeddingProfile) -> TitleEmbeddingDmlWriter:
         return TitleEmbeddingDmlWriter(
             self.workspace / ARTIFACT_NAMES.embedding_dml,
+            profile,
+        )
+
+    def table_embedding_dml_writer(
+        self,
+        profile: EmbeddingProfile,
+    ) -> TableSearchEmbeddingDmlWriter:
+        return TableSearchEmbeddingDmlWriter(
+            self.workspace / ARTIFACT_NAMES.table_embedding_dml,
             profile,
         )

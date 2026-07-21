@@ -4,6 +4,7 @@ from functools import lru_cache
 from app.config import EMBEDDING_SETTINGS
 from shared.embedding import (
     STATISTICS_CONTENT_VERSION,
+    TABLE_SEARCH_CONTENT_VERSION,
     EmbeddingProfile,
     EmbeddingProvider,
     create_embedding_profile,
@@ -21,6 +22,11 @@ def embedding_provider() -> EmbeddingProvider:
 @lru_cache(maxsize=1)
 def embedding_profile() -> EmbeddingProfile:
     return create_embedding_profile(EMBEDDING_SETTINGS, STATISTICS_CONTENT_VERSION)
+
+
+@lru_cache(maxsize=1)
+def table_search_embedding_profile() -> EmbeddingProfile:
+    return create_embedding_profile(EMBEDDING_SETTINGS, TABLE_SEARCH_CONTENT_VERSION)
 
 
 # 질의를 pgvector 리터럴로 임베딩한다.

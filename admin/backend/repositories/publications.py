@@ -53,6 +53,9 @@ class PublicationRepository:
                     (SELECT COUNT(*) FROM selected_statistics) AS statistics,
                     (SELECT COUNT(*) FROM stat_tables t
                      JOIN selected_statistics s ON s.stat_id = t.stat_id) AS stat_tables,
+                    (SELECT COUNT(*) FROM table_search_chunks c
+                     JOIN stat_tables t ON t.table_id = c.table_id
+                     JOIN selected_statistics s ON s.stat_id = t.stat_id) AS table_search_chunks,
                     (SELECT COUNT(*) FROM footnotes f
                      JOIN selected_statistics s ON s.stat_id = f.stat_id) AS footnotes,
                     (SELECT COUNT(*) FROM contacts c
@@ -61,7 +64,14 @@ class PublicationRepository:
                 (selected_ids,),
             )
             related_counts = dict(cur.fetchone())
-            source_names = [f"statistics:{row['year']}" for row in publications]
+            source_names = [
+                source_name
+                for row in publications
+                for source_name in (
+                    f"statistics:{row['year']}",
+                    f"table_search:{row['year']}",
+                )
+            ]
             cur.execute(
                 """
                 SELECT DISTINCT profile_key
@@ -71,8 +81,14 @@ class PublicationRepository:
                 SELECT DISTINCT embedding_profile_key
                 FROM statistics
                 WHERE pub_id = ANY(%s) AND embedding_profile_key IS NOT NULL
+                UNION
+                SELECT DISTINCT c.embedding_profile_key
+                FROM table_search_chunks c
+                JOIN stat_tables t ON t.table_id = c.table_id
+                JOIN statistics s ON s.stat_id = t.stat_id
+                WHERE s.pub_id = ANY(%s) AND c.embedding_profile_key IS NOT NULL
                 """,
-                (source_names, selected_ids),
+                (source_names, selected_ids, selected_ids),
             )
             profile_keys = [row["profile_key"] for row in cur.fetchall()]
 
@@ -100,6 +116,10 @@ class PublicationRepository:
                       AND NOT EXISTS (
                           SELECT 1 FROM statistics s
                           WHERE s.embedding_profile_key = p.profile_key
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM table_search_chunks c
+                          WHERE c.embedding_profile_key = p.profile_key
                       )
                       AND NOT EXISTS (
                           SELECT 1 FROM embedding_jobs j

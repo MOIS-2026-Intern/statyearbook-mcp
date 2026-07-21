@@ -13,7 +13,10 @@ from admin.backend.services.load_workspace import (
     migrate_legacy_workspaces,
 )
 from admin.backend.services.load_dml import build_load_dml
-from admin.backend.services.load_embedding_dml import TitleEmbeddingDmlWriter
+from admin.backend.services.load_embedding_dml import (
+    TableSearchEmbeddingDmlWriter,
+    TitleEmbeddingDmlWriter,
+)
 from admin.backend.services.load_schema import build_schema_ddl
 from shared.embedding import EmbeddingProfile
 
@@ -48,7 +51,13 @@ def parsed_yearbook(year: int = 2026) -> dict:
                         "caption": None,
                         "n_rows": 1,
                         "n_cols": 1,
-                        "body": {"rows": 1, "cols": 1, "cells": []},
+                        "body": {
+                            "rows": 2,
+                            "cols": 2,
+                            "cells": [],
+                            "columns": ["연도 Year", "사망신고 건수"],
+                            "records": [{"연도 Year": "2024", "사망신고 건수": "10"}],
+                        },
                         "table_md": "| 값 |\n|---|\n|1|",
                     }
                 ],
@@ -68,6 +77,9 @@ class YearbookDmlTests(unittest.TestCase):
         self.assertIn("publication year 2026 already exists", dml)
         self.assertIn("RETURNING pub_id INTO v_pub_id", dml)
         self.assertIn("RETURNING stat_id INTO v_stat_id", dml)
+        self.assertIn("RETURNING table_id INTO v_table_id", dml)
+        self.assertIn("INSERT INTO table_search_chunks", dml)
+        self.assertIn("사망신고 건수", dml)
         self.assertIn("level3_no, level4_no", dml)
         self.assertIn("level3_title, level4_title", dml)
         self.assertNotIn("statistic_images", dml)
@@ -114,6 +126,7 @@ class SchemaDdlTests(unittest.TestCase):
         self.assertIn("level3_title", ddl)
         self.assertIn("level4_title", ddl)
         self.assertRegex(ddl, r"embedding\s+vector\(1024\)")
+        self.assertIn("CREATE TABLE IF NOT EXISTS table_search_chunks", ddl)
         self.assertNotIn("ALTER TABLE", ddl)
         self.assertNotIn("DROP TABLE", ddl)
         self.assertNotIn("statistic_images", ddl)
@@ -168,6 +181,44 @@ class EmbeddingDmlTests(unittest.TestCase):
         self.assertIn("INSERT INTO embedding_jobs", dml)
         self.assertIn("'statistics:2026'", dml)
         self.assertTrue(dml.endswith("COMMIT;\n"))
+
+    def test_table_embedding_dml_uses_portable_table_chunk_key(self) -> None:
+        profile = EmbeddingProfile(
+            profile_key="table-profile",
+            provider="local",
+            model="BAAI/bge-m3",
+            revision="revision",
+            dimension=2,
+            max_length=512,
+            content_version="table-search-v1",
+            normalized=True,
+        )
+        row = {
+            "chunk_id": 777,
+            "year": 2026,
+            "ref_id": "2-1-1-5",
+            "title_ko": "안심상속 원스톱서비스",
+            "table_seq": 1,
+            "chunk_kind": "headers",
+            "chunk_no": 1,
+        }
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "yearbook_table_search_embeddings.sql"
+            writer = TableSearchEmbeddingDmlWriter(path, profile)
+            writer.write_batch([row], [[0.6, 0.8]], profile)
+            writer.complete(
+                source_name="table_search:2026",
+                target_count=1,
+                processed_count=1,
+                max_source_id=777,
+            )
+            dml = path.read_text(encoding="utf-8")
+
+        self.assertIn("UPDATE table_search_chunks c", dml)
+        self.assertIn("s.ref_id IS NOT DISTINCT FROM '2-1-1-5'", dml)
+        self.assertIn("c.chunk_kind = 'headers'", dml)
+        self.assertNotIn("chunk_id = 777", dml)
+        self.assertIn("'table_search:2026'", dml)
 
 
 class AdminJobRepositoryTests(unittest.TestCase):

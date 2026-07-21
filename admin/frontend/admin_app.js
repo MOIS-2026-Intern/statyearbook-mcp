@@ -15,9 +15,11 @@ const ingestionStages = [
   ["load_db", "DB 적재", "선택 연도 트랜잭션 실행"],
   ["embedding_dml", "임베딩 SQL 생성", "제목 벡터를 DML 산출물로 보존"],
   ["embedding_db", "임베딩 DB 적재", "생성된 임베딩 DML 실행"],
+  ["table_embedding_dml", "표 검색 임베딩 생성", "컬럼·분류 검색 벡터를 DML 산출물로 보존"],
+  ["table_embedding_db", "표 검색 임베딩 적재", "생성된 표 검색 임베딩 DML 실행"],
   ["verify", "결과 검증", "건수·모델 profile 확인"],
 ];
-const artifactLabels = { parsed_json:"파싱 JSON", review_markdown:"검수 Markdown", schema_ddl:"Schema SQL", load_dml:"적재 SQL", embedding_dml:"임베딩 SQL" };
+const artifactLabels = { parsed_json:"파싱 JSON", review_markdown:"검수 Markdown", schema_ddl:"Schema SQL", load_dml:"적재 SQL", embedding_dml:"제목 임베딩 SQL", table_embedding_dml:"표 검색 임베딩 SQL" };
 let currentJobId = null;
 let pollTimer = null;
 const $ = (id) => document.getElementById(id);
@@ -55,7 +57,8 @@ function renderJob(job) {
   const result = job.result || {};
   $("resultGrid").innerHTML = Object.keys(result).length ? [
     [result.statistics_count ?? 0, "통계 단위"], [result.table_count ?? 0, "원자료 표"],
-    [result.verified_embedding_count ?? 0, "검증된 임베딩"], [result.publication_year ?? "-", "발간연도"],
+    [result.verified_embedding_count ?? 0, "제목 임베딩"], [result.verified_table_embedding_count ?? 0, "표 검색 임베딩"],
+    [result.publication_year ?? "-", "발간연도"],
   ].map(([value,label]) => `<div class="result-item"><strong>${value}</strong><span>${label}</span></div>`).join("") : `<p class="muted">완료 후 적재 건수가 표시됩니다.</p>`;
   const artifacts = job.artifacts || {};
   $("artifactList").innerHTML = Object.keys(artifacts).length ? Object.keys(artifacts).map((name) => `<button class="artifact-button" data-artifact="${name}"><span>${artifactLabels[name] || name}</span><b>↓</b></button>`).join("") : `<p class="muted">생성된 파일이 없습니다.</p>`;

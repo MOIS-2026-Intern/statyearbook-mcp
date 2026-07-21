@@ -60,6 +60,19 @@ CREATE TABLE IF NOT EXISTS stat_tables (
     table_md  TEXT
 );
 
+CREATE TABLE IF NOT EXISTS table_search_chunks (
+    chunk_id              BIGSERIAL PRIMARY KEY,
+    table_id              BIGINT NOT NULL REFERENCES stat_tables(table_id) ON DELETE CASCADE,
+    chunk_no              INT NOT NULL CHECK (chunk_no > 0),
+    chunk_kind            TEXT NOT NULL CHECK (chunk_kind IN ('headers', 'labels')),
+    search_labels         JSONB NOT NULL DEFAULT '[]'::jsonb,
+    search_text           TEXT NOT NULL,
+    search_doc            TSVECTOR NOT NULL,
+    embedding             vector(1024),
+    embedding_profile_key TEXT REFERENCES embedding_profiles(profile_key),
+    UNIQUE (table_id, chunk_kind, chunk_no)
+);
+
 CREATE TABLE IF NOT EXISTS footnotes (
     note_id  BIGSERIAL PRIMARY KEY,
     stat_id  BIGINT REFERENCES statistics(stat_id) ON DELETE CASCADE,
@@ -108,6 +121,14 @@ CREATE INDEX IF NOT EXISTS idx_tables_body
     ON stat_tables USING gin(body);
 CREATE INDEX IF NOT EXISTS idx_tables_stat
     ON stat_tables(stat_id);
+CREATE INDEX IF NOT EXISTS idx_table_search_chunks_table
+    ON table_search_chunks(table_id);
+CREATE INDEX IF NOT EXISTS idx_table_search_chunks_doc
+    ON table_search_chunks USING gin(search_doc);
+CREATE INDEX IF NOT EXISTS idx_table_search_chunks_profile
+    ON table_search_chunks(embedding_profile_key);
+CREATE INDEX IF NOT EXISTS idx_table_search_chunks_embedding
+    ON table_search_chunks USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_notes_stat
     ON footnotes(stat_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_stat
@@ -138,5 +159,24 @@ BEFORE UPDATE OF title_ko, title_en, chapter, section,
                  level3_title, level4_title ON statistics
 FOR EACH ROW
 EXECUTE FUNCTION invalidate_statistics_embedding();
+
+CREATE OR REPLACE FUNCTION invalidate_table_search_chunk_embedding()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.search_text IS DISTINCT FROM OLD.search_text THEN
+        NEW.search_doc := to_tsvector('simple', NEW.search_text);
+        NEW.embedding := NULL;
+        NEW.embedding_profile_key := NULL;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER trg_invalidate_table_search_chunk_embedding
+BEFORE UPDATE OF search_text ON table_search_chunks
+FOR EACH ROW
+EXECUTE FUNCTION invalidate_table_search_chunk_embedding();
 
 COMMIT;

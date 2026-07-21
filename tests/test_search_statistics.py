@@ -29,6 +29,27 @@ def result_row(publication_year: int = 2025) -> dict:
     }
 
 
+def table_result_row(
+    stat_id: int = 22,
+    ref_id: str = "2-1-1-5",
+    chunk_kind: str = "headers",
+) -> dict:
+    row = result_row()
+    row.update({
+        "stat_id": stat_id,
+        "ref_id": ref_id,
+        "level3_title": "민원행정",
+        "level4_title": "안심상속 원스톱서비스",
+        "title_ko": "안심상속 원스톱서비스",
+        "title_en": "One-stop Inheritance Service",
+        "table_seq": 1,
+        "chunk_kind": chunk_kind,
+        "search_labels": ["연도 Year", "사망신고 건수 No. of Death Reports"],
+        "search_text": "안심상속 원스톱서비스 컬럼: 연도 | 사망신고 건수",
+    })
+    return row
+
+
 class SearchStatisticsTests(unittest.TestCase):
     def test_search_sql_selects_complete_title_hierarchy(self) -> None:
         sql = _search_sql(publication_year=2025)
@@ -48,16 +69,24 @@ class SearchStatisticsTests(unittest.TestCase):
     @patch("app.tools.search_statistics._fetch_rows")
     @patch("app.tools.search_statistics.embed_query", return_value="[0.1,0.2]")
     @patch(
+        "app.tools.search_statistics.table_search_embedding_profile",
+        return_value=SimpleNamespace(profile_key="table-profile-key"),
+    )
+    @patch(
         "app.tools.search_statistics.embedding_profile",
         return_value=SimpleNamespace(profile_key="profile-key"),
     )
     def test_relaxes_publication_year_when_filtered_search_is_empty(
         self,
         _embedding_profile_mock,
+        _table_profile_mock,
         embed_query_mock,
         fetch_rows_mock,
     ) -> None:
-        fetch_rows_mock.side_effect = [[], [result_row()]]
+        fetch_rows_mock.side_effect = [
+            ([], [], []),
+            ([result_row()], [], []),
+        ]
 
         response = search_statistics_data("행정기관 위원회", publication_year=2024)
 
@@ -70,16 +99,20 @@ class SearchStatisticsTests(unittest.TestCase):
         self.assertEqual(response["results"][0]["level4_title"], "행정기관 위원회")
         self.assertEqual(
             fetch_rows_mock.call_args_list[0].args,
-            ("[0.1,0.2]", "profile-key", 2024, 5),
+            ("행정기관 위원회", "[0.1,0.2]", "profile-key", "table-profile-key", 2024, 5),
         )
         self.assertEqual(
             fetch_rows_mock.call_args_list[1].args,
-            ("[0.1,0.2]", "profile-key", None, 5),
+            ("행정기관 위원회", "[0.1,0.2]", "profile-key", "table-profile-key", None, 5),
         )
         embed_query_mock.assert_called_once_with("행정기관 위원회")
 
     @patch("app.tools.search_statistics._fetch_rows")
     @patch("app.tools.search_statistics.embed_query", return_value="[0.1,0.2]")
+    @patch(
+        "app.tools.search_statistics.table_search_embedding_profile",
+        return_value=SimpleNamespace(profile_key="table-profile-key"),
+    )
     @patch(
         "app.tools.search_statistics.embedding_profile",
         return_value=SimpleNamespace(profile_key="profile-key"),
@@ -87,10 +120,11 @@ class SearchStatisticsTests(unittest.TestCase):
     def test_keeps_publication_year_when_filtered_search_succeeds(
         self,
         _embedding_profile_mock,
+        _table_profile_mock,
         _embed_query_mock,
         fetch_rows_mock,
     ) -> None:
-        fetch_rows_mock.return_value = [result_row()]
+        fetch_rows_mock.return_value = ([result_row()], [], [])
 
         response = search_statistics_data("행정기관 위원회", publication_year=2025)
 
@@ -98,8 +132,68 @@ class SearchStatisticsTests(unittest.TestCase):
         self.assertFalse(response["publication_year_filter_relaxed"])
         self.assertIsNone(response["message"])
         fetch_rows_mock.assert_called_once_with(
-            "[0.1,0.2]", "profile-key", 2025, 5
+            "행정기관 위원회", "[0.1,0.2]", "profile-key", "table-profile-key", 2025, 5
         )
+
+    @patch("app.tools.search_statistics._fetch_rows")
+    @patch("app.tools.search_statistics.embed_query", return_value="[0.1,0.2]")
+    @patch(
+        "app.tools.search_statistics.table_search_embedding_profile",
+        return_value=SimpleNamespace(profile_key="table-profile-key"),
+    )
+    @patch(
+        "app.tools.search_statistics.embedding_profile",
+        return_value=SimpleNamespace(profile_key="profile-key"),
+    )
+    def test_exact_column_match_outranks_title_candidate(
+        self,
+        _embedding_profile_mock,
+        _table_profile_mock,
+        embed_query_mock,
+        fetch_rows_mock,
+    ) -> None:
+        fetch_rows_mock.return_value = (
+            [result_row()],
+            [table_result_row()],
+            [table_result_row()],
+        )
+
+        response = search_statistics_data("2024년 사망신고 건수 알려줘", limit=5)
+
+        first = response["results"][0]
+        self.assertEqual(first["ref_id"], "2-1-1-5")
+        self.assertEqual(first["table_seq"], 1)
+        self.assertEqual(first["matched_source"], "column")
+        self.assertIn("사망신고 건수", first["matched_text"])
+        embed_query_mock.assert_called_once_with("사망신고 건수")
+
+    @patch("app.tools.search_statistics._fetch_rows")
+    @patch("app.tools.search_statistics.embed_query", return_value="[0.1,0.2]")
+    @patch(
+        "app.tools.search_statistics.table_search_embedding_profile",
+        return_value=SimpleNamespace(profile_key="table-profile-key"),
+    )
+    @patch(
+        "app.tools.search_statistics.embedding_profile",
+        return_value=SimpleNamespace(profile_key="profile-key"),
+    )
+    def test_deduplicates_same_table_across_publication_editions(
+        self,
+        _embedding_profile_mock,
+        _table_profile_mock,
+        _embed_query_mock,
+        fetch_rows_mock,
+    ) -> None:
+        newest = table_result_row(stat_id=30)
+        newest["publication_year"] = 2026
+        older = table_result_row(stat_id=20)
+        older["publication_year"] = 2025
+        fetch_rows_mock.return_value = ([], [newest, older], [])
+
+        response = search_statistics_data("사망신고 건수", limit=5)
+
+        self.assertEqual(response["count"], 1)
+        self.assertEqual(response["results"][0]["publication_year"], 2026)
 
 
 if __name__ == "__main__":

@@ -107,3 +107,34 @@ class TitleEmbeddingDmlWriter:
         self._file.write(f"\nROLLBACK;\n-- generation failed: {str(error).replace(chr(10), ' ')[:1000]}\n")
         self._file.close()
         self._closed = True
+
+
+class TableSearchEmbeddingDmlWriter(TitleEmbeddingDmlWriter):
+    """DB별 ID 대신 발간연도·ref_id·표 순번·청크 키로 표 벡터를 기록한다."""
+
+    def write_batch(
+        self,
+        rows: list[dict],
+        vectors: list[list[float]],
+        _profile: EmbeddingProfile,
+    ) -> None:
+        for row, vector in zip(rows, vectors):
+            conditions = [
+                f"s.year = {sql_literal(row['year'])}",
+                f"s.ref_id IS NOT DISTINCT FROM {sql_literal(row.get('ref_id'))}",
+                f"s.title_ko = {sql_literal(row['title_ko'])}",
+                f"t.seq = {sql_literal(row['table_seq'])}",
+                f"c.chunk_kind = {sql_literal(row['chunk_kind'])}",
+                f"c.chunk_no = {sql_literal(row['chunk_no'])}",
+            ]
+            self._file.write(
+                "UPDATE table_search_chunks c SET embedding = "
+                + sql_literal(vector_literal(vector))
+                + "::vector, embedding_profile_key = "
+                + sql_literal(self.profile.profile_key)
+                + " FROM stat_tables t JOIN statistics s ON s.stat_id = t.stat_id"
+                + " WHERE c.table_id = t.table_id AND "
+                + " AND ".join(conditions)
+                + ";\n"
+            )
+        self._file.flush()

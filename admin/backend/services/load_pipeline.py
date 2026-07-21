@@ -9,6 +9,7 @@ from pathlib import Path
 
 from shared.embedding import (
     STATISTICS_CONTENT_VERSION,
+    TABLE_SEARCH_CONTENT_VERSION,
     EmbeddingSettings,
     create_embedding_profile,
     create_embedding_provider,
@@ -18,6 +19,7 @@ from admin.backend.models.ingestion_job import IngestionOptions
 from admin.backend.repositories.admin_jobs import AdminJobRepository
 from admin.backend.repositories.postgres_dml import PostgresDmlRepository
 from admin.backend.repositories.statistics_embeddings import StatisticsEmbeddingRepository
+from admin.backend.repositories.table_search_embeddings import TableSearchEmbeddingRepository
 from admin.backend.services.load_artifacts import YearbookArtifactService
 from admin.backend.services.load_embedding import EmbeddingRunner
 from admin.backend.services.load_parser import parse
@@ -87,6 +89,8 @@ class YearbookIngestionService:
 
             embedding_profile_key = None
             embedding_count = 0
+            table_embedding_profile_key = None
+            table_embedding_count = 0
             if options.embedding_model != "skip":
                 model = self.settings.embedding_model(options.embedding_model)
                 embed_settings = EmbeddingSettings(
@@ -99,6 +103,10 @@ class YearbookIngestionService:
                     revision=model.revision,
                 )
                 profile = create_embedding_profile(embed_settings, STATISTICS_CONTENT_VERSION)
+                table_profile = create_embedding_profile(
+                    embed_settings,
+                    TABLE_SEARCH_CONTENT_VERSION,
+                )
                 provider = create_embedding_provider(embed_settings)
                 source = StatisticsEmbeddingRepository(options.year)
                 runner = EmbeddingRunner(provider, profile, source)
@@ -147,17 +155,67 @@ class YearbookIngestionService:
                 )
                 self.dml_repository.execute_dml_file(dsn, embedding_sql)
 
-            self._step(job_id, "verify", 95, "적재 건수와 임베딩 profile을 검증하고 있습니다.")
+                table_source = TableSearchEmbeddingRepository(options.year)
+                table_runner = EmbeddingRunner(provider, table_profile, table_source)
+                table_writer = artifact_service.table_embedding_dml_writer(table_profile)
+                table_embedding_sql = table_writer.path
+                artifacts["table_embedding_dml"] = table_embedding_sql.name
+                self.store.update_job(job_id, artifacts=artifacts)
+                self._step(
+                    job_id,
+                    "table_embedding_dml",
+                    92,
+                    "표 컬럼·분류 검색 벡터와 이관 SQL을 생성하고 있습니다.",
+                )
+                try:
+                    import psycopg
+                    from psycopg.rows import dict_row
+
+                    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+                        table_result = table_runner.run(
+                            conn,
+                            batch_size=embed_settings.batch_size,
+                            mode="dml",
+                            progress=lambda done, total: self.store.update_job(
+                                job_id,
+                                progress=92 + int(3 * done / max(total, 1)),
+                                message=f"표 검색 임베딩 SQL 생성 {done}/{total}",
+                            ),
+                            on_batch=table_writer.write_batch,
+                        )
+                    table_writer.complete(
+                        source_name=table_source.name,
+                        target_count=table_result.target_count,
+                        processed_count=table_result.processed_count,
+                        max_source_id=table_result.max_source_id,
+                    )
+                except Exception as exc:
+                    table_writer.abort(exc)
+                    raise
+                table_embedding_profile_key = table_result.profile_key
+                table_embedding_count = table_result.processed_count
+                self._step(
+                    job_id,
+                    "table_embedding_db",
+                    96,
+                    f"표 검색 임베딩 SQL을 {options.target} DB에 실행하고 있습니다.",
+                )
+                self.dml_repository.execute_dml_file(dsn, table_embedding_sql)
+
+            self._step(job_id, "verify", 98, "적재 건수와 임베딩 profile을 검증하고 있습니다.")
             verification = self.verification.verify(
                 dsn,
                 options.year,
                 embedding_profile_key,
+                table_embedding_profile_key,
             )
             result_payload = {
                 "publication_year": options.year,
                 "publication_title": options.title,
                 "embedding_count": embedding_count,
                 "embedding_profile_key": embedding_profile_key,
+                "table_embedding_count": table_embedding_count,
+                "table_embedding_profile_key": table_embedding_profile_key,
                 **verification,
             }
             self.store.update_job(

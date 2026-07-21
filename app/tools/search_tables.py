@@ -36,14 +36,23 @@ SOURCE_SQL = """
 
 
 # stat_id에 해당하는 통계표 원천 데이터를 조회한다.
-def fetch_table_data(stat_id: int) -> tuple[dict | None, list, list, list]:
+def fetch_table_data(
+    stat_id: int,
+    table_seq: int | None = None,
+) -> tuple[dict | None, list, list, list]:
     with connect() as conn, conn.cursor() as cur:
         cur.execute(STAT_SQL, (stat_id,))
         stat = cur.fetchone()
         if stat is None:
             return None, [], [], []
 
-        cur.execute(TABLES_SQL, (stat_id,))
+        if table_seq is None:
+            cur.execute(TABLES_SQL, (stat_id,))
+        else:
+            cur.execute(
+                TABLES_SQL.replace("ORDER BY seq", "AND seq = %s ORDER BY seq"),
+                (stat_id, table_seq),
+            )
         tables = cur.fetchall()
 
         cur.execute(FOOTNOTES_SQL, (stat_id,))
@@ -149,8 +158,8 @@ def build_response(stat: dict, tables: list, footnotes: list, source: list) -> d
 def register(mcp: FastMCP) -> None:
     # stat_id에 해당하는 표 본문과 메타데이터를 가져온다.
     @mcp.tool(description=SEARCH_TABLES)
-    def search_tables(stat_id: int) -> dict:
-        stat, tables, footnotes, source = fetch_table_data(stat_id)
+    def search_tables(stat_id: int, table_seq: int | None = None) -> dict:
+        stat, tables, footnotes, source = fetch_table_data(stat_id, table_seq)
         if stat is None:
             return {"found": False, "stat_id": stat_id, "tables": []}
         return build_response(stat, tables, footnotes, source)

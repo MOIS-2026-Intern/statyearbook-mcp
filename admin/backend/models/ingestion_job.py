@@ -26,6 +26,7 @@ class WorkspaceArtifactNames:
     schema_ddl: str = "yearbook_schema.sql"
     load_dml: str = "yearbook_load.sql"
     embedding_dml: str = "yearbook_title_embeddings.sql"
+    table_embedding_dml: str = "yearbook_table_search_embeddings.sql"
 
 
 ARTIFACT_NAMES = WorkspaceArtifactNames()

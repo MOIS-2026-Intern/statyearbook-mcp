@@ -34,10 +34,16 @@ class ProductionPromotionService:
         schema_ddl_path = workspace / job["artifacts"]["schema_ddl"]
         load_dml_path = workspace / job["artifacts"]["load_dml"]
         embedding_dml_name = job["artifacts"].get("embedding_dml")
+        table_embedding_dml_name = job["artifacts"].get("table_embedding_dml")
         self.dml_repository.execute_dml_file(dsn, schema_ddl_path)
         self.dml_repository.execute_dml_file(dsn, load_dml_path)
         if embedding_dml_name:
             self.dml_repository.execute_dml_file(dsn, workspace / embedding_dml_name)
+        if table_embedding_dml_name:
+            self.dml_repository.execute_dml_file(
+                dsn,
+                workspace / table_embedding_dml_name,
+            )
 
         with psycopg.connect(dsn) as conn, conn.cursor() as cur:
             cur.execute(
@@ -45,28 +51,53 @@ class ProductionPromotionService:
                 (year,),
             )
             statistics_count, embedding_count = cur.fetchone()
+            cur.execute(
+                """
+                SELECT COUNT(*), COUNT(c.embedding)
+                FROM table_search_chunks c
+                JOIN stat_tables t ON t.table_id = c.table_id
+                JOIN statistics s ON s.stat_id = t.stat_id
+                WHERE s.year = %s
+                """,
+                (year,),
+            )
+            table_chunk_count, table_embedding_count = cur.fetchone()
         expected_statistics = int(
             job["result"].get("statistics_count", statistics_count)
         )
         expected_embeddings = int(
             job["result"].get("verified_embedding_count", embedding_count)
         )
-        if statistics_count != expected_statistics or embedding_count != expected_embeddings:
+        expected_table_embeddings = int(
+            job["result"].get(
+                "verified_table_embedding_count",
+                table_embedding_count,
+            )
+        )
+        if (
+            statistics_count != expected_statistics
+            or embedding_count != expected_embeddings
+            or table_embedding_count != expected_table_embeddings
+        ):
             raise RuntimeError(
                 "production verification failed: "
                 f"statistics={statistics_count}/{expected_statistics}, "
-                f"embeddings={embedding_count}/{expected_embeddings}"
+                f"embeddings={embedding_count}/{expected_embeddings}, "
+                f"table_embeddings={table_embedding_count}/{expected_table_embeddings}"
             )
         result = {
             "job_id": job_id,
             "year": year,
             "statistics_count": int(statistics_count),
             "embedding_count": int(embedding_count),
+            "table_search_chunk_count": int(table_chunk_count),
+            "table_embedding_count": int(table_embedding_count),
         }
         self.repository.insert_event(
             job_id,
             "production",
             "운영 DB 적용 완료: "
-            f"statistics={statistics_count}, embeddings={embedding_count}",
+            f"statistics={statistics_count}, embeddings={embedding_count}, "
+            f"table_embeddings={table_embedding_count}",
         )
         return result

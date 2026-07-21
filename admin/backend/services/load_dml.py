@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from admin.backend.sql import sql_literal
+from shared.table_search import build_table_search_chunks
 
 YEARBOOK_LOAD_MODES = ("reject", "replace")
 
@@ -67,8 +68,26 @@ def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
         lines.append(
             "    INSERT INTO stat_tables "
             "(stat_id, seq, caption, n_rows, n_cols, body, table_md) VALUES ("
-            + ", ".join(values) + ");"
+            + ", ".join(values) + ") RETURNING table_id INTO v_table_id;"
         )
+        for chunk in build_table_search_chunks(unit, table):
+            chunk_values = [
+                "v_table_id",
+                sql_literal(chunk["chunk_no"]),
+                sql_literal(chunk["chunk_kind"]),
+                sql_literal(json.dumps(chunk["search_labels"], ensure_ascii=False), "jsonb"),
+                sql_literal(chunk["search_text"]),
+                sql_literal(chunk["search_text"]),
+            ]
+            lines.append(
+                "    INSERT INTO table_search_chunks "
+                "(table_id, chunk_no, chunk_kind, search_labels, search_text, search_doc) "
+                "VALUES ("
+                + ", ".join(chunk_values[:5])
+                + ", to_tsvector('simple', "
+                + chunk_values[5]
+                + "));"
+            )
 
     for note in unit.get("footnotes", []):
         values = [
@@ -117,6 +136,7 @@ def build_load_dml(
         "DECLARE",
         "    v_pub_id BIGINT;",
         "    v_stat_id BIGINT;",
+        "    v_table_id BIGINT;",
         "BEGIN",
         "    PERFORM pg_advisory_xact_lock(7824601025);",
     ])
