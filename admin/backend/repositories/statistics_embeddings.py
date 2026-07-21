@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from app.embedding import EmbeddingConfigurationError
 from app.vector import vector_literal
-from admin.backend.services.load_embedding import EmbeddingBatch
+from admin.backend.services.load_embedding import EmbeddingBatch, WeightedEmbeddingTexts
+
+
+LEVEL4_EMBEDDING_WEIGHT = 0.70
+HIERARCHY_CONTEXT_WEIGHT = 0.30
 
 
 def _first_value(row):
@@ -117,23 +121,38 @@ class StatisticsEmbeddingRepository:
         last_source_id = int(rows[-1]["stat_id"]) if rows else after_source_id
         return EmbeddingBatch(rows=rows, last_source_id=last_source_id)
 
-    def select_embedding_texts(self, rows: list[dict]) -> list[str]:
-        return [self._build_embedding_text(row) for row in rows]
+    def select_embedding_texts(self, rows: list[dict]) -> WeightedEmbeddingTexts:
+        return WeightedEmbeddingTexts(groups=(
+            (
+                LEVEL4_EMBEDDING_WEIGHT,
+                [self._build_level4_embedding_text(row) for row in rows],
+            ),
+            (
+                HIERARCHY_CONTEXT_WEIGHT,
+                [self._build_hierarchy_context_text(row) for row in rows],
+            ),
+        ))
 
-    def _build_embedding_text(self, row: dict) -> str:
-        parts = [
-            row.get("chapter"),
-            row.get("section"),
-            row.get("level3_title"),
-            row.get("level4_title"),
-            row.get("title_ko"),
-            row.get("title_en"),
-        ]
+    def _join_unique(self, parts: list[str | None]) -> str:
         unique_parts = []
         for part in parts:
             if part and part not in unique_parts:
                 unique_parts.append(part)
         return " ".join(unique_parts).strip() or "(제목 없음)"
+
+    def _build_level4_embedding_text(self, row: dict) -> str:
+        return self._join_unique([
+            row.get("level4_title"),
+            row.get("title_ko"),
+            row.get("title_en"),
+        ])
+
+    def _build_hierarchy_context_text(self, row: dict) -> str:
+        return self._join_unique([
+            row.get("level3_title"),
+            row.get("section"),
+            row.get("chapter"),
+        ])
 
     def update_embedding_batch(
         self,

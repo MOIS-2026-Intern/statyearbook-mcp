@@ -2,6 +2,8 @@
 # DB 직접 저장과 DML 전용 생성 모드를 분리해 호출자가 적재 방식을 선택하게 한다.
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass
 from typing import Callable, Literal, Protocol
 
@@ -9,11 +11,17 @@ from admin.backend.repositories.embedding_jobs import EmbeddingJobRepository
 from app.embedding import EmbeddingProfile, EmbeddingProvider
 
 
-
 @dataclass(frozen=True)
 class EmbeddingBatch:
     rows: list[dict]
     last_source_id: int
+
+
+@dataclass(frozen=True)
+class WeightedEmbeddingTexts:
+    """같은 행을 여러 문맥으로 임베딩한 뒤 지정 비율로 합칠 입력."""
+
+    groups: tuple[tuple[float, list[str]], ...]
 
 
 @dataclass(frozen=True)
@@ -55,7 +63,10 @@ class EmbeddingSource(Protocol):
     ) -> EmbeddingBatch:
         ...
 
-    def select_embedding_texts(self, rows: list[dict]) -> list[str]:
+    def select_embedding_texts(
+        self,
+        rows: list[dict],
+    ) -> list[str] | WeightedEmbeddingTexts:
         ...
 
     def update_embedding_batch(
@@ -80,6 +91,45 @@ class EmbeddingRunner:
         self.profile = profile
         self.source = source
         self.jobs = jobs or EmbeddingJobRepository()
+
+    def _encode_texts(
+        self,
+        inputs: list[str] | WeightedEmbeddingTexts,
+    ) -> list[list[float]]:
+        if isinstance(inputs, list):
+            return self.provider.encode(inputs)
+        if not inputs.groups:
+            return []
+
+        expected_count = len(inputs.groups[0][1])
+        total_weight = sum(weight for weight, _texts in inputs.groups)
+        if total_weight <= 0:
+            raise ValueError("embedding weights must sum to a positive value")
+
+        encoded_groups: list[tuple[float, list[list[float]]]] = []
+        for weight, texts in inputs.groups:
+            if weight < 0:
+                raise ValueError("embedding weights must not be negative")
+            if len(texts) != expected_count:
+                raise ValueError("weighted embedding groups must have the same row count")
+            if weight:
+                encoded_groups.append((weight / total_weight, self.provider.encode(texts)))
+
+        combined: list[list[float]] = []
+        for row_index in range(expected_count):
+            dimensions = {len(vectors[row_index]) for _weight, vectors in encoded_groups}
+            if len(dimensions) != 1:
+                raise RuntimeError("weighted embedding vectors have different dimensions")
+            dimension = dimensions.pop()
+            vector = [
+                sum(weight * vectors[row_index][index] for weight, vectors in encoded_groups)
+                for index in range(dimension)
+            ]
+            norm = math.sqrt(sum(value * value for value in vector))
+            if norm == 0:
+                raise RuntimeError("weighted embedding produced a zero vector")
+            combined.append([value / norm for value in vector])
+        return combined
 
     def run(
         self,
@@ -145,7 +195,7 @@ class EmbeddingRunner:
                 )
                 if not batch.rows:
                     break
-                vectors = self.provider.encode(self.source.select_embedding_texts(batch.rows))
+                vectors = self._encode_texts(self.source.select_embedding_texts(batch.rows))
                 if on_batch:
                     on_batch(batch.rows, vectors, self.profile)
                 if writes_database:

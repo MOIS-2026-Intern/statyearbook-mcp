@@ -15,7 +15,7 @@ from typing import Protocol, Sequence
 BGE_M3_REVISION = "5617a9f61b028005a4858fdac845db406aefb181"
 MODEL_MANIFEST = ".statyearbook-model.json"
 SUPPORTED_PROVIDERS = ("openai", "local")
-STATISTICS_CONTENT_VERSION = "statistics-title-v2-hierarchy"
+STATISTICS_CONTENT_VERSION = "statistics-title-v3-level4-70-context-30"
 
 
 class EmbeddingConfigurationError(RuntimeError):

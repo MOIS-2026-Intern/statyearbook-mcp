@@ -170,7 +170,7 @@ class LocalEmbeddingProviderTests(unittest.TestCase):
 
 
 class DatabaseDimensionTests(unittest.TestCase):
-    def test_embedding_text_includes_parent_and_leaf_titles_without_duplicates(self) -> None:
+    def test_embedding_inputs_separate_level4_and_hierarchy_with_70_30_weights(self) -> None:
         row = {
             "chapter": "디지털정부",
             "section": "디지털 정책과 서비스",
@@ -180,10 +180,15 @@ class DatabaseDimensionTests(unittest.TestCase):
             "title_en": "Mobile Identification for Public Officials",
         }
 
-        text = StatisticsEmbeddingRepository()._build_embedding_text(row)
+        inputs = StatisticsEmbeddingRepository().select_embedding_texts([row])
+        groups = inputs.groups
 
-        self.assertIn("모바일 신분증", text)
-        self.assertEqual(text.count("모바일 공무원증"), 1)
+        self.assertEqual([weight for weight, _texts in groups], [0.7, 0.3])
+        self.assertEqual(groups[0][1], ["모바일 공무원증 Mobile Identification for Public Officials"])
+        self.assertEqual(
+            groups[1][1],
+            ["모바일 신분증 디지털 정책과 서비스 디지털정부"],
+        )
 
     def test_rejects_model_before_writing_to_wrong_vector_dimension(self) -> None:
         conn = MagicMock()

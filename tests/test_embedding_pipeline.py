@@ -2,7 +2,11 @@
 import unittest
 
 from app.embedding import EmbeddingProfile, EmbeddingSettings
-from admin.backend.services.load_embedding import EmbeddingBatch, EmbeddingRunner
+from admin.backend.services.load_embedding import (
+    EmbeddingBatch,
+    EmbeddingRunner,
+    WeightedEmbeddingTexts,
+)
 
 
 class FakeConnection:
@@ -118,6 +122,23 @@ def profile():
 
 
 class EmbeddingRunnerTests(unittest.TestCase):
+    def test_combines_weighted_embedding_groups_and_normalizes_result(self) -> None:
+        provider = FakeProvider()
+        runner = EmbeddingRunner(provider, profile(), FakeSource(), FakeJobs())
+        provider.encode = lambda texts: (
+            [[1.0, 0.0] for _text in texts]
+            if texts and texts[0].startswith("leaf")
+            else [[0.0, 1.0] for _text in texts]
+        )
+
+        vectors = runner._encode_texts(WeightedEmbeddingTexts(groups=(
+            (0.7, ["leaf title"]),
+            (0.3, ["context title"]),
+        )))
+
+        self.assertAlmostEqual(vectors[0][0] / vectors[0][1], 7 / 3)
+        self.assertAlmostEqual(sum(value * value for value in vectors[0]), 1.0)
+
     def test_processes_snapshot_in_reusable_batches_and_tracks_job(self) -> None:
         conn = FakeConnection()
         provider = FakeProvider()
