@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.embedding import EmbeddingProfile
-from app.vector import vector_literal
-from admin.backend.services.load_dml import sql_literal
+from shared.embedding import EmbeddingProfile
+from shared.vector import vector_literal
+from admin.backend.sql import sql_literal
 
 
 class TitleEmbeddingDmlWriter:

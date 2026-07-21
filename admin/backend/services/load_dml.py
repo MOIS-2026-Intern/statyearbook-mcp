@@ -4,19 +4,9 @@ from __future__ import annotations
 
 import json
 
+from admin.backend.sql import sql_literal
+
 YEARBOOK_LOAD_MODES = ("reject", "replace")
-
-
-def sql_literal(value, cast: str | None = None) -> str:
-    if value is None:
-        literal = "NULL"
-    elif isinstance(value, bool):
-        literal = "TRUE" if value else "FALSE"
-    elif isinstance(value, (int, float)):
-        literal = str(value)
-    else:
-        literal = "'" + str(value).replace("'", "''") + "'"
-    return f"{literal}::{cast}" if cast and value is not None else literal
 
 
 def _values(values: list[object], casts: dict[int, str] | None = None) -> str:

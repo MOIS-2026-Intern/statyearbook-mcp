@@ -7,7 +7,7 @@ from admin.backend.services.load_dml import build_load_dml
 from admin.backend.services.load_embedding_dml import TitleEmbeddingDmlWriter
 from admin.backend.services.load_parser import parsed_to_markdown, write_json, write_text
 from admin.backend.services.load_schema import build_schema_ddl
-from app.embedding import EmbeddingProfile
+from shared.embedding import EmbeddingProfile
 
 
 class YearbookArtifactService:

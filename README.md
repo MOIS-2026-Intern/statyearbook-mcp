@@ -6,6 +6,8 @@
 
 - `frontend/`: React 채팅 UI
 - `backend/`: FastAPI REST API, 채팅 모델 provider adapter, MCP host
+- `app/`: 통계 검색·표 조회·시각화를 제공하는 MCP server
+- `shared/`: 관리자와 MCP server가 함께 사용하는 임베딩·pgvector 공용 코드
 - `db/`: 로컬 PostgreSQL·운영 Supabase 공통 최종 `schema.sql`과 DB 설정
 - `server.py`: 기존 statyearbook MCP server
 

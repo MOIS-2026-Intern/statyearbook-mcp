@@ -15,6 +15,7 @@ RUN pip install --upgrade pip \
 
 COPY backend ./backend
 COPY app ./app
+COPY shared ./shared
 COPY models ./models
 COPY server.py ./
 

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from app.embedding import (
+from shared.embedding import (
     BGE_M3_REVISION,
     EmbeddingConfigurationError,
     EmbeddingSettings,

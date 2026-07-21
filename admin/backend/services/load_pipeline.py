@@ -7,7 +7,7 @@ import zipfile
 
 from pathlib import Path
 
-from app.embedding import (
+from shared.embedding import (
     STATISTICS_CONTENT_VERSION,
     EmbeddingSettings,
     create_embedding_profile,

@@ -6,14 +6,10 @@ import psycopg
 
 from psycopg.rows import dict_row
 
+from admin.backend.errors import PublicationsNotFoundError
+
 
 PUBLICATION_WRITE_LOCK_ID = 7_824_601_025
-
-
-class PublicationsNotFoundError(LookupError):
-    def __init__(self, pub_ids: list[int]):
-        self.pub_ids = pub_ids
-        super().__init__(f"publications not found: {pub_ids}")
 
 
 class PublicationRepository:

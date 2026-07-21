@@ -1,12 +1,12 @@
 # 이 파일은 임베딩 batch 실행기의 DB 저장 모드와 DML 생성 모드를 검증한다.
 import unittest
 
-from app.embedding import EmbeddingProfile, EmbeddingSettings
-from admin.backend.services.load_embedding import (
+from shared.embedding import EmbeddingProfile, EmbeddingSettings
+from admin.backend.models.embedding import (
     EmbeddingBatch,
-    EmbeddingRunner,
     WeightedEmbeddingTexts,
 )
+from admin.backend.services.load_embedding import EmbeddingRunner
 
 
 class FakeConnection:

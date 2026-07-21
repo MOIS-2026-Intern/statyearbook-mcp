@@ -2,14 +2,14 @@
 from functools import lru_cache
 
 from app.config import EMBEDDING_SETTINGS
-from app.embedding import (
+from shared.embedding import (
     STATISTICS_CONTENT_VERSION,
     EmbeddingProfile,
     EmbeddingProvider,
     create_embedding_profile,
     create_embedding_provider,
 )
-from app.vector import vector_literal
+from shared.vector import vector_literal
 
 
 # provider와 로컬 모델은 프로세스마다 한 번만 만든다.

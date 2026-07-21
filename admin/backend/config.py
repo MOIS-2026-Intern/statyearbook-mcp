@@ -9,7 +9,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from app.embedding import BGE_M3_REVISION
+from shared.embedding import BGE_M3_REVISION
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]

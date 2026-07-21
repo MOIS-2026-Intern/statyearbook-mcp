@@ -4,34 +4,15 @@ from __future__ import annotations
 
 import math
 
-from dataclasses import dataclass
 from typing import Callable, Literal, Protocol
 
+from admin.backend.models.embedding import (
+    EmbeddingBatch,
+    EmbeddingRunResult,
+    WeightedEmbeddingTexts,
+)
 from admin.backend.repositories.embedding_jobs import EmbeddingJobRepository
-from app.embedding import EmbeddingProfile, EmbeddingProvider
-
-
-@dataclass(frozen=True)
-class EmbeddingBatch:
-    rows: list[dict]
-    last_source_id: int
-
-
-@dataclass(frozen=True)
-class WeightedEmbeddingTexts:
-    """같은 행을 여러 문맥으로 임베딩한 뒤 지정 비율로 합칠 입력."""
-
-    groups: tuple[tuple[float, list[str]], ...]
-
-
-@dataclass(frozen=True)
-class EmbeddingRunResult:
-    job_id: int | None
-    target_count: int
-    processed_count: int
-    max_source_id: int
-    profile_key: str
-    dry_run: bool
+from shared.embedding import EmbeddingProfile, EmbeddingProvider
 
 
 class EmbeddingSource(Protocol):

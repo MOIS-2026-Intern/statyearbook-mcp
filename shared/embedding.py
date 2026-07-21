@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+"""실행 애플리케이션에 독립적인 임베딩 설정, profile과 provider."""
 from __future__ import annotations
 
 import hashlib

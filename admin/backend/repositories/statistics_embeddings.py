@@ -2,9 +2,9 @@
 # 발간연도 범위와 현재 model profile을 기준으로 증분 대상을 선택한다.
 from __future__ import annotations
 
-from app.embedding import EmbeddingConfigurationError
-from app.vector import vector_literal
-from admin.backend.services.load_embedding import EmbeddingBatch, WeightedEmbeddingTexts
+from admin.backend.models.embedding import EmbeddingBatch, WeightedEmbeddingTexts
+from shared.embedding import EmbeddingConfigurationError
+from shared.vector import vector_literal
 
 
 LEVEL4_EMBEDDING_WEIGHT = 0.70

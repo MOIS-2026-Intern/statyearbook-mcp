@@ -15,7 +15,7 @@ from admin.backend.services.load_workspace import (
 from admin.backend.services.load_dml import build_load_dml
 from admin.backend.services.load_embedding_dml import TitleEmbeddingDmlWriter
 from admin.backend.services.load_schema import build_schema_ddl
-from app.embedding import EmbeddingProfile
+from shared.embedding import EmbeddingProfile
 
 
 def parsed_yearbook(year: int = 2026) -> dict:

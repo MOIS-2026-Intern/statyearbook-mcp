@@ -5,7 +5,7 @@ from openai import AsyncOpenAI
 
 from backend.config import Settings
 from backend.gateways.model_gateway import ModelGatewayConfigurationError
-from backend.gateways.openai_gateway import OpenAICompatibleGateway
+from backend.gateways.openai_compatible_gateway import OpenAICompatibleGateway
 
 
 class BizRouterConfigurationError(ModelGatewayConfigurationError):

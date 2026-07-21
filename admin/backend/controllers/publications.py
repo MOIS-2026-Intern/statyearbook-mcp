@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from admin.backend.config import ADMIN_API_PREFIX
 from admin.backend.controllers.dependencies import authorize_admin
+from admin.backend.errors import PublicationsNotFoundError
 from admin.backend.models.publication import DeletePublicationsRequest
-from admin.backend.repositories.publications import PublicationsNotFoundError
 
 
 router = APIRouter(

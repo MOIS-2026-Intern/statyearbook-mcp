@@ -3,7 +3,7 @@ import os
 
 from dotenv import load_dotenv
 
-from app.embedding import EmbeddingSettings
+from shared.embedding import EmbeddingSettings
 
 # .env 값을 환경변수로 읽는다.
 load_dotenv()
