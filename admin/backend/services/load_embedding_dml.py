@@ -52,6 +52,8 @@ class TitleEmbeddingDmlWriter:
                 f"title_ko = {sql_literal(row['title_ko'])}",
                 f"chapter IS NOT DISTINCT FROM {sql_literal(row.get('chapter'))}",
                 f"section IS NOT DISTINCT FROM {sql_literal(row.get('section'))}",
+                f"level3_title IS NOT DISTINCT FROM {sql_literal(row.get('level3_title'))}",
+                f"level4_title IS NOT DISTINCT FROM {sql_literal(row.get('level4_title'))}",
                 f"page_start IS NOT DISTINCT FROM {sql_literal(row.get('page_start'))}",
             ]
             self._file.write(

@@ -9,7 +9,10 @@ from app.tool_descriptions import SEARCH_TABLES
 
 
 STAT_SQL = """
-    SELECT stat_id, year AS publication_year, title_ko, title_en, unit, base_date, ref_id
+    SELECT stat_id, year AS publication_year, ref_id,
+           chapter_no, section_no, level3_no, level4_no,
+           chapter, section, level3_title, level4_title,
+           title_ko, title_en, unit, base_date, page_start
     FROM statistics
     WHERE stat_id = %s
 """
@@ -61,10 +64,19 @@ def cached_table(stat: dict, row: dict) -> dict:
         "stat_id": stat["stat_id"],
         "ref_id": stat["ref_id"],
         "publication_year": stat["publication_year"],
+        "chapter_no": stat["chapter_no"],
+        "section_no": stat["section_no"],
+        "level3_no": stat["level3_no"],
+        "level4_no": stat["level4_no"],
+        "chapter": stat["chapter"],
+        "section": stat["section"],
+        "level3_title": stat["level3_title"],
+        "level4_title": stat["level4_title"],
         "title_ko": stat["title_ko"],
         "title_en": stat["title_en"],
         "unit": stat["unit"],
         "base_date": stat["base_date"],
+        "page_start": stat["page_start"],
         "table_seq": row["seq"],
         "caption": row["caption"],
         "n_rows": row["n_rows"],
@@ -114,10 +126,19 @@ def build_response(stat: dict, tables: list, footnotes: list, source: list) -> d
         "stat_id": stat["stat_id"],
         "ref_id": stat["ref_id"],
         "publication_year": stat["publication_year"],
+        "chapter_no": stat["chapter_no"],
+        "section_no": stat["section_no"],
+        "level3_no": stat["level3_no"],
+        "level4_no": stat["level4_no"],
+        "chapter": stat["chapter"],
+        "section": stat["section"],
+        "level3_title": stat["level3_title"],
+        "level4_title": stat["level4_title"],
         "title_ko": stat["title_ko"],
         "title_en": stat["title_en"],
         "unit": stat["unit"],
         "base_date": stat["base_date"],
+        "page_start": stat["page_start"],
         "tables": [table_result(stat, row) for row in tables],
         "footnotes": [footnote_result(row) for row in footnotes],
         "source": [source_result(row) for row in source],

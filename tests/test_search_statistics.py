@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.mcp_app import create_app
-from app.tools.search_statistics import search_statistics_data
+from app.tools.search_statistics import _search_sql, search_statistics_data
 
 
 def result_row(publication_year: int = 2025) -> dict:
@@ -12,8 +12,14 @@ def result_row(publication_year: int = 2025) -> dict:
         "stat_id": 8,
         "publication_year": publication_year,
         "ref_id": "1-1-5",
+        "chapter_no": 1,
+        "section_no": 1,
+        "level3_no": 5,
+        "level4_no": None,
         "chapter": "정부조직",
         "section": "정부조직",
+        "level3_title": "행정기관 위원회",
+        "level4_title": "행정기관 위원회",
         "title_ko": "행정기관 위원회",
         "title_en": "Administration Committees",
         "unit": "개",
@@ -24,6 +30,12 @@ def result_row(publication_year: int = 2025) -> dict:
 
 
 class SearchStatisticsTests(unittest.TestCase):
+    def test_search_sql_selects_complete_title_hierarchy(self) -> None:
+        sql = _search_sql(publication_year=2025)
+
+        self.assertIn("chapter_no, section_no, level3_no, level4_no", sql)
+        self.assertIn("level3_title, level4_title", sql)
+
     def test_mcp_schema_exposes_publication_year_with_external_description(self) -> None:
         tools = asyncio.run(create_app().list_tools())
         tool = next(item for item in tools if item.name == "search_statistics")
@@ -54,6 +66,8 @@ class SearchStatisticsTests(unittest.TestCase):
         self.assertTrue(response["publication_year_filter_relaxed"])
         self.assertEqual(response["count"], 1)
         self.assertEqual(response["results"][0]["publication_year"], 2025)
+        self.assertEqual(response["results"][0]["level3_title"], "행정기관 위원회")
+        self.assertEqual(response["results"][0]["level4_title"], "행정기관 위원회")
         self.assertEqual(
             fetch_rows_mock.call_args_list[0].args,
             ("[0.1,0.2]", "profile-key", 2024, 5),

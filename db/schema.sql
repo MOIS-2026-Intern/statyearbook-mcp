@@ -123,7 +123,9 @@ BEGIN
     IF NEW.title_ko IS DISTINCT FROM OLD.title_ko
        OR NEW.title_en IS DISTINCT FROM OLD.title_en
        OR NEW.chapter IS DISTINCT FROM OLD.chapter
-       OR NEW.section IS DISTINCT FROM OLD.section THEN
+       OR NEW.section IS DISTINCT FROM OLD.section
+       OR NEW.level3_title IS DISTINCT FROM OLD.level3_title
+       OR NEW.level4_title IS DISTINCT FROM OLD.level4_title THEN
         NEW.embedding := NULL;
         NEW.embedding_profile_key := NULL;
     END IF;
@@ -131,21 +133,10 @@ BEGIN
 END;
 $$;
 
-DO $schema$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_trigger
-        WHERE tgname = 'trg_invalidate_statistics_embedding'
-          AND tgrelid = 'statistics'::regclass
-          AND NOT tgisinternal
-    ) THEN
-        CREATE TRIGGER trg_invalidate_statistics_embedding
-        BEFORE UPDATE OF title_ko, title_en, chapter, section ON statistics
-        FOR EACH ROW
-        EXECUTE FUNCTION invalidate_statistics_embedding();
-    END IF;
-END;
-$schema$;
+CREATE OR REPLACE TRIGGER trg_invalidate_statistics_embedding
+BEFORE UPDATE OF title_ko, title_en, chapter, section,
+                 level3_title, level4_title ON statistics
+FOR EACH ROW
+EXECUTE FUNCTION invalidate_statistics_embedding();
 
 COMMIT;

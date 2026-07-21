@@ -9,7 +9,15 @@ from app.db import connect
 from app.query_embedding import embed_query, embedding_profile
 from app.tool_descriptions import SEARCH_STATISTICS, SEARCH_STATISTICS_FIELDS
 
-SEARCH_TEXT_COLUMNS = ("title_ko", "title_en", "chapter", "section")
+SEARCH_TEXT_COLUMNS = (
+    "ref_id",
+    "chapter",
+    "section",
+    "level3_title",
+    "level4_title",
+    "title_ko",
+    "title_en",
+)
 
 
 # 질의를 검색 토큰으로 나눈다.
@@ -68,7 +76,9 @@ def _params(
 def _search_sql(publication_year: int | None) -> str:
     where_sql = _where_sql(publication_year)
     return f"""
-        SELECT stat_id, year AS publication_year, ref_id, chapter, section,
+        SELECT stat_id, year AS publication_year, ref_id,
+               chapter_no, section_no, level3_no, level4_no,
+               chapter, section, level3_title, level4_title,
                title_ko, title_en, unit, base_date, page_start,
                (embedding <=> %s::vector) AS distance
         FROM statistics
@@ -99,8 +109,14 @@ def _result_row(row: dict, tokens: list[str]) -> dict:
         "stat_id": row["stat_id"],
         "publication_year": row["publication_year"],
         "ref_id": row["ref_id"],
+        "chapter_no": row["chapter_no"],
+        "section_no": row["section_no"],
+        "level3_no": row["level3_no"],
+        "level4_no": row["level4_no"],
         "chapter": row["chapter"],
         "section": row["section"],
+        "level3_title": row["level3_title"],
+        "level4_title": row["level4_title"],
         "title_ko": row["title_ko"],
         "title_en": row["title_en"],
         "unit": row["unit"],

@@ -10,6 +10,14 @@ def make_table(columns: list[str], records: list[dict[str, str]], title: str = "
         "stat_id": 12,
         "ref_id": "1-2-2",
         "publication_year": 2025,
+        "chapter_no": 1,
+        "section_no": 2,
+        "level3_no": 2,
+        "level4_no": None,
+        "chapter": "정부조직",
+        "section": "공무원 정원",
+        "level3_title": title,
+        "level4_title": title,
         "title_ko": title,
         "title_en": "Test statistics",
         "unit": "명",
@@ -42,6 +50,8 @@ class VisualizeSpecTests(unittest.TestCase):
         self.assertEqual(spec["request"]["title"], "2024년 행정기관 위원회 수")
         self.assertEqual(vega_lite["title"], "2024년 행정기관 위원회 수")
         self.assertEqual(spec["stat"]["title_ko"], "행정기관 위원회")
+        self.assertEqual(spec["stat"]["level3_title"], "행정기관 위원회")
+        self.assertEqual(spec["stat"]["level4_title"], "행정기관 위원회")
 
     def test_success_summary_does_not_expose_internal_chart_details(self) -> None:
         spec = {

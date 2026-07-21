@@ -102,7 +102,7 @@ class StatisticsEmbeddingRepository:
             cur.execute(
                 f"""
                 SELECT stat_id, year, ref_id, title_ko, title_en,
-                       chapter, section, page_start
+                       chapter, section, level3_title, level4_title, page_start
                 FROM statistics
                 WHERE {condition}
                   AND {self._scope_sql()}
@@ -122,12 +122,18 @@ class StatisticsEmbeddingRepository:
 
     def _build_embedding_text(self, row: dict) -> str:
         parts = [
-            row.get("title_ko"),
-            row.get("title_en"),
             row.get("chapter"),
             row.get("section"),
+            row.get("level3_title"),
+            row.get("level4_title"),
+            row.get("title_ko"),
+            row.get("title_en"),
         ]
-        return " ".join(filter(None, parts)).strip() or "(제목 없음)"
+        unique_parts = []
+        for part in parts:
+            if part and part not in unique_parts:
+                unique_parts.append(part)
+        return " ".join(unique_parts).strip() or "(제목 없음)"
 
     def update_embedding_batch(
         self,

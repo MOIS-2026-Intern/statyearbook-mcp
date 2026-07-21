@@ -143,6 +143,8 @@ class EmbeddingDmlTests(unittest.TestCase):
             "title_ko": "행정기관 위원회",
             "chapter": "일반행정",
             "section": "정부조직",
+            "level3_title": "행정기관 위원회",
+            "level4_title": "행정기관 위원회",
             "page_start": 3,
         }
         with tempfile.TemporaryDirectory() as root:
@@ -159,6 +161,8 @@ class EmbeddingDmlTests(unittest.TestCase):
 
         self.assertIn("year = 2026", dml)
         self.assertIn("ref_id IS NOT DISTINCT FROM '1-1-1'", dml)
+        self.assertIn("level3_title IS NOT DISTINCT FROM '행정기관 위원회'", dml)
+        self.assertIn("level4_title IS NOT DISTINCT FROM '행정기관 위원회'", dml)
         self.assertNotIn("stat_id = 999", dml)
         self.assertIn("[0.6,0.8]", dml)
         self.assertIn("INSERT INTO embedding_jobs", dml)
