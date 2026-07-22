@@ -8,7 +8,7 @@ from unittest.mock import patch
 from admin.backend.config import AdminSettings
 from app.config import AppSettings, settings as app_settings
 from backend.config import Settings
-from utils.embedding import BGE_M3_REVISION, EmbeddingSettings
+from utils.embedding import BGE_M3_MODEL, BGE_M3_REVISION, EmbeddingSettings
 from utils.env import load_service_env
 
 
@@ -127,6 +127,19 @@ class ServiceProfileTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "manifest dimension"):
                 AppSettings("main", "postgresql:///main", embedding, "0.0.0.0", 8001)
+
+    def test_app_main_profile_accepts_huggingface_without_local_artifact(self) -> None:
+        embedding = EmbeddingSettings(
+            "huggingface",
+            BGE_M3_MODEL,
+            1024,
+            revision=BGE_M3_REVISION,
+            api_token="hf_test",
+        )
+
+        app = AppSettings("main", "postgresql:///main", embedding, "0.0.0.0", 8001)
+
+        self.assertEqual(app.embedding.provider, "huggingface")
 
     def test_app_and_admin_share_bge_model_identity(self) -> None:
         admin = AdminSettings(profile="local")
