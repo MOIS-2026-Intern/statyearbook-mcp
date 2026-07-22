@@ -5,6 +5,7 @@ import logging
 
 from contextlib import AsyncExitStack
 from datetime import timedelta
+from time import perf_counter
 from typing import Any
 
 from mcp import ClientSession
@@ -13,9 +14,10 @@ from mcp.client.streamable_http import streamable_http_client
 from backend.config import Settings
 from backend.models.tooling import ToolSpec
 from backend.serializers.mcp_result_serializer import sanitize_mcp_result, to_jsonable
+from utils.logging import compact_json
 
 
-logger = logging.getLogger("uvicorn.error")
+logger = logging.getLogger(__name__)
 
 
 class McpGatewayError(RuntimeError):
@@ -31,12 +33,31 @@ class McpGateway:
 
     # streamable HTTP 연결을 열고 MCP 세션을 초기화한다.
     async def __aenter__(self) -> "McpGateway":
+        started = perf_counter()
         self._stack = AsyncExitStack()
-        read_stream, write_stream, _ = await self._stack.enter_async_context(
-            streamable_http_client(self._settings.mcp_url)
+        try:
+            read_stream, write_stream, _ = await self._stack.enter_async_context(
+                streamable_http_client(self._settings.mcp_url)
+            )
+            self._session = await self._stack.enter_async_context(
+                ClientSession(read_stream, write_stream)
+            )
+            await self._session.initialize()
+        except Exception as exc:
+            logger.exception(
+                "event=mcp.connect.error url=%s duration_ms=%s error_type=%s",
+                self._settings.mcp_url,
+                _elapsed_ms(started),
+                exc.__class__.__name__,
+            )
+            await self._stack.aclose()
+            self._stack = None
+            self._session = None
+            raise
+        logger.debug(
+            "event=mcp.connect duration_ms=%s",
+            _elapsed_ms(started),
         )
-        self._session = await self._stack.enter_async_context(ClientSession(read_stream, write_stream))
-        await self._session.initialize()
         return self
 
     # 컨텍스트 종료 시 MCP 연결 자원과 세션 상태를 정리한다.
@@ -55,7 +76,16 @@ class McpGateway:
 
     # MCP 서버가 공개한 원본 도구 목록을 조회한다.
     async def list_tools(self) -> list[Any]:
-        result = await self.session.list_tools()
+        started = perf_counter()
+        try:
+            result = await self.session.list_tools()
+        except Exception as exc:
+            logger.exception(
+                "event=mcp.tools.error duration_ms=%s error_type=%s",
+                _elapsed_ms(started),
+                exc.__class__.__name__,
+            )
+            raise
         return list(result.tools)
 
     # MCP 도구 메타데이터를 모델이 사용하는 사양으로 변환한다.
@@ -65,18 +95,42 @@ class McpGateway:
     # 인자를 정규화해 MCP 도구를 호출하고 결과를 안전한 JSON 형태로 반환한다.
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         args = self.prepare_tool_arguments(name, arguments)
-        logger.info("MCP tool called name=%s", name)
+        started = perf_counter()
+        try:
+            result = await self.session.call_tool(
+                name,
+                args,
+                read_timeout_seconds=timedelta(seconds=self._settings.mcp_call_timeout_seconds),
+            )
+            payload = sanitize_mcp_result(result)
+        except Exception as exc:
+            logger.exception(
+                "event=mcp.call.error tool=%s duration_ms=%s error_type=%s\n"
+                "    args=%s",
+                name,
+                _elapsed_ms(started),
+                exc.__class__.__name__,
+                compact_json(args, max_chars=300),
+            )
+            raise
 
-        result = await self.session.call_tool(
+        log = logger.error if payload.get("isError") else logger.debug
+        log(
+            "event=%s tool=%s duration_ms=%s\n    args=%s",
+            "mcp.call.error" if payload.get("isError") else "mcp.call",
             name,
-            args,
-            read_timeout_seconds=timedelta(seconds=self._settings.mcp_call_timeout_seconds),
+            _elapsed_ms(started),
+            compact_json(args, max_chars=300),
         )
-        return sanitize_mcp_result(result)
+        return payload
 
     # 도구 호출 인자를 변경 가능한 복사본으로 준비한다.
     def prepare_tool_arguments(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return dict(arguments)
+
+# Convert a monotonic start timestamp into rounded milliseconds.
+def _elapsed_ms(started: float) -> int:
+    return round((perf_counter() - started) * 1000)
 
 
 # MCP 도구의 입력 스키마를 유효한 JSON object 스키마로 정규화한다.

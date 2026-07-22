@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.config import settings
 from backend.controllers import chat_controller, health_controller
 from backend.middleware.access_log import add_access_log_middleware
+from utils.logging import configure_service_logging
 
 
 BANNER_PATH = Path(__file__).with_name("banner.txt")
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     return app
 
 
+configure_service_logging(settings.log_level)
 app = create_app()
 
 
@@ -63,4 +65,5 @@ def run() -> None:
         port=settings.port,
         reload=settings.reload,
         access_log=False,
+        log_level=settings.log_level.lower(),
     )

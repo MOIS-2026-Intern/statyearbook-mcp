@@ -56,6 +56,20 @@ python -m admin serve     # http://127.0.0.1:8100
 cd frontend && npm ci && npm run dev
 ```
 
+## 서비스 로그
+
+backend와 app(MCP server)의 기본 로그 레벨은 `DEBUG`입니다. 배포 환경에서
+`STATYEARBOOK_BACKEND_LOG_LEVEL`과 `STATYEARBOOK_APP_LOG_LEVEL`을 각각
+`DEBUG|INFO|WARNING|ERROR|CRITICAL`로 변경할 수 있습니다. 성공한 `/health` 요청은
+기록하지 않고 실패한 health 요청만 ERROR로 기록합니다.
+
+로그 메시지는 검색 가능한 `event=...` 형식입니다. 성공 로그는 동작마다 하나만
+남기며 주요 병목 태그는 `event=model.call`, `event=mcp.call`, `event=tool.call`,
+`event=embedding`, `event=sql`, `event=http`입니다. 완료·실패 로그에는
+`duration_ms`가 포함됩니다. 반복되는 MCP transport HTTP, `httpx`, SSE payload 로그는
+숨기며 SQL은 파라미터와 본문을 읽기 쉽게 줄바꿈해 표시합니다. 긴 벡터 값은 자동
+축약됩니다.
+
 새 연보는 관리자 화면 또는 다음 명령으로 적재합니다.
 
 ```bash

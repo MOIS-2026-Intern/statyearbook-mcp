@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
+import logging
 from functools import lru_cache
+from time import perf_counter
 
 from app.config import settings
 from utils.embedding import (
@@ -11,6 +13,9 @@ from utils.embedding import (
     create_embedding_provider,
 )
 from utils.vector import vector_literal
+
+
+logger = logging.getLogger(__name__)
 
 
 # provider와 로컬 모델은 프로세스마다 한 번만 만든다.
@@ -33,5 +38,26 @@ def table_search_embedding_profile() -> EmbeddingProfile:
 
 # 질의를 pgvector 리터럴로 임베딩한다.
 def embed_query(text: str) -> str:
-    vector = embedding_provider().encode([text])[0]
+    provider = embedding_provider()
+    started = perf_counter()
+    try:
+        vector = provider.encode([text])[0]
+    except Exception as exc:
+        logger.exception(
+            "event=embedding.error provider=%s duration_ms=%s error_type=%s",
+            provider.settings.provider,
+            _elapsed_ms(started),
+            exc.__class__.__name__,
+        )
+        raise
+    logger.debug(
+        "event=embedding provider=%s duration_ms=%s",
+        provider.settings.provider,
+        _elapsed_ms(started),
+    )
     return vector_literal(vector)
+
+
+# Convert a monotonic start timestamp into rounded milliseconds.
+def _elapsed_ms(started: float) -> int:
+    return round((perf_counter() - started) * 1000)
