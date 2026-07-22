@@ -13,6 +13,7 @@ interface ChatMessageProps {
   latestVisualizeTraceId?: string;
 }
 
+// 값이 배열이 아닌 일반 객체인지 검사한다.
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -22,6 +23,7 @@ interface ChartResult {
   spec: Record<string, unknown>;
 }
 
+// 유효한 visualize trace에서 차트 식별자와 Vega-Lite 사양을 추출한다.
 function vegaLiteSpec(trace: McpTrace): ChartResult | null {
   if (trace.tool !== "visualize" || !isRecord(trace.response)) {
     return null;
@@ -45,6 +47,7 @@ function vegaLiteSpec(trace: McpTrace): ChartResult | null {
   return { key, spec: structured.vega_lite };
 }
 
+// 사용자·assistant 메시지와 연결된 trace·시각화를 함께 렌더링한다.
 export function ChatMessage({ message, tracesById, showMcpTrace, latestVisualizeTraceId }: ChatMessageProps) {
   const [expanded, setExpanded] = useState(false);
   const traces = (message.traceIds ?? []).map((traceId) => tracesById[traceId]).filter(Boolean);

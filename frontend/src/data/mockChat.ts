@@ -103,6 +103,7 @@ export const seedConversations: Conversation[] = [
   },
 ];
 
+// 백엔드 없이 UI 흐름을 확인할 수 있는 지연된 mock 채팅 응답을 만든다.
 export function createMockAssistantResponse(message: string): Promise<ChatResponse> {
   const timestamp = new Date().toISOString();
   const tracePrefix = crypto.randomUUID();

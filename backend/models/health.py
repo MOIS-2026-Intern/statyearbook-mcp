@@ -9,9 +9,8 @@ from pydantic import BaseModel
 class HealthResponse(BaseModel):
     status: str
     app: str
+    profile: str
     modelProvider: str
     chatModel: str
     modelConfigured: bool
-    openaiModel: str
-    openaiConfigured: bool
     mcp: dict[str, Any]

@@ -1,10 +1,14 @@
 /data/*
-/outputs/
+/models/*
+/admin/state/
+/admin/workspaces/
+.DS_Store
 
 # secrets / local env
 .env
 .env.*
-!.env.example
+!**/.env.example
+!frontend/.env.test
 
 # python
 __pycache__/
@@ -18,7 +22,3 @@ dist/
 
 # db
 /db/seeds/*.sql
-
-#load
-/load/parsed_yearbook.json
-/load/output/

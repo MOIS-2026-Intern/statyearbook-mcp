@@ -2,13 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches:
-      - main
-      - develop
+    branches: [main, develop]
   push:
-    branches:
-      - main
-      - develop
+    branches: [main, develop]
   workflow_dispatch:
 
 permissions:
@@ -19,152 +15,256 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  backend-test:
-    name: Backend tests
+  python-test:
+    name: Python tests
     runs-on: ubuntu-latest
-
     env:
-      STATYEARBOOK_DSN: postgresql://postgres:postgres@127.0.0.1:5432/statyearbook
-      OPENAI_API_KEY: ci-placeholder
+      APP_PROFILE: test
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            admin/requirements.txt
+            app/requirements.txt
+            backend/requirements.txt
 
-      - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+      - name: Install service dependencies
+        run: >-
+          python -m pip install
+          -r admin/requirements.txt
+          -r app/requirements.txt
+          -r backend/requirements.txt
 
-      - name: Run backend tests
+      - name: Run tests
         run: python -m unittest discover -s tests -v
 
   frontend-build:
-    name: Frontend build
+    name: Frontend test build
     runs-on: ubuntu-latest
-
     defaults:
       run:
         working-directory: frontend
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
+      - run: npm run build:test
 
-      - name: Type-check and build
-        run: npm run build
-
-  migration-test:
-    name: Database migration
+  db-test:
+    name: Database schema
     runs-on: ubuntu-latest
-
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg17
         env:
-          POSTGRES_DB: statyearbook
+          POSTGRES_DB: statyearbook_test
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d statyearbook"
+          --health-cmd "pg_isready -U postgres -d statyearbook_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-
     env:
       PGPASSWORD: postgres
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Apply initial migration
-        run: >-
-          psql
-          -h 127.0.0.1
-          -U postgres
-          -d statyearbook
-          -v ON_ERROR_STOP=1
-          -f supabase/migrations/202607140001_initial_schema.sql
-
-      - name: Verify pgvector extension
+      - name: Apply canonical schema twice
         run: |
-          result="$(psql -h 127.0.0.1 -U postgres -d statyearbook -Atc \
-            "SELECT extname FROM pg_extension WHERE extname = 'vector';")"
-          test "$result" = "vector"
+          psql -h 127.0.0.1 -U postgres -d statyearbook_test \
+            -v ON_ERROR_STOP=1 -f db/schema.sql
+          psql -h 127.0.0.1 -U postgres -d statyearbook_test \
+            -v ON_ERROR_STOP=1 -f db/schema.sql
 
-      - name: Verify tables
+      - name: Verify pgvector and tables
         run: |
-          result="$(psql -h 127.0.0.1 -U postgres -d statyearbook -Atc \
-            "SELECT COUNT(*)
-             FROM pg_tables
-             WHERE schemaname = 'public'
-               AND tablename IN (
-                 'publications',
-                 'statistics',
-                 'stat_tables',
-                 'footnotes',
-                 'contacts',
-                 'statistic_images'
-               );")"
-          test "$result" = "6"
+          test "$(psql -h 127.0.0.1 -U postgres -d statyearbook_test -Atc \
+            "SELECT extname FROM pg_extension WHERE extname = 'vector';")" = "vector"
+          test "$(psql -h 127.0.0.1 -U postgres -d statyearbook_test -Atc \
+            "SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN (
+              'publications', 'embedding_profiles', 'statistics', 'stat_tables',
+              'table_search_chunks', 'footnotes', 'contacts', 'embedding_jobs'
+            );")" = "8"
 
-  docker-build:
-    name: Docker build and health check
+  image-build:
+    name: ${{ matrix.service }} image
     runs-on: ubuntu-latest
-    needs:
-      - backend-test
-      - frontend-build
-      - migration-test
+    needs: [python-test, frontend-build, db-test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: admin
+            context: .
+            dockerfile: admin/Dockerfile
+            build_args: ""
+          - service: app
+            context: .
+            dockerfile: app/Dockerfile
+            build_args: ""
+          - service: backend
+            context: .
+            dockerfile: backend/Dockerfile
+            build_args: ""
+          - service: frontend
+            context: frontend
+            dockerfile: frontend/Dockerfile
+            build_args: "--build-arg VITE_BACKEND_BASE_URL=https://backend.example.test"
+          - service: db
+            context: db
+            dockerfile: db/Dockerfile
+            build_args: ""
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Build production image
-        run: docker build -t mois-statyearbook-service:ci .
+      - name: Build isolated service image
+        run: >-
+          docker build
+          ${{ matrix.build_args }}
+          --file ${{ matrix.dockerfile }}
+          --tag statyearbook-${{ matrix.service }}:ci
+          ${{ matrix.context }}
 
-      - name: Start container
+      - name: Build app image for backend contract
+        if: matrix.service == 'backend'
+        run: >-
+          docker build
+          --file app/Dockerfile
+          --tag statyearbook-app-contract:ci
+          .
+
+      - name: Smoke test app image
+        if: matrix.service == 'app'
         run: |
-          docker run --detach \
-            --name statyearbook-ci \
-            --publish 127.0.0.1:10000:10000 \
-            --env PORT=10000 \
-            mois-statyearbook-service:ci
+          docker run --detach --name statyearbook-app-ci --publish 18001:8001 \
+            --env APP_PROFILE=test \
+            --env STATYEARBOOK_APP_HOST=0.0.0.0 \
+            statyearbook-app:ci
+          if ! curl --fail --silent --show-error --retry 20 --retry-delay 1 \
+            --retry-all-errors http://127.0.0.1:18001/health; then
+            docker logs statyearbook-app-ci
+            exit 1
+          fi
 
-      - name: Wait for health check
+      - name: Smoke test backend image
+        if: matrix.service == 'backend'
         run: |
+          docker network create statyearbook-contract-ci
+          docker run --detach --name statyearbook-app-contract-ci \
+            --network statyearbook-contract-ci \
+            --publish 18002:8001 \
+            --env APP_PROFILE=test \
+            --env STATYEARBOOK_APP_HOST=0.0.0.0 \
+            statyearbook-app-contract:ci
+          docker run --detach --name statyearbook-backend-ci --publish 18000:8000 \
+            --network statyearbook-contract-ci \
+            --env APP_PROFILE=test \
+            --env STATYEARBOOK_BACKEND_HOST=0.0.0.0 \
+            --env STATYEARBOOK_BACKEND_MCP_URL=http://statyearbook-app-contract-ci:8001/mcp \
+            statyearbook-backend:ci
+          if ! curl --fail --silent --show-error --retry 20 --retry-delay 1 \
+            --retry-all-errors http://127.0.0.1:18002/health; then
+            docker logs statyearbook-app-contract-ci
+            exit 1
+          fi
+          if ! curl --fail --silent --show-error --retry 20 --retry-delay 1 \
+            --retry-all-errors http://127.0.0.1:18000/health; then
+            docker logs statyearbook-backend-ci
+            exit 1
+          fi
+          docker exec --interactive statyearbook-backend-ci python - <<'PY'
+          import asyncio
+
+          from backend.config import settings
+          from backend.gateways.mcp_gateway import McpGateway
+
+
+          # 분리 배포된 app에서 backend가 세 가지 공개 도구를 실제로 조회하는지 확인한다.
+          async def check_tools() -> None:
+              async with McpGateway(settings) as gateway:
+                  names = {tool.name for tool in await gateway.list_tool_specs()}
+              expected = {"search_statistics", "search_tables", "visualize"}
+              missing = expected - names
+              if missing:
+                  raise RuntimeError(f"missing MCP tools: {sorted(missing)}")
+
+
+          asyncio.run(check_tools())
+          PY
+
+      - name: Smoke test admin image
+        if: matrix.service == 'admin'
+        run: |
+          docker run --detach --name statyearbook-admin-ci --publish 18100:8100 \
+            --env APP_PROFILE=test \
+            --env STATYEARBOOK_ADMIN_HOST=0.0.0.0 \
+            --env STATYEARBOOK_ADMIN_API_TOKEN=ci-token \
+            statyearbook-admin:ci
+          if ! curl --fail --silent --show-error --retry 20 --retry-delay 1 \
+            --retry-all-errors --header 'X-Admin-Token: ci-token' \
+            http://127.0.0.1:18100/api/admin/health; then
+            docker logs statyearbook-admin-ci
+            exit 1
+          fi
+
+      - name: Smoke test frontend image
+        if: matrix.service == 'frontend'
+        run: |
+          docker run --detach --name statyearbook-frontend-ci --publish 18080:8080 \
+            statyearbook-frontend:ci
+          if ! curl --fail --silent --show-error --retry 20 --retry-delay 1 \
+            --retry-all-errors http://127.0.0.1:18080/health; then
+            docker logs statyearbook-frontend-ci
+            exit 1
+          fi
+
+      - name: Smoke test db image
+        if: matrix.service == 'db'
+        run: |
+          docker run --detach --name statyearbook-db-ci \
+            --env APP_PROFILE=test \
+            statyearbook-db:ci
           for attempt in {1..30}; do
-            if curl --fail --silent http://127.0.0.1:10000/health; then
-              exit 0
+            if docker exec statyearbook-db-ci \
+              pg_isready -U postgres -d statyearbook_test; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker logs statyearbook-db-ci
+              exit 1
             fi
             sleep 1
           done
+          test "$(docker exec statyearbook-db-ci \
+            psql -U postgres -d statyearbook_test -Atc \
+            "SELECT to_regclass('public.statistics');")" = "statistics"
 
-          docker logs statyearbook-ci
-          exit 1
-
-      - name: Show container logs
+      - name: Remove smoke test container
         if: always()
-        run: docker logs statyearbook-ci || true
+        run: >-
+          docker rm --force
+          statyearbook-${{ matrix.service }}-ci
+          2>/dev/null || true
 
-      - name: Stop container
-        if: always()
-        run: docker rm --force statyearbook-ci || true
+      - name: Remove backend contract resources
+        if: always() && matrix.service == 'backend'
+        run: |
+          docker rm --force statyearbook-app-contract-ci 2>/dev/null || true
+          docker network rm statyearbook-contract-ci 2>/dev/null || true

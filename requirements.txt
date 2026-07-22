@@ -1,7 +1,0 @@
-ijson
-psycopg[binary]
-mcp
-python-dotenv
-openai
-fastapi
-uvicorn

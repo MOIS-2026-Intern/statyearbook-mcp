@@ -14,7 +14,7 @@ from backend.services.chat_service import ChatService
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
 
-# logger에서 client ip 를 확인할 수 있도록 하는 함수
+# 프록시 헤더를 우선해 로그에 남길 클라이언트 IP를 구한다.
 def _client_ip(request: Request) -> str | None:
     """Resolve the requester's IP, preferring proxy-forwarded headers."""
     forwarded_for = request.headers.get("x-forwarded-for")
@@ -26,6 +26,7 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+# 채팅 요청을 서비스에 위임하고 구성·실행 오류를 HTTP 응답으로 변환한다.
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     logger.info(

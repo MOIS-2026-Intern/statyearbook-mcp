@@ -1,0 +1,14 @@
+project_id = "statyearbook-mcp"
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.migrations]
+enabled = true
+schema_paths = ["./schema.sql"]
+
+[db.seed]
+enabled = false
+sql_paths = []

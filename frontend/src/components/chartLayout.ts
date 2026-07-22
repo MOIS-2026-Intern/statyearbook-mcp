@@ -1,13 +1,16 @@
 type JsonRecord = Record<string, unknown>;
 
+// 값이 배열이 아닌 JSON object인지 검사한다.
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// 수치가 지정된 최솟값과 최댓값 사이에 머물도록 제한한다.
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(Math.max(value, minimum), maximum);
 }
 
+// 문자열 또는 mark 객체에서 Vega-Lite mark 유형을 추출한다.
 function markType(mark: unknown) {
   if (typeof mark === "string") {
     return mark;
@@ -15,6 +18,7 @@ function markType(mark: unknown) {
   return isRecord(mark) && typeof mark.type === "string" ? mark.type : "";
 }
 
+// 단일 mark나 layer에서 뷰의 주요 mark 유형을 찾는다.
 function viewMarkType(view: JsonRecord) {
   const direct = markType(view.mark);
   if (direct) {
@@ -33,11 +37,13 @@ function viewMarkType(view: JsonRecord) {
   return "";
 }
 
+// Vega-Lite 뷰의 인라인 data values를 안전하게 추출한다.
 function valuesFrom(view: JsonRecord) {
   const data = view.data;
   return isRecord(data) && Array.isArray(data.values) ? data.values : [];
 }
 
+// 카테고리 수, 라벨 길이, 값 편차를 계산해 차트 배치 판단에 사용한다.
 function categoryMetrics(view: JsonRecord) {
   const values = valuesFrom(view);
   const labels = [...new Set(values.map((value) => (isRecord(value) ? String(value.x ?? "") : "")))];
@@ -53,6 +59,7 @@ function categoryMetrics(view: JsonRecord) {
   };
 }
 
+// 데이터 특성에 따라 막대 방향·크기·라벨 위치를 조정한다.
 function styleBar(view: JsonRecord, width: number) {
   const encoding = isRecord(view.encoding) ? { ...view.encoding } : {};
   const { count, maxLabelLength, valueRatio } = categoryMetrics(view);
@@ -95,6 +102,7 @@ function styleBar(view: JsonRecord, width: number) {
   };
 }
 
+// mark 유형별로 화면 폭에 맞는 뷰 크기와 스타일을 적용한다.
 function styleView(view: JsonRecord, width: number): JsonRecord {
   const type = viewMarkType(view);
   if (type === "bar") {

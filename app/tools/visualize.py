@@ -19,8 +19,11 @@ from app.tools.visualize_service.vega_lite_renderer import build_vega_lite_spec,
 
 
 TABLE_SQL = """
-    SELECT s.stat_id, s.ref_id, s.title_ko, s.title_en,
-           s.unit, s.base_date, s.year AS publication_year,
+    SELECT s.stat_id, s.ref_id,
+           s.chapter_no, s.section_no, s.level3_no, s.level4_no,
+           s.chapter, s.section, s.level3_title, s.level4_title,
+           s.title_ko, s.title_en, s.unit, s.base_date, s.page_start,
+           s.year AS publication_year,
            t.seq AS table_seq, t.caption, t.n_rows, t.n_cols,
            t.body, t.table_md
     FROM statistics s

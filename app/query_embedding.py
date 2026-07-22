@@ -1,34 +1,37 @@
 # -*- coding: utf-8 -*-
-import os
+from functools import lru_cache
 
-from openai import OpenAI
-
-from app.config import EMBED_MODEL
-from app.vector import vector_literal
-
-# OpenAI 클라이언트는 첫 검색 때 만든다.
-_openai_client: OpenAI | None = None
-
-
-# OpenAI API 키가 있는지 확인한다.
-def require_api_key() -> None:
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise RuntimeError(
-            "OPENAI_API_KEY 미설정: 의미 검색을 하려면 .env 에 키를 넣어 주세요."
-        )
+from app.config import settings
+from utils.embedding import (
+    STATISTICS_CONTENT_VERSION,
+    TABLE_SEARCH_CONTENT_VERSION,
+    EmbeddingProfile,
+    EmbeddingProvider,
+    create_embedding_profile,
+    create_embedding_provider,
+)
+from utils.vector import vector_literal
 
 
-# OpenAI 클라이언트를 지연 생성한다.
-def openai_client() -> OpenAI:
-    global _openai_client
-    if _openai_client is None:
-        require_api_key()
-        _openai_client = OpenAI()
-    return _openai_client
+# provider와 로컬 모델은 프로세스마다 한 번만 만든다.
+@lru_cache(maxsize=1)
+def embedding_provider() -> EmbeddingProvider:
+    return create_embedding_provider(settings.embedding)
+
+
+# 통계 제목 임베딩의 재현 가능한 프로필 식별자를 캐시한다.
+@lru_cache(maxsize=1)
+def embedding_profile() -> EmbeddingProfile:
+    return create_embedding_profile(settings.embedding, STATISTICS_CONTENT_VERSION)
+
+
+# 표 검색 청크 임베딩의 프로필 식별자를 캐시한다.
+@lru_cache(maxsize=1)
+def table_search_embedding_profile() -> EmbeddingProfile:
+    return create_embedding_profile(settings.embedding, TABLE_SEARCH_CONTENT_VERSION)
 
 
 # 질의를 pgvector 리터럴로 임베딩한다.
 def embed_query(text: str) -> str:
-    client = openai_client()
-    resp = client.embeddings.create(model=EMBED_MODEL, input=text)
-    return vector_literal(resp.data[0].embedding)
+    vector = embedding_provider().encode([text])[0]
+    return vector_literal(vector)

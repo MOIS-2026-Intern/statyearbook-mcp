@@ -10,6 +10,7 @@ import { seedConversations } from "./data/mockChat";
 import { limitConversationState, loadConversationState, saveConversationState } from "./storage/conversationStore";
 import type { ChatMessage as ChatMessageType, Conversation, McpTrace } from "./types/chat";
 
+// 빈 메시지·trace와 고유 ID를 가진 새 대화를 만든다.
 function createConversation(): Conversation {
   const timestamp = new Date().toISOString();
 
@@ -22,6 +23,7 @@ function createConversation(): Conversation {
   };
 }
 
+// 사용자 입력을 현재 시각과 고유 ID가 있는 메시지로 구성한다.
 function createUserMessage(content: string): ChatMessageType {
   return {
     id: crypto.randomUUID(),
@@ -31,6 +33,7 @@ function createUserMessage(content: string): ChatMessageType {
   };
 }
 
+// API 실패 내용을 대화에 표시할 assistant 메시지로 변환한다.
 function createErrorMessage(error: unknown): ChatMessageType {
   const details = error instanceof Error ? error.message : "알 수 없는 오류가 발생했습니다.";
 
@@ -42,10 +45,12 @@ function createErrorMessage(error: unknown): ChatMessageType {
   };
 }
 
+// 첫 사용자 메시지를 대화 목록용 짧은 제목으로 줄인다.
 function summarizeTitle(message: string) {
   return message.length > 28 ? `${message.slice(0, 28)}...` : message;
 }
 
+// 모델에 보낼 최근 사용자 턴부터의 대화 메시지만 선택한다.
 function getRecentTurnMessages(messages: ChatMessageType[], maxTurns: number): ChatMessageType[] {
   if (maxTurns <= 0) {
     return [];
@@ -69,23 +74,28 @@ function getRecentTurnMessages(messages: ChatMessageType[], maxTurns: number): C
   return messages.slice(startIndex);
 }
 
+// 선택된 메시지가 참조하는 MCP trace만 필터링한다.
 function getTracesForMessages(messages: ChatMessageType[], traces: McpTrace[]): McpTrace[] {
   const traceIds = new Set(messages.flatMap((message) => message.traceIds ?? []));
   return traces.filter((trace) => traceIds.has(trace.id));
 }
 
+// 대화의 사용자 질문 수를 계산한다.
 function countUserMessages(messages: ChatMessageType[]) {
   return messages.filter((message) => message.role === "user").length;
 }
 
+// 메시지와 trace가 모두 없는 새 대화인지 확인한다.
 function isEmptyConversation(conversation: Conversation) {
   return conversation.messages.length === 0 && conversation.traces.length === 0;
 }
 
+// 값이 배열이 아닌 일반 객체인지 검사한다.
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// visualize trace에 프런트엔드가 렌더링할 Vega-Lite 사양이 있는지 확인한다.
 function hasVegaLiteSpec(trace: McpTrace) {
   if (trace.tool !== "visualize" || !isRecord(trace.response)) {
     return false;
@@ -94,6 +104,7 @@ function hasVegaLiteSpec(trace: McpTrace) {
   return isRecord(structured) && isRecord(structured.vega_lite);
 }
 
+// 저장된 대화를 복원하고 필요하면 새 빈 대화를 앞에 추가한다.
 function createInitialConversationState() {
   const savedState = loadConversationState(seedConversations);
   const firstConversation = savedState.conversations[0];
@@ -109,6 +120,7 @@ function createInitialConversationState() {
   return limitConversationState([nextConversation, ...savedState.conversations], nextConversation.id);
 }
 
+// 대화 목록·메시지·MCP trace 상태와 주요 UI 흐름을 조정한다.
 export default function App() {
   const [initialConversationState] = useState(createInitialConversationState);
   const [conversations, setConversations] = useState<Conversation[]>(initialConversationState.conversations);
@@ -142,12 +154,14 @@ export default function App() {
     return [...(activeConversation?.traces ?? [])].reverse().find(hasVegaLiteSpec)?.id;
   }, [activeConversation?.traces]);
 
+  // 새 대화를 목록 앞에 추가하고 활성 대화로 전환한다.
   const createNewChat = () => {
     const next = createConversation();
     setConversations((current) => limitConversationState([next, ...current], next.id).conversations);
     setActiveConversationId(next.id);
   };
 
+  // 선택한 대화를 삭제하고 필요하면 인접한 대화를 활성화한다.
   const deleteConversation = (conversationId: string) => {
     const deletedIndex = conversations.findIndex((conversation) => conversation.id === conversationId);
     const remainingConversations = conversations.filter((conversation) => conversation.id !== conversationId);
@@ -161,10 +175,12 @@ export default function App() {
     }
   };
 
+  // 현재 대화의 질문 수 제한 안내를 닫는다.
   const dismissConversationLimitNotice = () => {
     setLimitNoticeDismissed(true);
   };
 
+  // 사용자 메시지를 반영하고 API 응답 또는 오류를 같은 대화에 추가한다.
   const sendMessage = async (message: string) => {
     if (!activeConversation) {
       return;

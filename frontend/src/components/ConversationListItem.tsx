@@ -9,6 +9,7 @@ interface ConversationListItemProps {
   onSelect: (conversationId: string) => void;
 }
 
+// 대화 선택과 삭제 메뉴를 제공하는 목록 항목을 렌더링한다.
 export function ConversationListItem({
   conversation,
   isActive,
@@ -23,12 +24,14 @@ export function ConversationListItem({
       return;
     }
 
+    // 메뉴 밖을 누르면 열린 컨텍스트 메뉴를 닫는다.
     const closeOnOutsideClick = (event: MouseEvent) => {
       if (!itemRef.current?.contains(event.target as Node)) {
         setMenuOpen(false);
       }
     };
 
+    // Escape 키로 열린 컨텍스트 메뉴를 닫는다.
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setMenuOpen(false);
@@ -44,11 +47,13 @@ export function ConversationListItem({
     };
   }, [menuOpen]);
 
+  // 브라우저 기본 메뉴를 막고 대화 항목 메뉴를 연다.
   const openContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     setMenuOpen(true);
   };
 
+  // 메뉴를 닫은 뒤 현재 대화의 삭제 요청을 전달한다.
   const deleteConversation = () => {
     setMenuOpen(false);
     onDelete(conversation.id);

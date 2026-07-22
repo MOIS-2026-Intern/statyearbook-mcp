@@ -7,6 +7,7 @@ interface VegaLiteChartProps {
   spec: Record<string, unknown>;
 }
 
+// 컨테이너 크기에 맞춘 Vega-Lite 사양을 캔버스 차트로 렌더링한다.
 export function VegaLiteChart({ spec }: VegaLiteChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
