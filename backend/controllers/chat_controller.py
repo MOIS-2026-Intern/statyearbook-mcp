@@ -31,7 +31,7 @@ def _client_ip(request: Request) -> str | None:
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     logger.debug(
-        "event=chat ip=%s\n    message=%s",
+        "event=chat ip=[%s]\n    message=%s",
         _client_ip(request),
         compact_json(payload.message, max_chars=300),
     )
