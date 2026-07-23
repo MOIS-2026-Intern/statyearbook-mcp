@@ -17,6 +17,7 @@ from utils.embedding import (
     create_embedding_provider,
 )
 from utils.env import load_service_env
+from utils.logging import normalize_log_level
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -76,9 +77,15 @@ class AppSettings:
     embedding: EmbeddingSettings
     host: str
     port: int
+    log_level: str = "DEBUG"
 
     # 운영 app은 선택 provider의 필수 artifact 또는 token을 시작 시 검증한다.
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "log_level",
+            normalize_log_level(self.log_level, "STATYEARBOOK_APP_LOG_LEVEL"),
+        )
         if self.profile != "main":
             return
         create_embedding_provider(self.embedding)
@@ -92,6 +99,7 @@ class AppSettings:
             embedding=embedding_settings_from_env(),
             host=os.environ.get("STATYEARBOOK_APP_HOST", "127.0.0.1"),
             port=int(os.environ.get("PORT") or os.environ.get("STATYEARBOOK_APP_PORT", "8001")),
+            log_level=os.environ.get("STATYEARBOOK_APP_LOG_LEVEL", "DEBUG"),
         )
 
 

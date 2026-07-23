@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from utils.env import load_service_env
+from utils.logging import normalize_log_level
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -42,9 +43,18 @@ class Settings:
     mcp_server_label: str = "statyearbook"
     mcp_url: str = "http://127.0.0.1:8001/mcp"
     mcp_call_timeout_seconds: float = 90.0
+    log_level: str = "DEBUG"
 
     # 모델 공급자를 제한하고 운영 프로필의 필수 인증·MCP 설정을 시작 시 검증한다.
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "log_level",
+            normalize_log_level(
+                self.log_level,
+                "STATYEARBOOK_BACKEND_LOG_LEVEL",
+            ),
+        )
         supported_providers = {"openai", "bizrouter"}
         if self.model_provider not in supported_providers:
             allowed = ", ".join(sorted(supported_providers))
@@ -119,6 +129,7 @@ class Settings:
             mcp_call_timeout_seconds=float(
                 os.environ.get("STATYEARBOOK_BACKEND_MCP_CALL_TIMEOUT_SECONDS", "90")
             ),
+            log_level=os.environ.get("STATYEARBOOK_BACKEND_LOG_LEVEL", "DEBUG"),
         )
 
     # 선택한 모델 공급자에 필요한 인증 정보가 준비됐는지 확인한다.
