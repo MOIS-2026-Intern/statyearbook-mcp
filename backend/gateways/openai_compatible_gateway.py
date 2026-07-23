@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import logging
+
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -16,6 +19,9 @@ from backend.serializers.mcp_result_serializer import (
     parse_json_object,
     to_jsonable,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -49,7 +55,28 @@ class OpenAICompatibleGateway:
         if reasoning is not None:
             kwargs["reasoning"] = reasoning
 
-        return await self._client.responses.create(**kwargs)
+        started = perf_counter()
+        try:
+            response = await self._client.responses.create(**kwargs)
+        except Exception as exc:
+            logger.exception(
+                "event=model.error provider=%s model=%s duration_ms=%s error_type=%s",
+                self._settings.model_provider,
+                self._settings.chat_model,
+                _elapsed_ms(started),
+                exc.__class__.__name__,
+            )
+            raise
+        output = getattr(response, "output", []) or []
+        tool_call_count = sum(_get(item, "type") == "function_call" for item in output)
+        logger.debug(
+            "event=model.call provider=%s model=%s duration_ms=%s tool_calls=%s",
+            self._settings.model_provider,
+            self._settings.chat_model,
+            _elapsed_ms(started),
+            tool_call_count,
+        )
+        return response
 
     # 대화 상태와 도구 결과를 이어 모델의 한 턴을 구성한다.
     async def create_turn(
@@ -183,3 +210,8 @@ def _get(value: Any, key: str) -> Any:
     if isinstance(value, dict):
         return value.get(key)
     return getattr(value, key, None)
+
+
+# Convert a monotonic start timestamp into rounded milliseconds.
+def _elapsed_ms(started: float) -> int:
+    return round((perf_counter() - started) * 1000)
