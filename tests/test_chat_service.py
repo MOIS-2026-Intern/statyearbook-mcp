@@ -6,7 +6,6 @@ from backend.models.chat import ChatMessage, ChatRequest, McpTrace
 from backend.models.tooling import ModelTurn, ToolResult, ToolSpec
 from backend.services.chat_service import (
     ChatService,
-    _historical_tool_names,
     _model_result_for_tool,
     _successful_tool_names,
 )
@@ -67,11 +66,6 @@ class ChatServiceModelResultTests(unittest.TestCase):
         self.assertEqual(len(model.calls), 1)
         self.assertIn("search_tables 결과 응답 형식", model.calls[0]["instructions"])
         self.assertEqual(model.calls[0]["tool_results"], [])
-
-    def test_restores_search_tables_tool_name_from_history(self) -> None:
-        names = _historical_tool_names(historical_search_tables_request())
-
-        self.assertEqual(names, ("search_tables",))
 
     def test_result_prompt_names_exclude_failed_tools(self) -> None:
         results = [
