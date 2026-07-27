@@ -113,7 +113,7 @@ class VisualizeSpecTests(unittest.TestCase):
         self.assertTrue(arc_layer["encoding"]["theta"]["stack"])
         self.assertEqual(arc_layer["encoding"]["order"]["field"], "_order")
         self.assertEqual(arc_layer["encoding"]["color"]["field"], "_legend_label")
-        self.assertEqual(arc_layer["encoding"]["color"]["scale"], {"scheme": "set3"})
+        self.assertEqual(arc_layer["encoding"]["color"]["scale"], {"scheme": "tableau10"})
         self.assertEqual(
             [value["_legend_label"] for value in vega_lite["data"]["values"]],
             ["3급 Grade 3  90", "2급 Grade 2  9", "1급 Grade 1  1"],
