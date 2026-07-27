@@ -432,17 +432,18 @@ def select_source_rows(
     return selected, selection, warnings
 
 
-# LLM이 원본 표에서 고른 행 조건을 실제 컬럼명과 셀 값에 엄격하게 대조한다.
+# LLM이 원본 표에서 고른 행 조건을, 같은 컬럼의 여러 값은 OR·다른 컬럼끼리는 AND로 대조한다.
 def apply_exact_filters(
     rows: list[dict[str, str]],
     profiles: list[dict[str, Any]],
     filters: list[dict[str, str]],
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]], list[str]]:
-    selected = list(rows)
     columns = {profile["name"] for profile in profiles}
     applied: list[dict[str, Any]] = []
     errors: list[str] = []
 
+    grouped: dict[str, list[str]] = {}
+    order: list[str] = []
     for item in filters:
         column = clean_label(item.get("column"))
         value = clean_label(item.get("value"))
@@ -452,14 +453,23 @@ def apply_exact_filters(
         if not value:
             errors.append(f"선택 조건 '{column}'의 값이 비어 있습니다.")
             continue
+        if column not in grouped:
+            grouped[column] = []
+            order.append(column)
+        grouped[column].append(value)
 
-        matches = [row for row in selected if clean_label(row.get(column)) == value]
-        applied.append({"column": column, "value": value, "matched_row_count": len(matches)})
-        if not matches:
-            errors.append(f"원본 표의 '{column}' 컬럼에서 값 '{value}'을 찾지 못했습니다.")
-            selected = []
-            continue
-        selected = matches
+    selected = list(rows)
+    for column in order:
+        candidates = selected
+        for value in grouped[column]:
+            count = sum(1 for row in candidates if clean_label(row.get(column)) == value)
+            applied.append({"column": column, "value": value, "matched_row_count": count})
+            if count == 0:
+                errors.append(f"원본 표의 '{column}' 컬럼에서 값 '{value}'을 찾지 못했습니다.")
+        selected = [
+            row for row in candidates
+            if any(clean_label(row.get(column)) == value for value in grouped[column])
+        ]
 
     return ([] if errors else selected), applied, errors
 

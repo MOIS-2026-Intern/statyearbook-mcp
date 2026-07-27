@@ -13,6 +13,7 @@ from app.tool_descriptions import (
     VISUALIZE,
     VISUALIZE_FIELDS,
 )
+from app.tools.search_tables import merge_bodies
 from app.tools.visualize_service.chart_spec_builder import ChartType, build_plot_spec
 from app.tools.visualize_service.table_interpreter import TotalMode
 from app.tools.visualize_service.vega_lite_renderer import build_vega_lite_spec, summary_text
@@ -28,7 +29,8 @@ TABLE_SQL = """
            t.body, t.table_md
     FROM statistics s
     JOIN stat_tables t ON t.stat_id = s.stat_id
-    WHERE s.stat_id = %s AND t.seq = %s
+    WHERE s.stat_id = %s
+    ORDER BY t.seq
 """
 
 
@@ -43,15 +45,18 @@ class MetricSelection(BaseModel):
     unit: str | None = Field(default=None, description=METRIC_SELECTION_FIELDS["unit"])
 
 
-# 시각화 대상 통계표를 DB에서 가져온다.
-def _fetch_table(stat_id: int, table_seq: int) -> dict | None:
+# 시각화 대상 통계표를 DB에서 가져오되 같은 stat_id의 모든 seq를 하나로 합친다.
+def _fetch_table(stat_id: int) -> dict | None:
     with connect() as conn, conn.cursor() as cur:
-        cur.execute(TABLE_SQL, (stat_id, table_seq))
-        row = cur.fetchone()
+        cur.execute(TABLE_SQL, (stat_id,))
+        rows = cur.fetchall()
 
-    if row and isinstance(row.get("body"), str):
-        row["body"] = json.loads(row["body"])
-    return row
+    if not rows:
+        return None
+    bodies = [json.loads(r["body"]) if isinstance(r["body"], str) else r["body"] for r in rows]
+    table = rows[0]
+    table["body"] = bodies[0] if len(bodies) == 1 else merge_bodies(bodies)
+    return table
 
 
 # MCP 오류 응답 객체를 만든다.
@@ -88,7 +93,7 @@ def register(mcp: FastMCP) -> None:
         x: Annotated[str | None, Field(description=VISUALIZE_FIELDS["x"])] = None,
         y: Annotated[str | None, Field(description=VISUALIZE_FIELDS["y"])] = None,
         group: str | None = None,
-        top_n: int | None = None,
+        top_n: Annotated[int | None, Field(description=VISUALIZE_FIELDS["top_n"])] = None,
         total_mode: Annotated[
             TotalMode,
             Field(description=VISUALIZE_FIELDS["total_mode"]),
@@ -114,18 +119,21 @@ def register(mcp: FastMCP) -> None:
             Field(description=VISUALIZE_FIELDS["metrics"]),
         ] = None,
     ) -> CallToolResult:
-        table = get_cached_table(table_handle) if table_handle else _fetch_table(stat_id, table_seq)
-        if table is None:
-            message = (
-                "table_handle이 만료되었거나 현재 MCP 세션에 없습니다. search_tables를 다시 호출해 주세요."
-                if table_handle
-                else "해당 stat_id/table_seq 통계표를 찾지 못했습니다."
-            )
-            return _error_result(message, stat_id, table_seq)
-        if table["stat_id"] != stat_id or table["table_seq"] != table_seq:
-            return _error_result(
-                "table_handle의 stat_id/table_seq가 요청값과 일치하지 않습니다.", stat_id, table_seq,
-            )
+        if table_handle:
+            table = get_cached_table(table_handle)
+            if table is None:
+                return _error_result(
+                    "table_handle이 만료되었거나 현재 MCP 세션에 없습니다. search_tables를 다시 호출해 주세요.",
+                    stat_id, table_seq,
+                )
+            if table["stat_id"] != stat_id:
+                return _error_result(
+                    "table_handle의 stat_id가 요청값과 일치하지 않습니다.", stat_id, table_seq,
+                )
+        else:
+            table = _fetch_table(stat_id)
+            if table is None:
+                return _error_result("해당 stat_id 통계표를 찾지 못했습니다.", stat_id, table_seq)
 
         spec = build_plot_spec(
             table, query, chart_type, x, y, group, top_n, total_mode,

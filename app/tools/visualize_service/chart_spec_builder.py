@@ -95,6 +95,8 @@ def _limit_categories(
 ) -> list[dict[str, Any]]:
     if x_is_year or chart_type in {"line", "area", "scatter", "table"}:
         return records
+    if top_n is not None and top_n <= 0:
+        return records
 
     default_limit = 8 if chart_type == "donut" else 20
     limit = top_n if top_n and top_n > 0 else default_limit
@@ -112,7 +114,9 @@ def _limit_categories(
     keep = {
         name for name, _ in sorted(totals.items(), key=lambda item: item[1], reverse=True)[:limit]
     }
-    warnings.append(f"범주가 {len(categories)}개라 상위 {limit}개 범주만 표시했습니다.")
+    warnings.append(
+        f"범주가 {len(categories)}개라 상위 {limit}개 범주만 표시했습니다. 전체를 보려면 top_n=0으로 요청하세요."
+    )
     return [record for record in records if record["x"] in keep]
 
 
