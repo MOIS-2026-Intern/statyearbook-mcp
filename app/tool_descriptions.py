@@ -67,6 +67,11 @@ VISUALIZE_FIELDS = {
         "막대그래프 방향. 기본은 세로 막대(vertical)이며, 사용자가 가로 막대를 "
         "명시적으로 요청할 때만 horizontal을 전달한다."
     ),
+    "sort_order": (
+        "값을 기준으로 범주를 정렬할 방향. 사용자가 큰 값·많은 순·내림차순을 요청하면 "
+        "descending, 작은 값·적은 순·오름차순을 요청하면 ascending을 전달한다. "
+        "값 기준 정렬 요청이 없으면 auto를 전달한다."
+    ),
     "total_mode": (
         "구성비·비율 차트의 합계 범주 처리. 합계 포함 요청은 include, 제외 요청은 exclude, "
         "불명확하면 auto"

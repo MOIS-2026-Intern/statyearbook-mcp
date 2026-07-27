@@ -111,8 +111,15 @@ def _vega_view(chart: dict[str, Any], has_series: bool, x_is_year: bool) -> dict
     # 막대는 기본 세로형이고 orientation=horizontal일 때만 값·범주 축을 교환한다.
     horizontal = is_bar and chart.get("orientation") == "horizontal"
     x_type = "quantitative" if ctype == "scatter" else "ordinal" if x_is_year else "nominal"
-    category_axis = {"field": "x", "type": x_type, "title": ""}
-    value_axis = {"field": "value", "type": "quantitative", "title": unit}
+    category_axis: dict[str, Any] = {"field": "x", "type": x_type, "title": ""}
+    value_axis: dict[str, Any] = {"field": "value", "type": "quantitative", "title": unit}
+    sort_order = chart.get("sort_order")
+    if is_bar and sort_order in {"ascending", "descending"}:
+        category_axis["sort"] = {
+            "field": "value",
+            "op": "sum",
+            "order": sort_order,
+        }
     encoding: dict[str, Any] = (
         {"x": value_axis, "y": category_axis} if horizontal
         else {"x": category_axis, "y": value_axis}
