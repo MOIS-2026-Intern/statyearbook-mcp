@@ -237,6 +237,16 @@ def _select_chart(
     return requested_type, "client_spec_validated", "클라이언트가 지정한 차트 타입을 데이터 구조 검증 후 사용했습니다."
 
 
+# 도넛은 부분-전체 구성이라 합계 조각을 넣으면 중복 집계되므로 total_mode와 무관하게 제외한다.
+def _drop_total_slices(records: list[dict[str, Any]], chart_type: str) -> list[dict[str, Any]]:
+    if chart_type != "donut":
+        return records
+    return [
+        record for record in records
+        if not is_total_label(record.get("x")) and not is_total_label(record.get("series"))
+    ]
+
+
 # 차트 타입에 맞게 레코드 표시 순서를 정한다.
 def _sort_records(records: list[dict[str, Any]], x_is_year: bool, chart_type: str) -> list[dict[str, Any]]:
     if x_is_year or chart_type in {"line", "area", "scatter"}:
@@ -480,6 +490,7 @@ def _selection_plan_spec(
     selected_type, decision_source, _ = _select_chart(
         chart_type, query, bool(records), x_profile if not single_row else None, has_group, warnings,
     )
+    records = _drop_total_slices(records, selected_type)
     records = _limit_series(records, warnings)
     records = _limit_categories(records, selected_type, bool(x_profile and x_profile["is_year"]), top_n, warnings)
     records = _sort_records(records, bool(x_profile and x_profile["is_year"]), selected_type)
@@ -743,6 +754,7 @@ def _wide_row_category_spec(
         return None
 
     selected_type = "donut" if requested_type == "donut" else "bar" if requested_type == "auto" else requested_type
+    records = _drop_total_slices(records, selected_type)
     records = _limit_categories(records, selected_type, False, top_n, warnings)
     records = _sort_records(records, False, selected_type)
     if applied_total_mode == "not_applicable":
@@ -925,6 +937,7 @@ def build_plot_spec(
         decision_source = "server_validation"
         reason = "요청한 행 또는 컬럼군을 표에서 확인하지 못해 전체 데이터로 대체하지 않았습니다."
     records = filter_chart_records(records, query, total_mode, target_year=target_year)
+    records = _drop_total_slices(records, selected_type)
 
     x_is_year = bool(x_profile and x_profile["is_year"])
     records = _limit_categories(records, selected_type, x_is_year, top_n, warnings)
