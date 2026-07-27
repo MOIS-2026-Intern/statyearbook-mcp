@@ -1,7 +1,9 @@
+import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from app.server import create_app
 from app.tools.search_statistics import _search_sql, search_statistics_data
 
 
@@ -54,6 +56,15 @@ class SearchStatisticsTests(unittest.TestCase):
 
         self.assertIn("chapter_no, section_no, level3_no, level4_no", sql)
         self.assertIn("level3_title, level4_title", sql)
+
+    def test_mcp_schema_exposes_publication_year_with_external_description(self) -> None:
+        tools = asyncio.run(create_app().list_tools())
+        tool = next(item for item in tools if item.name == "search_statistics")
+        properties = tool.inputSchema["properties"]
+
+        self.assertIn("publication_year", properties)
+        self.assertNotIn("year", properties)
+        self.assertIn("발간연도", properties["publication_year"]["description"])
 
     @patch("app.tools.search_statistics._fetch_rows")
     @patch("app.tools.search_statistics.embed_query", return_value="[0.1,0.2]")

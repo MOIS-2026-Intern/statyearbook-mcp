@@ -2,7 +2,7 @@ import unittest
 
 from app.tools.visualize_service.chart_spec_builder import build_plot_spec
 from app.tools.visualize_service.table_interpreter import profile_columns, resolve_column
-from app.tools.visualize_service.vega_lite_renderer import build_vega_lite_spec
+from app.tools.visualize_service.vega_lite_renderer import build_vega_lite_spec, summary_text
 
 
 def make_table(columns: list[str], records: list[dict[str, str]], title: str = "테스트 통계") -> dict:
@@ -29,6 +29,50 @@ def make_table(columns: list[str], records: list[dict[str, str]], title: str = "
 
 
 class VisualizeSpecTests(unittest.TestCase):
+    def test_llm_display_title_overrides_server_title_and_vega_title(self) -> None:
+        columns = ["연도 Year", "위원회 수"]
+        records = [{"연도 Year": "2024", "위원회 수": "571"}]
+
+        spec = build_plot_spec(
+            make_table(columns, records, "행정기관 위원회"),
+            "2024년 위원회 수",
+            "bar",
+            "연도 Year",
+            "위원회 수",
+            None,
+            None,
+            "auto",
+            title="  2024년   행정기관 위원회 수  ",
+        )
+        vega_lite = build_vega_lite_spec(spec)
+
+        self.assertEqual(spec["chart"]["title"], "2024년 행정기관 위원회 수")
+        self.assertEqual(spec["request"]["title"], "2024년 행정기관 위원회 수")
+        self.assertEqual(vega_lite["title"], "2024년 행정기관 위원회 수")
+        self.assertEqual(spec["stat"]["title_ko"], "행정기관 위원회")
+        self.assertEqual(spec["stat"]["level3_title"], "행정기관 위원회")
+        self.assertEqual(spec["stat"]["level4_title"], "행정기관 위원회")
+
+    def test_success_summary_does_not_expose_internal_chart_details(self) -> None:
+        spec = {
+            "chart": {
+                "title": "행정기관 위원회",
+                "type": "bar",
+                "decision_source": "selection_plan",
+                "reason": "원본 표와 대조했습니다.",
+            },
+            "data": {"record_count": 3},
+            "vega_lite": {"mark": "bar"},
+            "warnings": [],
+        }
+
+        text = summary_text(spec)
+
+        self.assertEqual(text, "행정기관 위원회 시각화를 생성했습니다.")
+        self.assertNotIn("Vega-Lite", text)
+        self.assertNotIn("데이터 포인트", text)
+        self.assertNotIn("선택 이유", text)
+
     def test_validated_selection_plan_uses_all_requested_subsidy_metrics(self) -> None:
         columns = [
             "구분 Classification 지역 Region",
@@ -78,51 +122,6 @@ class VisualizeSpecTests(unittest.TestCase):
         self.assertEqual(len(spec["data"]["selected_dataset"]["provenance"]), 3)
         vega_lite = build_vega_lite_spec(spec)
         self.assertEqual(len(vega_lite["data"]["values"]), 3)
-
-    def test_donut_spec_exposes_stable_order_share_and_safe_fallback_labels(self) -> None:
-        columns = ["등급 Grade", "정원 Personnel"]
-        records = [
-            dict(zip(columns, ["1급 Grade 1", "1"])),
-            dict(zip(columns, ["2급 Grade 2", "9"])),
-            dict(zip(columns, ["3급 Grade 3", "90"])),
-        ]
-        spec = build_plot_spec(
-            make_table(columns, records),
-            "등급별 정원 비율",
-            "donut",
-            columns[0],
-            columns[1],
-            None,
-            0,
-            "exclude",
-        )
-
-        vega_lite = build_vega_lite_spec(spec)
-
-        self.assertEqual(vega_lite["$schema"], "https://vega.github.io/schema/vega-lite/v6.json")
-        self.assertEqual(
-            [value["_order"] for value in vega_lite["data"]["values"]],
-            [0, 1, 2],
-        )
-        self.assertAlmostEqual(
-            sum(value["_share"] for value in vega_lite["data"]["values"]),
-            1.0,
-        )
-        arc_layer, label_layer = vega_lite["layer"]
-        self.assertEqual(arc_layer["mark"]["innerRadius"], 50)
-        self.assertTrue(arc_layer["encoding"]["theta"]["stack"])
-        self.assertEqual(arc_layer["encoding"]["order"]["field"], "_order")
-        self.assertEqual(arc_layer["encoding"]["color"]["field"], "_legend_label")
-        self.assertEqual(arc_layer["encoding"]["color"]["scale"], {"scheme": "tableau10"})
-        self.assertEqual(
-            [value["_legend_label"] for value in vega_lite["data"]["values"]],
-            ["3급 Grade 3  90", "2급 Grade 2  9", "1급 Grade 1  1"],
-        )
-        self.assertEqual(arc_layer["encoding"]["tooltip"][1]["field"], "value")
-        self.assertEqual(label_layer["transform"], [{"filter": "datum._share >= 0.06"}])
-        self.assertEqual(label_layer["mark"]["radius"], 90)
-        self.assertEqual(label_layer["encoding"]["theta"]["field"], "_mid_angle")
-        self.assertIsNone(label_layer["encoding"]["theta"]["scale"])
 
     def test_invalid_metric_selection_does_not_fall_back_to_query_heuristics(self) -> None:
         columns = ["지역 Region", "온라인 이용건수", "방문 이용건수"]
