@@ -43,6 +43,7 @@ ChartType = Literal[
     "donut",
     "table",
 ]
+SortOrder = Literal["auto", "ascending", "descending"]
 
 VALID_CHART_TYPES = {
     "auto",
@@ -247,12 +248,62 @@ def _drop_total_slices(records: list[dict[str, Any]], chart_type: str) -> list[d
     ]
 
 
-# 차트 타입에 맞게 레코드 표시 순서를 정한다.
-def _sort_records(records: list[dict[str, Any]], x_is_year: bool, chart_type: str) -> list[dict[str, Any]]:
+# 사용자가 질의에 값 기준 정렬 방향을 직접 적은 경우 도구 인자 누락을 보완한다.
+def _resolve_sort_order(
+    sort_order: str,
+    query: str | None,
+    warnings: list[str],
+) -> Literal["ascending", "descending"] | None:
+    if sort_order in {"ascending", "descending"}:
+        return sort_order
+    if sort_order != "auto":
+        warnings.append(f"지원하지 않는 정렬 방향 '{sort_order}'은 적용하지 않았습니다.")
+        return None
+
+    text = re.sub(r"\s+", "", (query or "").lower())
+    descending_patterns = (
+        r"내림차순",
+        r"(?:큰|높은|많은)(?:값|수|숫자|규모)?(?:부터|순(?:서)?(?:대로)?|로정렬)",
+        r"(?:값|수|숫자|규모)(?:이|가)?(?:큰|높은|많은)(?:것)?(?:부터|순(?:서)?(?:대로)?|대로|로정렬)",
+        r"최(?:대|다)(?:값)?(?:부터|순(?:서)?(?:대로)?)",
+    )
+    ascending_patterns = (
+        r"오름차순",
+        r"(?:작은|낮은|적은)(?:값|수|숫자|규모)?(?:부터|순(?:서)?(?:대로)?|로정렬)",
+        r"(?:값|수|숫자|규모)(?:이|가)?(?:작은|낮은|적은)(?:것)?(?:부터|순(?:서)?(?:대로)?|대로|로정렬)",
+        r"최(?:소|저)(?:값)?(?:부터|순(?:서)?(?:대로)?)",
+    )
+    wants_descending = any(re.search(pattern, text) for pattern in descending_patterns)
+    wants_ascending = any(re.search(pattern, text) for pattern in ascending_patterns)
+    if wants_descending == wants_ascending:
+        return None
+    return "descending" if wants_descending else "ascending"
+
+
+# 시간 축은 시간순으로, 요청된 값 정렬은 범주별 값 합계 순으로 레코드를 정렬한다.
+def _sort_records(
+    records: list[dict[str, Any]],
+    x_is_year: bool,
+    chart_type: str,
+    sort_order: Literal["ascending", "descending"] | None,
+) -> list[dict[str, Any]]:
     if x_is_year or chart_type in {"line", "area", "scatter"}:
         return sorted(records, key=lambda record: (record.get("x") is None, record.get("x"), str(record.get("series", ""))))
-    if chart_type in {"bar", "donut"}:
-        return sorted(records, key=lambda record: abs(float(record["value"])), reverse=True)
+    if sort_order and chart_type in {"bar", "grouped_bar", "stacked_bar", "donut"}:
+        totals: dict[Any, float] = {}
+        for record in records:
+            totals[record.get("x")] = totals.get(record.get("x"), 0.0) + float(record["value"])
+        category_order = {
+            category: index
+            for index, (category, _) in enumerate(
+                sorted(
+                    totals.items(),
+                    key=lambda item: item[1],
+                    reverse=sort_order == "descending",
+                )
+            )
+        }
+        return sorted(records, key=lambda record: category_order[record.get("x")])
     return records
 
 
@@ -277,6 +328,10 @@ def _build_response(
     selected_dataset: dict[str, Any] | None = None,
     delta_records: list[dict[str, Any]] | object = _MISSING,
 ) -> dict[str, Any]:
+    chart = {
+        **chart,
+        "sort_order": (request_hints or {}).get("resolved_sort_order"),
+    }
     data: dict[str, Any] = {
         "records": records,
         "record_count": len(records),
@@ -493,7 +548,12 @@ def _selection_plan_spec(
     records = _drop_total_slices(records, selected_type)
     records = _limit_series(records, warnings)
     records = _limit_categories(records, selected_type, bool(x_profile and x_profile["is_year"]), top_n, warnings)
-    records = _sort_records(records, bool(x_profile and x_profile["is_year"]), selected_type)
+    records = _sort_records(
+        records,
+        bool(x_profile and x_profile["is_year"]),
+        selected_type,
+        request_hints.get("resolved_sort_order"),
+    )
     visible_record_ids = {id(record) for record in records}
     provenance = [item for item in provenance if id(item["record"]) in visible_record_ids]
 
@@ -756,7 +816,12 @@ def _wide_row_category_spec(
     selected_type = "donut" if requested_type == "donut" else "bar" if requested_type == "auto" else requested_type
     records = _drop_total_slices(records, selected_type)
     records = _limit_categories(records, selected_type, False, top_n, warnings)
-    records = _sort_records(records, False, selected_type)
+    records = _sort_records(
+        records,
+        False,
+        selected_type,
+        request_hints.get("resolved_sort_order"),
+    )
     if applied_total_mode == "not_applicable":
         total_reason = "선택한 범주에서 집계 범주를 찾지 못했습니다."
     elif applied_total_mode == "exclude" and resolved_total_mode == "auto":
@@ -811,15 +876,17 @@ def build_plot_spec(
     y: str | None,
     group: str | None,
     top_n: int | None,
-    total_mode: TotalMode = "auto",
+    total_mode: TotalMode = "exclude",
     year: int | None = None,
     city: str | None = None,
     column_family_name: str | None = None,
     filters: list[dict[str, str]] | None = None,
     metrics: list[dict[str, str | None]] | None = None,
     title: str | None = None,
+    sort_order: SortOrder = "auto",
 ) -> dict[str, Any]:
     columns, all_source_rows, warnings = body_to_rows(table["body"])
+    resolved_sort_order = _resolve_sort_order(sort_order, query, warnings)
     profiles = profile_columns(columns, all_source_rows)
     profile_map = profile_by_name(profiles)
     target_year = requested_year(year, query)
@@ -843,6 +910,8 @@ def build_plot_spec(
         "column_family": column_family_name,
         "filters": filters,
         "metrics": metrics,
+        "sort_order": sort_order,
+        "resolved_sort_order": resolved_sort_order,
         "resolved_year": target_year,
         "selection": selection,
     }
@@ -941,7 +1010,7 @@ def build_plot_spec(
 
     x_is_year = bool(x_profile and x_profile["is_year"])
     records = _limit_categories(records, selected_type, x_is_year, top_n, warnings)
-    records = _sort_records(records, x_is_year, selected_type)
+    records = _sort_records(records, x_is_year, selected_type, resolved_sort_order)
 
     chart = {
         "type": selected_type,

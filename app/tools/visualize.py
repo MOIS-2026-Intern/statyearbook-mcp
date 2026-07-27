@@ -14,7 +14,7 @@ from app.tool_descriptions import (
     VISUALIZE_FIELDS,
 )
 from app.tools.search_tables import merge_bodies
-from app.tools.visualize_service.chart_spec_builder import ChartType, build_plot_spec
+from app.tools.visualize_service.chart_spec_builder import ChartType, SortOrder, build_plot_spec
 from app.tools.visualize_service.table_interpreter import TotalMode
 from app.tools.visualize_service.vega_lite_renderer import build_vega_lite_spec, summary_text
 
@@ -122,6 +122,10 @@ def register(mcp: FastMCP) -> None:
             Literal["vertical", "horizontal"],
             Field(description=VISUALIZE_FIELDS["orientation"]),
         ] = "vertical",
+        sort_order: Annotated[
+            SortOrder,
+            Field(description=VISUALIZE_FIELDS["sort_order"]),
+        ] = "auto",
     ) -> CallToolResult:
         if table_handle:
             table = get_cached_table(table_handle)
@@ -144,7 +148,7 @@ def register(mcp: FastMCP) -> None:
             year=year, city=city, column_family_name=column_family,
             filters=[item.model_dump() for item in filters] if filters is not None else None,
             metrics=[item.model_dump() for item in metrics] if metrics is not None else None,
-            title=title,
+            title=title, sort_order=sort_order,
         )
         spec["request"]["table_handle"] = table_handle
         spec["request"]["table_source"] = "search_tables_cache" if table_handle else "database"
