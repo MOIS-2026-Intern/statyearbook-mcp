@@ -90,20 +90,6 @@ function isEmptyConversation(conversation: Conversation) {
   return conversation.messages.length === 0 && conversation.traces.length === 0;
 }
 
-// 값이 배열이 아닌 일반 객체인지 검사한다.
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-// visualize trace에 프런트엔드가 렌더링할 Vega-Lite 사양이 있는지 확인한다.
-function hasVegaLiteSpec(trace: McpTrace) {
-  if (trace.tool !== "visualize" || !isRecord(trace.response)) {
-    return false;
-  }
-  const structured = trace.response.structuredContent;
-  return isRecord(structured) && isRecord(structured.vega_lite);
-}
-
 // 저장된 대화를 복원하고 필요하면 새 빈 대화를 앞에 추가한다.
 function createInitialConversationState() {
   const savedState = loadConversationState(seedConversations);
@@ -148,10 +134,6 @@ export default function App() {
 
   const tracesById = useMemo<Record<string, McpTrace>>(() => {
     return Object.fromEntries((activeConversation?.traces ?? []).map((trace) => [trace.id, trace]));
-  }, [activeConversation?.traces]);
-
-  const latestVisualizeTraceId = useMemo(() => {
-    return [...(activeConversation?.traces ?? [])].reverse().find(hasVegaLiteSpec)?.id;
   }, [activeConversation?.traces]);
 
   // 새 대화를 목록 앞에 추가하고 활성 대화로 전환한다.
@@ -329,7 +311,6 @@ export default function App() {
                   message={message}
                   showMcpTrace={showMcpTrace}
                   tracesById={tracesById}
-                  latestVisualizeTraceId={latestVisualizeTraceId}
                 />
               ))}
               {activeConversationIsSending ? (

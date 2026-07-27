@@ -43,37 +43,19 @@ function valuesFrom(view: JsonRecord) {
   return isRecord(data) && Array.isArray(data.values) ? data.values : [];
 }
 
-// 카테고리 수, 라벨 길이, 값 편차를 계산해 차트 배치 판단에 사용한다.
-function categoryMetrics(view: JsonRecord) {
+// 차트 높이 계산에 쓰는 범주(카테고리) 개수를 센다.
+function categoryCount(view: JsonRecord) {
   const values = valuesFrom(view);
-  const labels = [...new Set(values.map((value) => (isRecord(value) ? String(value.x ?? "") : "")))];
-  const positiveValues = values
-    .map((value) => (isRecord(value) && typeof value.value === "number" ? Math.abs(value.value) : 0))
-    .filter((value) => value > 0);
-  const minimum = Math.min(...positiveValues);
-  const maximum = Math.max(...positiveValues);
-  return {
-    count: labels.length,
-    maxLabelLength: Math.max(0, ...labels.map((label) => [...label].length)),
-    valueRatio: positiveValues.length > 1 && minimum > 0 ? maximum / minimum : 1,
-  };
+  const labels = new Set(values.map((value) => (isRecord(value) ? String(value.x ?? "") : "")));
+  return labels.size;
 }
 
-// 데이터 특성에 따라 막대 방향·크기·라벨 위치를 조정한다.
+// 서버가 정한 방향(기본 세로형)을 그대로 존중하며 막대 크기·모서리만 조정한다.
 function styleBar(view: JsonRecord, width: number) {
   const encoding = isRecord(view.encoding) ? { ...view.encoding } : {};
-  const { count, maxLabelLength, valueRatio } = categoryMetrics(view);
-  const horizontal = count > 8 || maxLabelLength > 14 || valueRatio > 100;
-
-  if (horizontal && isRecord(encoding.x) && isRecord(encoding.y)) {
-    const x = encoding.x;
-    encoding.x = encoding.y;
-    encoding.y = x;
-    if ("xOffset" in encoding) {
-      encoding.yOffset = encoding.xOffset;
-      delete encoding.xOffset;
-    }
-  }
+  const count = categoryCount(view);
+  // 방향은 서버 encoding으로 판별한다(값 축이 x축이면 가로형). 여기서 방향을 바꾸지 않는다.
+  const horizontal = isRecord(encoding.x) && (encoding.x as JsonRecord).field === "value";
 
   return {
     ...view,
@@ -87,12 +69,6 @@ function styleBar(view: JsonRecord, width: number) {
             }
             if (markType(layer.mark) === "bar") {
               return { ...layer, mark: { type: "bar", cornerRadiusEnd: 3 } };
-            }
-            if (horizontal && markType(layer.mark) === "text" && isRecord(layer.mark)) {
-              return {
-                ...layer,
-                mark: { ...layer.mark, dx: 8, dy: 0, align: "left", baseline: "middle" },
-              };
             }
             return layer;
           }),
@@ -113,7 +89,7 @@ function styleView(view: JsonRecord, width: number): JsonRecord {
     return { ...view, width: size, height: size };
   }
   if (type === "rect") {
-    const { count } = categoryMetrics(view);
+    const count = categoryCount(view);
     return { ...view, width, height: clamp(220 + count * 20, 320, 560) };
   }
   return { ...view, width, height: 340 };

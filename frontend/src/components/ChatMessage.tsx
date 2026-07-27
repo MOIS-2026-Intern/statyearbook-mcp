@@ -10,7 +10,6 @@ interface ChatMessageProps {
   message: ChatMessageType;
   tracesById: Record<string, McpTrace>;
   showMcpTrace: boolean;
-  latestVisualizeTraceId?: string;
 }
 
 // 값이 배열이 아닌 일반 객체인지 검사한다.
@@ -23,7 +22,7 @@ interface ChartResult {
   spec: Record<string, unknown>;
 }
 
-// 유효한 visualize trace에서 차트 식별자와 Vega-Lite 사양을 추출한다.
+// 유효한 visualize trace에서 Vega-Lite 사양과, 재시도·중복 판별용 호출 식별자를 뽑는다.
 function vegaLiteSpec(trace: McpTrace): ChartResult | null {
   if (trace.tool !== "visualize" || !isRecord(trace.response)) {
     return null;
@@ -32,27 +31,29 @@ function vegaLiteSpec(trace: McpTrace): ChartResult | null {
   if (!isRecord(structured) || !isRecord(structured.vega_lite)) {
     return null;
   }
-  const stat = isRecord(structured.stat) ? structured.stat : {};
-  const request = isRecord(structured.request) ? structured.request : {};
-  const chart = isRecord(structured.chart) ? structured.chart : {};
-  const key = JSON.stringify({
-    statId: stat.stat_id,
-    tableSeq: stat.table_seq,
-    chartType: chart.type,
-    x: request.x,
-    y: request.y,
-    group: request.group,
-    totalMode: request.total_mode,
-  });
-  return { key, spec: structured.vega_lite };
+  const args = isRecord(trace.request) && isRecord(trace.request.arguments)
+    ? trace.request.arguments
+    : structured.request;
+  return { key: JSON.stringify(args ?? {}), spec: structured.vega_lite };
+}
+
+// 한 메시지의 visualize 차트를 모으되 같은 호출(재시도·중복)은 마지막 결과만 남기고 서로 다른 시각화는 모두 유지한다.
+function messageCharts(traces: McpTrace[]): ChartResult[] {
+  const byKey = new Map<string, ChartResult>();
+  for (const trace of traces) {
+    const chart = vegaLiteSpec(trace);
+    if (chart) {
+      byKey.set(chart.key, chart);
+    }
+  }
+  return [...byKey.values()];
 }
 
 // 사용자·assistant 메시지와 연결된 trace·시각화를 함께 렌더링한다.
-export function ChatMessage({ message, tracesById, showMcpTrace, latestVisualizeTraceId }: ChatMessageProps) {
+export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessageProps) {
   const [expanded, setExpanded] = useState(false);
   const traces = (message.traceIds ?? []).map((traceId) => tracesById[traceId]).filter(Boolean);
-  const latestChartTrace = traces.find((trace) => trace.id === latestVisualizeTraceId);
-  const latestChart = latestChartTrace ? vegaLiteSpec(latestChartTrace) : null;
+  const charts = messageCharts(traces);
   const isUser = message.role === "user";
 
   return (
@@ -84,7 +85,9 @@ export function ChatMessage({ message, tracesById, showMcpTrace, latestVisualize
           )}
         </div>
 
-        {!isUser && latestChart ? <VegaLiteChart key={latestChart.key} spec={latestChart.spec} /> : null}
+        {!isUser && charts.length > 0
+          ? charts.map((chart) => <VegaLiteChart key={chart.key} spec={chart.spec} />)
+          : null}
 
         {!isUser && showMcpTrace && traces.length > 0 ? (
           <div className="message__trace">
