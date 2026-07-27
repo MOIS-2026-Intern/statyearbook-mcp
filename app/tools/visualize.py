@@ -1,5 +1,5 @@
 import json
-from typing import Annotated
+from typing import Annotated, Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, TextContent
@@ -118,6 +118,10 @@ def register(mcp: FastMCP) -> None:
             list[MetricSelection] | None,
             Field(description=VISUALIZE_FIELDS["metrics"]),
         ] = None,
+        orientation: Annotated[
+            Literal["vertical", "horizontal"],
+            Field(description=VISUALIZE_FIELDS["orientation"]),
+        ] = "vertical",
     ) -> CallToolResult:
         if table_handle:
             table = get_cached_table(table_handle)
@@ -144,6 +148,8 @@ def register(mcp: FastMCP) -> None:
         )
         spec["request"]["table_handle"] = table_handle
         spec["request"]["table_source"] = "search_tables_cache" if table_handle else "database"
+        spec["request"]["orientation"] = orientation
+        spec["chart"]["orientation"] = orientation
         spec["vega_lite"] = build_vega_lite_spec(spec)
 
         return CallToolResult(
