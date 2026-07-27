@@ -1,4 +1,12 @@
+from math import tau
 from typing import Any
+
+
+# 범례와 Vega-Lite text mark가 같은 형태의 숫자를 보여주도록 포맷한다.
+def _format_number(value: float) -> str:
+    if value.is_integer():
+        return f"{value:,.0f}"
+    return f"{value:,.2f}".rstrip("0").rstrip(".")
 
 
 # x축이 연도인지 판별한다(Vega 축 타입 결정용).
@@ -19,15 +27,53 @@ def _vega_view(chart: dict[str, Any], has_series: bool, x_is_year: bool) -> dict
 
     if ctype == "donut":
         return {
-            "encoding": {
-                "theta": {"field": "value", "type": "quantitative"},
-                "color": {"field": "x", "type": "nominal", "title": ""},
-            },
             "layer": [
-                {"mark": {"type": "arc", "innerRadius": 60}},
                 {
+                    "mark": {"type": "arc", "innerRadius": 50},
+                    "encoding": {
+                        "theta": {
+                            "field": "value",
+                            "type": "quantitative",
+                            "stack": True,
+                        },
+                        "color": {
+                            "field": "_legend_label",
+                            "type": "nominal",
+                            "title": "",
+                            "sort": {
+                                "field": "_order",
+                                "op": "min",
+                                "order": "ascending",
+                            },
+                            "scale": {"scheme": "set3"},
+                        },
+                        "order": {
+                            "field": "_order",
+                            "type": "quantitative",
+                            "sort": "ascending",
+                        },
+                        "tooltip": [
+                            {"field": "x", "type": "nominal", "title": ""},
+                            {
+                                "field": "value",
+                                "type": "quantitative",
+                                "title": unit,
+                                "format": ",.2~f",
+                            },
+                        ],
+                    },
+                },
+                {
+                    # 기본 Vega-Lite 렌더러에서도 겹침을 피하도록 충분히 넓은 조각만 표시한다.
+                    # 작은 조각의 값은 색상 범례에서 범주와 함께 표시한다.
+                    "transform": [{"filter": "datum._share >= 0.06"}],
                     "mark": {"type": "text", "radius": 90, "fontSize": 11},
                     "encoding": {
+                        "theta": {
+                            "field": "_mid_angle",
+                            "type": "quantitative",
+                            "scale": None,
+                        },
                         "text": {"field": "value", "type": "quantitative", "format": ",.2~f"},
                         "color": {"value": "#111827"},
                     },
@@ -106,16 +152,42 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
 
     has_series = any(record.get("series") for record in records)
     x_is_year = _vega_x_is_year(spec)
-    values = [
-        {"x": record.get("x"), "value": record.get("value"), "series": record.get("series")}
-        for record in records
-    ]
+    is_donut = chart["type"] == "donut"
+    positive_total = (
+        sum(max(float(record.get("value") or 0), 0) for record in records)
+        if is_donut
+        else 0
+    )
+    cumulative = 0.0
+    values: list[dict[str, Any]] = []
+    for index, record in enumerate(records):
+        numeric_value = max(float(record.get("value") or 0), 0)
+        value = {
+            "x": record.get("x"),
+            "value": record.get("value"),
+            "series": record.get("series"),
+        }
+        if is_donut:
+            value.update({
+                "_order": index,
+                "_share": numeric_value / positive_total if positive_total > 0 else 0,
+                "_mid_angle": (
+                    ((cumulative + numeric_value / 2) / positive_total) * tau
+                    if positive_total > 0
+                    else 0
+                ),
+                "_legend_label": (
+                    f"{record.get('x')}  {_format_number(numeric_value)}"
+                ),
+            })
+            cumulative += numeric_value
+        values.append(value)
 
     view = _vega_view(chart, has_series, x_is_year)
     view["data"] = {"values": values}
 
     root: dict[str, Any] = {
-        "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+        "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
         "title": chart["title"],
     }
 

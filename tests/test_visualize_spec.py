@@ -79,6 +79,51 @@ class VisualizeSpecTests(unittest.TestCase):
         vega_lite = build_vega_lite_spec(spec)
         self.assertEqual(len(vega_lite["data"]["values"]), 3)
 
+    def test_donut_spec_exposes_stable_order_share_and_safe_fallback_labels(self) -> None:
+        columns = ["등급 Grade", "정원 Personnel"]
+        records = [
+            dict(zip(columns, ["1급 Grade 1", "1"])),
+            dict(zip(columns, ["2급 Grade 2", "9"])),
+            dict(zip(columns, ["3급 Grade 3", "90"])),
+        ]
+        spec = build_plot_spec(
+            make_table(columns, records),
+            "등급별 정원 비율",
+            "donut",
+            columns[0],
+            columns[1],
+            None,
+            0,
+            "exclude",
+        )
+
+        vega_lite = build_vega_lite_spec(spec)
+
+        self.assertEqual(vega_lite["$schema"], "https://vega.github.io/schema/vega-lite/v6.json")
+        self.assertEqual(
+            [value["_order"] for value in vega_lite["data"]["values"]],
+            [0, 1, 2],
+        )
+        self.assertAlmostEqual(
+            sum(value["_share"] for value in vega_lite["data"]["values"]),
+            1.0,
+        )
+        arc_layer, label_layer = vega_lite["layer"]
+        self.assertEqual(arc_layer["mark"]["innerRadius"], 50)
+        self.assertTrue(arc_layer["encoding"]["theta"]["stack"])
+        self.assertEqual(arc_layer["encoding"]["order"]["field"], "_order")
+        self.assertEqual(arc_layer["encoding"]["color"]["field"], "_legend_label")
+        self.assertEqual(arc_layer["encoding"]["color"]["scale"], {"scheme": "set3"})
+        self.assertEqual(
+            [value["_legend_label"] for value in vega_lite["data"]["values"]],
+            ["3급 Grade 3  90", "2급 Grade 2  9", "1급 Grade 1  1"],
+        )
+        self.assertEqual(arc_layer["encoding"]["tooltip"][1]["field"], "value")
+        self.assertEqual(label_layer["transform"], [{"filter": "datum._share >= 0.06"}])
+        self.assertEqual(label_layer["mark"]["radius"], 90)
+        self.assertEqual(label_layer["encoding"]["theta"]["field"], "_mid_angle")
+        self.assertIsNone(label_layer["encoding"]["theta"]["scale"])
+
     def test_invalid_metric_selection_does_not_fall_back_to_query_heuristics(self) -> None:
         columns = ["지역 Region", "온라인 이용건수", "방문 이용건수"]
         records = [dict(zip(columns, ["서울", "10", "2"]))]
