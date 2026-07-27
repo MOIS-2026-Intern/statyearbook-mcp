@@ -45,7 +45,7 @@ def _vega_view(chart: dict[str, Any], has_series: bool, x_is_year: bool) -> dict
                                 "op": "min",
                                 "order": "ascending",
                             },
-                            "scale": {"scheme": "set3"},
+                            "scale": {"scheme": "tableau10"},
                         },
                         "order": {
                             "field": "_order",
