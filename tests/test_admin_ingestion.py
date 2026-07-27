@@ -1,8 +1,10 @@
-# 이 파일은 관리자 적재 DML, 임베딩 DML과 SQLite 작업을 검증한다.
+# 이 파일은 관리자 적재 DML, 임베딩 DML, SQLite 작업과 workspace 규칙을 검증한다.
+import json
 import tempfile
 import unittest
 import zipfile
 
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +14,10 @@ from admin.backend.repositories.admin_jobs import AdminJobRepository
 from admin.backend.repositories.postgres_dml import PostgresDmlRepository
 from admin.backend.services.load_pipeline import YearbookIngestionService
 from admin.backend.services.load_verification import YearbookVerificationService
+from admin.backend.services.load_workspace import (
+    create_workspace_id,
+    migrate_legacy_workspaces,
+)
 from admin.backend.services.load_dml import build_load_dml
 from admin.backend.services.load_embedding_dml import (
     TableSearchEmbeddingDmlWriter,
@@ -377,6 +383,47 @@ class AdminJobRepositoryTests(unittest.TestCase):
         self.assertEqual(job["artifacts"]["parsed_json"], "parsed.json")
         self.assertEqual(job["result"]["statistics_count"], 319)
         self.assertEqual(job["events"][-1]["message"], "통계표 파싱 완료")
+
+
+class WorkspaceServiceTests(unittest.TestCase):
+    def test_workspace_id_contains_date_time_and_microseconds(self) -> None:
+        timestamp = datetime(2026, 7, 16, 17, 5, 9, 123456, tzinfo=timezone.utc)
+
+        workspace_id = create_workspace_id(timestamp)
+
+        self.assertEqual(workspace_id, "20260716-170509-123456")
+
+    def test_migrates_legacy_workspace_id_paths_and_artifact_names(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            repository = AdminJobRepository(root_path / "jobs.sqlite3")
+            legacy_id = "a" * 32
+            legacy_workspace = root_path / legacy_id
+            legacy_workspace.mkdir()
+            (legacy_workspace / "source.hwpx").write_bytes(b"test")
+            (legacy_workspace / "parsed_yearbook.json").write_text(
+                json.dumps({"metadata": {"source": "old"}}),
+                encoding="utf-8",
+            )
+            repository.insert_job(
+                legacy_id,
+                {
+                    "input_path": str(legacy_workspace / "source.hwpx"),
+                    "year": 2026,
+                },
+            )
+            repository.update_job(
+                legacy_id,
+                artifacts={"parsed_json": "parsed_yearbook.json"},
+            )
+
+            migrated = migrate_legacy_workspaces(root_path, repository)
+            new_id = migrated[0][1]
+            job = repository.select_job(new_id)
+
+        self.assertRegex(new_id, r"^\d{8}-\d{6}-\d{6}$")
+        self.assertTrue(job["options"]["input_path"].endswith("yearbook_source.hwpx"))
+        self.assertEqual(job["artifacts"]["parsed_json"], "yearbook_parsed.json")
 
 
 if __name__ == "__main__":

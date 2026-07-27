@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import types
@@ -16,6 +17,7 @@ from utils.embedding import (
     LocalSentenceTransformerProvider,
     create_embedding_profile,
 )
+from app.config import embedding_settings_from_env
 from admin.backend.repositories.statistics_embeddings import StatisticsEmbeddingRepository
 
 
@@ -24,7 +26,81 @@ class ArrayLike(list):
         return list(self)
 
 
-class EmbeddingProfileCompatibilityTests(unittest.TestCase):
+class EmbeddingSettingsTests(unittest.TestCase):
+    def test_defaults_use_local_bge_m3_database_dimension(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            settings = embedding_settings_from_env()
+
+        self.assertEqual(settings.provider, "local")
+        self.assertEqual(settings.model, "models/bge-m3")
+        self.assertEqual(settings.dimension, 1024)
+
+    def test_bge_m3_identity_is_fixed_while_runtime_options_are_configurable(self) -> None:
+        env = {
+            "STATYEARBOOK_APP_EMBED_MODEL": "models/bge-m3",
+            "STATYEARBOOK_APP_EMBED_BATCH_SIZE": "4",
+            "STATYEARBOOK_APP_EMBED_DEVICE": "mps",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = embedding_settings_from_env()
+
+        self.assertEqual(settings.provider, "local")
+        self.assertEqual(settings.dimension, 1024)
+        self.assertEqual(settings.max_length, 512)
+        self.assertEqual(settings.revision, BGE_M3_REVISION)
+        self.assertEqual(settings.batch_size, 4)
+        self.assertEqual(settings.device, "mps")
+
+    def test_rejects_unknown_embedding_provider(self) -> None:
+        with self.assertRaisesRegex(EmbeddingConfigurationError, "provider must be"):
+            EmbeddingSettings("remote", "remote-model", 1024)
+
+    def test_huggingface_provider_settings_come_only_from_environment(self) -> None:
+        env = {
+            "STATYEARBOOK_APP_EMBED_PROVIDER": "huggingface",
+            "STATYEARBOOK_APP_HF_TOKEN": "hf_test",
+            "STATYEARBOOK_APP_HF_TIMEOUT_SECONDS": "45",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = embedding_settings_from_env()
+
+        self.assertEqual(settings.provider, "huggingface")
+        self.assertEqual(settings.model, BGE_M3_MODEL)
+        self.assertEqual(settings.revision, BGE_M3_REVISION)
+        self.assertEqual(settings.api_token, "hf_test")
+        self.assertEqual(settings.timeout_seconds, 45)
+
+    def test_huggingface_provider_requires_token(self) -> None:
+        env = {"STATYEARBOOK_APP_EMBED_PROVIDER": "huggingface"}
+        with patch.dict(os.environ, env, clear=True), self.assertRaisesRegex(
+            EmbeddingConfigurationError, "API token"
+        ):
+            embedding_settings_from_env()
+
+    def test_local_profile_uses_manifest_identity_instead_of_machine_path(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            model_dir = Path(root) / "bge-m3"
+            model_dir.mkdir()
+            (model_dir / ".statyearbook-model.json").write_text(
+                json.dumps(
+                    {
+                        "source_model": "BAAI/bge-m3",
+                        "revision": BGE_M3_REVISION,
+                        "dimension": 1024,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = EmbeddingSettings(
+                "local", str(model_dir), 1024, revision=BGE_M3_REVISION
+            )
+
+            profile = create_embedding_profile(settings, "statistics-title-v1")
+
+        self.assertEqual(profile.model, "BAAI/bge-m3")
+        self.assertEqual(profile.revision, BGE_M3_REVISION)
+        self.assertEqual(len(profile.profile_key), 64)
+
     def test_remote_query_profile_matches_locally_loaded_vectors(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             model_dir = Path(root) / "bge-m3"
