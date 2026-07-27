@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
+from copy import deepcopy
 
 from mcp.server.fastmcp import FastMCP
 
@@ -35,24 +36,15 @@ SOURCE_SQL = """
 """
 
 
-# stat_id에 해당하는 통계표 원천 데이터를 조회한다.
-def fetch_table_data(
-    stat_id: int,
-    table_seq: int | None = None,
-) -> tuple[dict | None, list, list, list]:
+# stat_id에 해당하는 통계표 원천 데이터를 모든 seq와 함께 조회한다.
+def fetch_table_data(stat_id: int) -> tuple[dict | None, list, list, list]:
     with connect() as conn, conn.cursor() as cur:
         cur.execute(STAT_SQL, (stat_id,))
         stat = cur.fetchone()
         if stat is None:
             return None, [], [], []
 
-        if table_seq is None:
-            cur.execute(TABLES_SQL, (stat_id,))
-        else:
-            cur.execute(
-                TABLES_SQL.replace("ORDER BY seq", "AND seq = %s ORDER BY seq"),
-                (stat_id, table_seq),
-            )
+        cur.execute(TABLES_SQL, (stat_id,))
         tables = cur.fetchall()
 
         cur.execute(FOOTNOTES_SQL, (stat_id,))
@@ -95,9 +87,41 @@ def cached_table(stat: dict, row: dict) -> dict:
     }
 
 
-# 표 행을 API 응답 형태로 바꾸고 후속 호출용 핸들을 발급한다.
-def table_result(stat: dict, row: dict) -> dict:
-    table_handle = cache_table(cached_table(stat, row))
+# 같은 stat_id의 여러 seq 표 본문을 columns/records 기준으로 하나의 전체 표로 이어 붙인다.
+def merge_bodies(bodies: list[dict]) -> dict:
+    merged = deepcopy(bodies[0])
+    base_columns = merged.get("columns") or []
+    records = list(merged.get("records") or [])
+    for body in bodies[1:]:
+        columns = body.get("columns") or []
+        for record in body.get("records") or []:
+            if columns == base_columns:
+                records.append(dict(record))
+            else:
+                values = [record.get(column, "") for column in columns]
+                records.append({
+                    base_columns[index]: values[index] if index < len(values) else ""
+                    for index in range(len(base_columns))
+                })
+    merged["columns"] = base_columns
+    merged["records"] = records
+    return merged
+
+
+# 같은 stat_id의 모든 seq를 하나로 합쳐 visualize가 그대로 재사용할 원본 표를 만든다.
+def merged_cached_table(stat: dict, rows: list[dict]) -> dict:
+    base = cached_table(stat, rows[0])
+    if len(rows) > 1:
+        bodies = [
+            json.loads(row["body"]) if isinstance(row["body"], str) else row["body"]
+            for row in rows
+        ]
+        base["body"] = merge_bodies(bodies)
+    return base
+
+
+# 표 행을 API 응답 형태로 바꾸고 합쳐진 전체 표의 공용 핸들을 붙인다.
+def table_result(row: dict, table_handle: str | None) -> dict:
     return {
         "seq": row["seq"],
         "table_handle": table_handle,
@@ -130,6 +154,7 @@ def source_result(row: dict) -> dict:
 
 # 통계표 조회 결과를 MCP 응답 dict로 만든다.
 def build_response(stat: dict, tables: list, footnotes: list, source: list) -> dict:
+    table_handle = cache_table(merged_cached_table(stat, tables)) if tables else None
     return {
         "found": True,
         "stat_id": stat["stat_id"],
@@ -148,7 +173,7 @@ def build_response(stat: dict, tables: list, footnotes: list, source: list) -> d
         "unit": stat["unit"],
         "base_date": stat["base_date"],
         "page_start": stat["page_start"],
-        "tables": [table_result(stat, row) for row in tables],
+        "tables": [table_result(row, table_handle) for row in tables],
         "footnotes": [footnote_result(row) for row in footnotes],
         "source": [source_result(row) for row in source],
     }
@@ -156,10 +181,10 @@ def build_response(stat: dict, tables: list, footnotes: list, source: list) -> d
 
 # search_tables MCP 도구를 등록한다.
 def register(mcp: FastMCP) -> None:
-    # stat_id에 해당하는 표 본문과 메타데이터를 가져온다.
+    # stat_id에 해당하는 모든 seq의 표 본문과 메타데이터를 하나의 논리 표로 가져온다.
     @mcp.tool(description=SEARCH_TABLES)
     def search_tables(stat_id: int, table_seq: int | None = None) -> dict:
-        stat, tables, footnotes, source = fetch_table_data(stat_id, table_seq)
+        stat, tables, footnotes, source = fetch_table_data(stat_id)
         if stat is None:
             return {"found": False, "stat_id": stat_id, "tables": []}
         return build_response(stat, tables, footnotes, source)

@@ -61,18 +61,27 @@ def _vega_view(chart: dict[str, Any], has_series: bool, x_is_year: bool) -> dict
         "area": "area",
         "scatter": "point",
     }
+    is_bar = ctype in {"bar", "grouped_bar", "stacked_bar"}
+    # 막대는 기본 세로형이고 orientation=horizontal일 때만 값·범주 축을 교환한다.
+    horizontal = is_bar and chart.get("orientation") == "horizontal"
     x_type = "quantitative" if ctype == "scatter" else "ordinal" if x_is_year else "nominal"
-    encoding: dict[str, Any] = {
-        "x": {"field": "x", "type": x_type, "title": ""},
-        "y": {"field": "value", "type": "quantitative", "title": unit},
-    }
+    category_axis = {"field": "x", "type": x_type, "title": ""}
+    value_axis = {"field": "value", "type": "quantitative", "title": unit}
+    encoding: dict[str, Any] = (
+        {"x": value_axis, "y": category_axis} if horizontal
+        else {"x": category_axis, "y": value_axis}
+    )
     if has_series:
         encoding["color"] = {"field": "series", "type": "nominal", "title": ""}
         if ctype == "grouped_bar":
-            encoding["xOffset"] = {"field": "series"}
-    label_mark: dict[str, Any] = {"type": "text", "fontSize": 11, "dy": -8}
-    if ctype in {"bar", "grouped_bar", "stacked_bar"}:
-        label_mark["baseline"] = "bottom"
+            encoding["yOffset" if horizontal else "xOffset"] = {"field": "series"}
+    label_mark: dict[str, Any] = {"type": "text", "fontSize": 11}
+    if is_bar and horizontal:
+        label_mark.update({"dx": 8, "align": "left", "baseline": "middle"})
+    elif is_bar:
+        label_mark.update({"dy": -8, "baseline": "bottom"})
+    else:
+        label_mark["dy"] = -8
     return {
         "encoding": encoding,
         "layer": [
