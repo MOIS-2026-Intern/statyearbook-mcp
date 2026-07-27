@@ -95,6 +95,7 @@ class VisualizeSpecTests(unittest.TestCase):
             None,
             0,
             "exclude",
+            sort_order="descending",
         )
 
         vega_lite = build_vega_lite_spec(spec)
@@ -123,6 +124,102 @@ class VisualizeSpecTests(unittest.TestCase):
         self.assertEqual(label_layer["mark"]["radius"], 90)
         self.assertEqual(label_layer["encoding"]["theta"]["field"], "_mid_angle")
         self.assertIsNone(label_layer["encoding"]["theta"]["scale"])
+
+    def test_bar_without_sort_request_does_not_add_value_sort(self) -> None:
+        columns = ["등급 Grade", "공무원 수 Personnel"]
+        records = [
+            dict(zip(columns, ["2급 Grade 2", "90"])),
+            dict(zip(columns, ["1급 Grade 1", "14"])),
+            dict(zip(columns, ["3급 Grade 3", "683"])),
+        ]
+        spec = build_plot_spec(
+            make_table(columns, records),
+            "등급별 공무원 수를 막대그래프로 보여줘",
+            "bar",
+            columns[0],
+            columns[1],
+            None,
+            0,
+        )
+
+        vega_lite = build_vega_lite_spec(spec)
+
+        self.assertIsNone(spec["chart"]["sort_order"])
+        self.assertEqual(
+            [record["x"] for record in spec["data"]["records"]],
+            ["2급 Grade 2", "1급 Grade 1", "3급 Grade 3"],
+        )
+        self.assertNotIn("sort", vega_lite["encoding"]["x"])
+
+    def test_bar_query_descending_sort_is_applied_to_vega_category_axis(self) -> None:
+        columns = ["등급 Grade", "공무원 수 Personnel"]
+        values = [14, 90, 683, 8442, 43252, 134546, 157199, 136338, 75513]
+        records = [
+            dict(zip(columns, [f"{grade}급 Grade {grade}", f"{value:,}"]))
+            for grade, value in enumerate(values, start=1)
+        ]
+        spec = build_plot_spec(
+            make_table(columns, records),
+            "1~9급 공무원 수를 많은 순서대로 시각화해줘",
+            "bar",
+            columns[0],
+            columns[1],
+            None,
+            0,
+        )
+
+        vega_lite = build_vega_lite_spec(spec)
+
+        self.assertEqual(spec["chart"]["sort_order"], "descending")
+        self.assertEqual(
+            [record["x"] for record in spec["data"]["records"]],
+            [
+                "7급 Grade 7",
+                "8급 Grade 8",
+                "6급 Grade 6",
+                "9급 Grade 9",
+                "5급 Grade 5",
+                "4급 Grade 4",
+                "3급 Grade 3",
+                "2급 Grade 2",
+                "1급 Grade 1",
+            ],
+        )
+        self.assertEqual(
+            vega_lite["encoding"]["x"]["sort"],
+            {"field": "value", "op": "sum", "order": "descending"},
+        )
+
+    def test_explicit_ascending_sort_is_applied_to_horizontal_bar_axis(self) -> None:
+        columns = ["지역 Region", "인원 Personnel"]
+        records = [
+            dict(zip(columns, ["서울", "30"])),
+            dict(zip(columns, ["부산", "10"])),
+            dict(zip(columns, ["대구", "20"])),
+        ]
+        spec = build_plot_spec(
+            make_table(columns, records),
+            "지역별 인원",
+            "bar",
+            columns[0],
+            columns[1],
+            None,
+            0,
+            sort_order="ascending",
+        )
+        spec["chart"]["orientation"] = "horizontal"
+
+        vega_lite = build_vega_lite_spec(spec)
+
+        self.assertEqual(
+            [record["x"] for record in spec["data"]["records"]],
+            ["부산", "대구", "서울"],
+        )
+        self.assertEqual(
+            vega_lite["encoding"]["y"]["sort"],
+            {"field": "value", "op": "sum", "order": "ascending"},
+        )
+        self.assertNotIn("sort", vega_lite["encoding"]["x"])
 
     def test_invalid_metric_selection_does_not_fall_back_to_query_heuristics(self) -> None:
         columns = ["지역 Region", "온라인 이용건수", "방문 이용건수"]
