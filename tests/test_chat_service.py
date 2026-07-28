@@ -3,7 +3,7 @@ import unittest
 
 from backend.config import Settings
 from backend.models.chat import ChatMessage, ChatRequest, McpTrace
-from backend.models.tooling import ModelTurn, ToolResult, ToolSpec
+from backend.models.tooling import ModelTurn, ToolCall, ToolResult, ToolSpec
 from backend.services.chat_service import (
     ChatService,
     _model_result_for_tool,
@@ -18,6 +18,39 @@ class PassiveModel:
     async def create_turn(self, **kwargs) -> ModelTurn:
         self.calls.append(kwargs)
         return ModelTurn(text="자세한 내용입니다.", state="done")
+
+
+class RepeatingToolModel:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def create_turn(self, **_kwargs) -> ModelTurn:
+        self.call_count += 1
+        if self.call_count <= 2:
+            return ModelTurn(
+                text="",
+                state=f"round-{self.call_count}",
+                tool_calls=[
+                    ToolCall(
+                        id=f"call-{self.call_count}",
+                        name="search_statistics",
+                        arguments={"query": "지방세"},
+                    )
+                ],
+            )
+        return ModelTurn(text="찾은 결과입니다.", state="done")
+
+
+class FakeMcp:
+    def prepare_tool_arguments(self, _name: str, arguments: dict) -> dict:
+        return dict(arguments)
+
+    async def call_tool(self, _name: str, _arguments: dict) -> dict:
+        return {
+            "structuredContent": {"count": 1},
+            "content": [],
+            "isError": False,
+        }
 
 
 def historical_search_tables_request() -> ChatRequest:
@@ -110,6 +143,35 @@ class ChatServiceModelResultTests(unittest.TestCase):
         result = {"structuredContent": {"count": 1}, "isError": False}
 
         self.assertIs(_model_result_for_tool("search_statistics", result), result)
+
+    def test_model_loop_reports_real_stages_and_repeated_search(self) -> None:
+        progress = []
+        service = ChatService(Settings(), model_gateway=RepeatingToolModel())
+
+        text = asyncio.run(
+            service._run_model_loop(
+                request=ChatRequest(conversationId="progress", message="지방세를 알려줘"),
+                mcp=FakeMcp(),
+                traces=[],
+                messages=[],
+                tools=[ToolSpec(name="search_statistics", description="검색", input_schema={})],
+                on_progress=progress.append,
+            )
+        )
+
+        self.assertEqual(text, "찾은 결과입니다.")
+        self.assertEqual(
+            [event.stage for event in progress],
+            [
+                "planning",
+                "calling_tool",
+                "reviewing_results",
+                "calling_tool",
+                "reviewing_results",
+            ],
+        )
+        self.assertIn("추가 자료를 탐색", progress[3].message)
+        self.assertEqual(progress[1].tool, "search_statistics")
 
     def test_search_tables_parses_json_text_for_model_context(self) -> None:
         result = {

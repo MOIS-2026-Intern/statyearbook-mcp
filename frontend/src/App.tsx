@@ -8,7 +8,7 @@ import { Sidebar } from "./components/Sidebar";
 import { MAX_USER_MESSAGES_PER_CONVERSATION, RECENT_HISTORY_TURN_LIMIT } from "./config/chatLimits";
 import { seedConversations } from "./data/mockChat";
 import { limitConversationState, loadConversationState, saveConversationState } from "./storage/conversationStore";
-import type { ChatMessage as ChatMessageType, Conversation, McpTrace } from "./types/chat";
+import type { ChatMessage as ChatMessageType, ChatProgress, Conversation, McpTrace } from "./types/chat";
 
 // 빈 메시지·trace와 고유 ID를 가진 새 대화를 만든다.
 function createConversation(): Conversation {
@@ -40,7 +40,7 @@ function createErrorMessage(error: unknown): ChatMessageType {
   return {
     id: crypto.randomUUID(),
     role: "assistant",
-    content: `REST API 호출 중 오류가 발생했습니다. ${details}`,
+    content: `답변 처리 중 오류가 발생했습니다. ${details}`,
     createdAt: new Date().toISOString(),
   };
 }
@@ -115,9 +115,11 @@ export default function App() {
   const [showMcpTrace, setShowMcpTrace] = useState(true);
   const [modelProfile, setModelProfile] = useState("balanced");
   const [limitNoticeDismissed, setLimitNoticeDismissed] = useState(false);
+  const [progressByConversation, setProgressByConversation] = useState<Record<string, ChatProgress>>({});
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   const activeConversationIsSending = sendingConversationId === activeConversationId;
+  const activeProgress = progressByConversation[activeConversationId];
   const activeConversationUserMessageCount = activeConversation ? countUserMessages(activeConversation.messages) : 0;
   const conversationMessageLimitReached =
     activeConversationUserMessageCount >= MAX_USER_MESSAGES_PER_CONVERSATION;
@@ -193,14 +195,22 @@ export default function App() {
     setSendingConversationId(conversationId);
 
     try {
-      const response = await sendChatMessage({
-        conversationId,
-        message,
-        modelProfile,
-        includeMcpTrace: true,
-        history,
-        traces: historyTraces,
-      });
+      const response = await sendChatMessage(
+        {
+          conversationId,
+          message,
+          modelProfile,
+          includeMcpTrace: true,
+          history,
+          traces: historyTraces,
+        },
+        (progress) => {
+          setProgressByConversation((current) => ({
+            ...current,
+            [conversationId]: progress,
+          }));
+        },
+      );
 
       setConversations((current) =>
         current.map((conversation) =>
@@ -230,6 +240,11 @@ export default function App() {
       );
     } finally {
       setSendingConversationId((current) => (current === conversationId ? null : current));
+      setProgressByConversation((current) => {
+        const next = { ...current };
+        delete next[conversationId];
+        return next;
+      });
     }
   };
 
@@ -314,9 +329,9 @@ export default function App() {
                 />
               ))}
               {activeConversationIsSending ? (
-                <div className="thinking-row">
+                <div className="thinking-row" role="status">
                   <span />
-                  <p>GPT API 호스트가 MCP 도구 흐름을 구성하는 중입니다.</p>
+                  <p>{activeProgress?.message ?? "요청을 전달하는 중입니다."}</p>
                 </div>
               ) : null}
             </div>
