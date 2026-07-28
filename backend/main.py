@@ -30,7 +30,10 @@ def print_banner() -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     print_banner()
-    yield
+    try:
+        yield
+    finally:
+        await chat_controller.close_chat_service()
 
 
 # 라우터와 공통 미들웨어를 조합해 FastAPI 앱을 생성한다.

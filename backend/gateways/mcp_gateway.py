@@ -19,6 +19,8 @@ from utils.logging import compact_json
 
 logger = logging.getLogger(__name__)
 
+_TOOL_SPECS_CACHE: dict[str, tuple[float, tuple[ToolSpec, ...]]] = {}
+
 
 class McpGatewayError(RuntimeError):
     pass
@@ -30,6 +32,7 @@ class McpGateway:
         self._settings = settings
         self._stack: AsyncExitStack | None = None
         self._session: ClientSession | None = None
+        self._tool_specs_cache_hit = False
 
     # streamable HTTP 연결을 열고 MCP 세션을 초기화한다.
     async def __aenter__(self) -> "McpGateway":
@@ -90,7 +93,31 @@ class McpGateway:
 
     # MCP 도구 메타데이터를 모델이 사용하는 사양으로 변환한다.
     async def list_tool_specs(self) -> list[ToolSpec]:
-        return [tool_spec_from_mcp(tool) for tool in await self.list_tools()]
+        cache_key = self._settings.mcp_url
+        cached = _TOOL_SPECS_CACHE.get(cache_key)
+        now = perf_counter()
+        if (
+            cached is not None
+            and self._settings.mcp_tool_cache_ttl_seconds > 0
+            and now - cached[0] < self._settings.mcp_tool_cache_ttl_seconds
+        ):
+            self._tool_specs_cache_hit = True
+            logger.debug(
+                "event=mcp.tools.cache tools=%s",
+                len(cached[1]),
+            )
+            return list(cached[1])
+
+        specs = tuple(tool_spec_from_mcp(tool) for tool in await self.list_tools())
+        self._tool_specs_cache_hit = False
+        if specs and self._settings.mcp_tool_cache_ttl_seconds > 0:
+            _TOOL_SPECS_CACHE[cache_key] = (now, specs)
+        return list(specs)
+
+    # 직전 도구 사양 조회가 네트워크 대신 캐시를 사용했는지 반환한다.
+    @property
+    def tool_specs_cache_hit(self) -> bool:
+        return self._tool_specs_cache_hit
 
     # 인자를 정규화해 MCP 도구를 호출하고 결과를 안전한 JSON 형태로 반환한다.
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -128,6 +155,7 @@ class McpGateway:
     def prepare_tool_arguments(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return dict(arguments)
 
+
 # Convert a monotonic start timestamp into rounded milliseconds.
 def _elapsed_ms(started: float) -> int:
     return round((perf_counter() - started) * 1000)
@@ -159,3 +187,8 @@ def describe_tool(tool: ToolSpec) -> dict[str, Any]:
         "description": tool.description,
         "input_schema": tool.input_schema,
     }
+
+
+# 테스트와 명시적인 새로고침에서 공유 도구 사양 캐시를 비운다.
+def clear_tool_specs_cache() -> None:
+    _TOOL_SPECS_CACHE.clear()

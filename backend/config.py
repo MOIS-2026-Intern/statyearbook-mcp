@@ -43,6 +43,7 @@ class Settings:
     mcp_server_label: str = "statyearbook"
     mcp_url: str = "http://127.0.0.1:8001/mcp"
     mcp_call_timeout_seconds: float = 90.0
+    mcp_tool_cache_ttl_seconds: float = 300.0
     log_level: str = "DEBUG"
 
     # 모델 공급자를 제한하고 운영 프로필의 필수 인증·MCP 설정을 시작 시 검증한다.
@@ -128,6 +129,9 @@ class Settings:
             ),
             mcp_call_timeout_seconds=float(
                 os.environ.get("STATYEARBOOK_BACKEND_MCP_CALL_TIMEOUT_SECONDS", "90")
+            ),
+            mcp_tool_cache_ttl_seconds=float(
+                os.environ.get("STATYEARBOOK_BACKEND_MCP_TOOL_CACHE_TTL_SECONDS", "300")
             ),
             log_level=os.environ.get("STATYEARBOOK_BACKEND_LOG_LEVEL", "DEBUG"),
         )

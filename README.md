@@ -70,6 +70,14 @@ backend와 app(MCP server)의 기본 로그 레벨은 `DEBUG`입니다. 배포 �
 숨기며 SQL은 파라미터와 본문을 읽기 쉽게 줄바꿈해 표시합니다. 긴 벡터 값은 자동
 축약됩니다.
 
+채팅 요청이 끝나면 `event=chat.pipeline` 로그에 `mcp_connect_ms`,
+`mcp_discovery_ms`, `model_ms`, `mcp_tools_ms`와 가장 오래 걸린 `bottleneck`이
+기록됩니다. 프런트엔드는 `POST /api/chat/stream`의 NDJSON 진행 이벤트를 받아
+MCP 연결, 도구 확인, 모델 분석, 도구 호출, 결과 검토 상태를 표시합니다. 기존
+`POST /api/chat` JSON API도 호환성을 위해 유지합니다. MCP 도구 사양은 기본 300초
+동안 재사용하며 `STATYEARBOOK_BACKEND_MCP_TOOL_CACHE_TTL_SECONDS=0`으로 끌 수
+있습니다.
+
 새 연보는 관리자 화면 또는 다음 명령으로 적재합니다.
 
 ```bash

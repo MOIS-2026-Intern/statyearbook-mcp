@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import time
 import json
+import logging
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -10,7 +12,14 @@ from uuid import uuid4
 from backend.config import Settings
 from backend.gateways.mcp_gateway import McpGateway, describe_tool
 from backend.gateways.model_gateway import ModelGateway, create_model_gateway
-from backend.models.chat import ChatMessage, ChatRequest, ChatResponse, McpTrace
+from backend.models.chat import (
+    ChatMessage,
+    ChatProgress,
+    ChatProgressStage,
+    ChatRequest,
+    ChatResponse,
+    McpTrace,
+)
 from backend.models.tooling import ModelMessage, ToolCall, ToolResult, ToolSpec
 from backend.prompts import build_system_prompt
 from backend.serializers.mcp_result_serializer import (
@@ -18,6 +27,9 @@ from backend.serializers.mcp_result_serializer import (
     truncate_jsonable,
     truncate_text,
 )
+
+logger = logging.getLogger(__name__)
+ProgressCallback = Callable[[ChatProgress], None]
 
 
 class ChatService:
@@ -27,34 +39,76 @@ class ChatService:
         self._model = model_gateway or create_model_gateway(settings)
 
     # MCP 도구 발견과 모델 루프를 실행해 최종 채팅 응답을 구성한다.
-    async def respond(self, request: ChatRequest) -> ChatResponse:
+    async def respond(
+        self,
+        request: ChatRequest,
+        on_progress: ProgressCallback | None = None,
+    ) -> ChatResponse:
+        started = time.perf_counter()
+        metrics = _new_pipeline_metrics()
+        outcome = "error"
+        connect_recorded = False
         traces: list[McpTrace] = []
         messages = _model_messages_from_request(request, self._settings.tool_output_max_chars)
 
-        async with McpGateway(self._settings) as mcp:
-            tools = await self._list_tools(mcp, traces)
+        self._emit_progress(
+            on_progress,
+            "connecting_mcp",
+            "MCP 호스트에 연결하는 중입니다.",
+        )
+        connect_started = time.perf_counter()
+        try:
+            async with McpGateway(self._settings) as mcp:
+                metrics["mcp_connect_ms"] += _elapsed_ms(connect_started)
+                connect_recorded = True
+                self._emit_progress(
+                    on_progress,
+                    "discovering_tools",
+                    "사용 가능한 통계 도구를 확인하는 중입니다.",
+                )
+                discovery_started = time.perf_counter()
+                tools = await self._list_tools(mcp, traces)
+                metrics["mcp_discovery_ms"] += _elapsed_ms(discovery_started)
 
-            final_text = await self._run_model_loop(
-                request=request,
-                mcp=mcp,
-                traces=traces,
-                messages=messages,
-                tools=tools,
+                final_text = await self._run_model_loop(
+                    request=request,
+                    mcp=mcp,
+                    traces=traces,
+                    messages=messages,
+                    tools=tools,
+                    on_progress=on_progress,
+                    metrics=metrics,
+                )
+
+            returned_traces = traces if request.includeMcpTrace else []
+            trace_ids = [trace.id for trace in returned_traces] or None
+            outcome = "success"
+
+            return ChatResponse(
+                message=ChatMessage(
+                    id=str(uuid4()),
+                    role="assistant",
+                    content=final_text,
+                    createdAt=_now_iso(),
+                    traceIds=trace_ids,
+                ),
+                traces=returned_traces,
+            )
+        finally:
+            if not connect_recorded:
+                metrics["mcp_connect_ms"] = _elapsed_ms(connect_started)
+            _log_pipeline(
+                settings=self._settings,
+                metrics=metrics,
+                total_ms=_elapsed_ms(started),
+                outcome=outcome,
             )
 
-        returned_traces = traces if request.includeMcpTrace else []
-        trace_ids = [trace.id for trace in returned_traces] or None
-
-        return ChatResponse(
-            message=ChatMessage(
-                id=str(uuid4()),
-                role="assistant",
-                content=final_text,
-                createdAt=_now_iso(),
-                traceIds=trace_ids,
-            ),
-            traces=returned_traces,
-        )
+    # 애플리케이션이 공유한 모델 HTTP 클라이언트의 연결 풀을 종료한다.
+    async def close(self) -> None:
+        close = getattr(self._model, "close", None)
+        if close is not None:
+            await close()
 
     # MCP 도구 목록을 조회하고 성공 또는 실패 trace를 남긴다.
     async def _list_tools(self, mcp: McpGateway, traces: list[McpTrace]) -> list[ToolSpec]:
@@ -87,9 +141,15 @@ class ChatService:
                 title="MCP 도구 목록 조회",
                 timestamp=_now_iso(),
                 server=self._settings.mcp_server_label,
-                summary=f"{len(tools)}개 도구 로드됨",
+                summary=(
+                    f"{len(tools)}개 도구 로드됨"
+                    + (" (캐시 사용)" if mcp.tool_specs_cache_hit else "")
+                ),
                 durationMs=_elapsed_ms(started),
-                request=self._mcp_connection_info(),
+                request={
+                    **self._mcp_connection_info(),
+                    "cacheHit": mcp.tool_specs_cache_hit,
+                },
                 response={"tools": [describe_tool(tool) for tool in tools]},
             )
         )
@@ -104,22 +164,43 @@ class ChatService:
         traces: list[McpTrace],
         messages: list[ModelMessage],
         tools: list[ToolSpec],
+        on_progress: ProgressCallback | None = None,
+        metrics: dict[str, int] | None = None,
     ) -> str:
+        pipeline_metrics = metrics if metrics is not None else _new_pipeline_metrics()
         state: object | None = None
         tool_results: list[ToolResult] = []
         historical_tool_names = _historical_tool_names(request)
         visualize_result_cache: dict[str, dict[str, Any]] = {}
+        tool_call_counts: dict[str, int] = {}
 
-        for _ in range(self._settings.max_tool_rounds):
+        for round_index in range(self._settings.max_tool_rounds):
+            if round_index == 0:
+                self._emit_progress(
+                    on_progress,
+                    "planning",
+                    "질문을 분석해 필요한 자료를 정하는 중입니다.",
+                )
+            else:
+                self._emit_progress(
+                    on_progress,
+                    "reviewing_results",
+                    "MCP 도구의 답변을 검토해 다음 내용을 정리하는 중입니다.",
+                )
             response_tool_names = _response_tool_names(tool_results, historical_tool_names)
-            turn = await self._model.create_turn(
-                instructions=build_system_prompt(response_tool_names),
-                messages=messages,
-                tools=tools,
-                model_profile=request.modelProfile,
-                tool_results=tool_results,
-                state=state,
-            )
+            model_started = time.perf_counter()
+            try:
+                turn = await self._model.create_turn(
+                    instructions=build_system_prompt(response_tool_names),
+                    messages=messages,
+                    tools=tools,
+                    model_profile=request.modelProfile,
+                    tool_results=tool_results,
+                    state=state,
+                )
+            finally:
+                pipeline_metrics["model_ms"] += _elapsed_ms(model_started)
+                pipeline_metrics["model_calls"] += 1
             state = turn.state
 
             if not turn.tool_calls:
@@ -127,22 +208,68 @@ class ChatService:
 
             tool_results = []
             for call in turn.tool_calls:
-                tool_results.append(await self._execute_tool_call(mcp, call, traces, visualize_result_cache))
-
-        final_turn = await self._model.create_turn(
-            instructions=(
-                build_system_prompt(
-                    _response_tool_names(tool_results, historical_tool_names)
+                prior_calls = tool_call_counts.get(call.name, 0)
+                tool_call_counts[call.name] = prior_calls + 1
+                self._emit_progress(
+                    on_progress,
+                    "calling_tool",
+                    _tool_progress_message(call.name, repeated=prior_calls > 0),
+                    tool=call.name or None,
                 )
-                + "\n\n도구 호출 횟수 제한에 도달했습니다. 지금까지 받은 도구 결과만 사용해 답하세요."
-            ),
-            messages=messages,
-            tools=[],
-            model_profile=request.modelProfile,
-            tool_results=tool_results,
-            state=state,
+                tool_started = time.perf_counter()
+                try:
+                    tool_results.append(
+                        await self._execute_tool_call(
+                            mcp,
+                            call,
+                            traces,
+                            visualize_result_cache,
+                        )
+                    )
+                finally:
+                    pipeline_metrics["mcp_tools_ms"] += _elapsed_ms(tool_started)
+                    pipeline_metrics["tool_calls"] += 1
+
+        self._emit_progress(
+            on_progress,
+            "finalizing",
+            "확인한 자료를 바탕으로 최종 답변을 정리하는 중입니다.",
         )
+        model_started = time.perf_counter()
+        try:
+            final_turn = await self._model.create_turn(
+                instructions=(
+                    build_system_prompt(
+                        _response_tool_names(tool_results, historical_tool_names)
+                    )
+                    + "\n\n도구 호출 횟수 제한에 도달했습니다. 지금까지 받은 도구 결과만 사용해 답하세요."
+                ),
+                messages=messages,
+                tools=[],
+                model_profile=request.modelProfile,
+                tool_results=tool_results,
+                state=state,
+            )
+        finally:
+            pipeline_metrics["model_ms"] += _elapsed_ms(model_started)
+            pipeline_metrics["model_calls"] += 1
         return final_turn.text
+
+    # 진행 콜백 오류가 실제 채팅 실행에 영향을 주지 않도록 격리해 전달한다.
+    @staticmethod
+    def _emit_progress(
+        callback: ProgressCallback | None,
+        stage: ChatProgressStage,
+        message: str,
+        *,
+        tool: str | None = None,
+    ) -> None:
+        if callback is None:
+            return
+        try:
+            callback(ChatProgress(stage=stage, message=message, tool=tool))
+        except Exception:
+            logger.warning("event=chat.progress.error", exc_info=True)
 
     # 단일 MCP 도구 호출을 실행·캐시하고 모델 결과와 trace를 함께 생성한다.
     async def _execute_tool_call(
@@ -381,6 +508,65 @@ def _select_keys(value: Any, *keys: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     return {key: value[key] for key in keys if value.get(key) is not None}
+
+
+# 도구 종류와 반복 여부에 따라 내부 추론을 노출하지 않는 짧은 진행 문구를 만든다.
+def _tool_progress_message(tool_name: str, *, repeated: bool) -> str:
+    display_name = tool_name or "MCP"
+    if repeated:
+        return f"{display_name} MCP 도구로 더 정확한 답변을 위해 추가 자료를 탐색하는 중입니다."
+    if tool_name == "search_statistics":
+        return "search_statistics MCP 도구로 관련 통계자료를 찾는 중입니다."
+    if tool_name == "search_tables":
+        return "search_tables MCP 도구로 통계표 원문을 확인하는 중입니다."
+    if tool_name == "visualize":
+        return "visualize MCP 도구로 시각화를 준비하는 중입니다."
+    return f"{display_name} MCP 도구를 호출하고 호스트의 답변을 기다리는 중입니다."
+
+
+# 요청 단위 병목 로그에 누적할 지연과 호출 횟수의 초기값을 만든다.
+def _new_pipeline_metrics() -> dict[str, int]:
+    return {
+        "mcp_connect_ms": 0,
+        "mcp_discovery_ms": 0,
+        "model_ms": 0,
+        "mcp_tools_ms": 0,
+        "model_calls": 0,
+        "tool_calls": 0,
+    }
+
+
+# 각 요청의 누적 구간 중 가장 오래 걸린 병목과 전체 시간을 한 줄로 기록한다.
+def _log_pipeline(
+    *,
+    settings: Settings,
+    metrics: dict[str, int],
+    total_ms: int,
+    outcome: str,
+) -> None:
+    stage_durations = {
+        "mcp_connect": metrics["mcp_connect_ms"],
+        "mcp_discovery": metrics["mcp_discovery_ms"],
+        "model": metrics["model_ms"],
+        "mcp_tools": metrics["mcp_tools_ms"],
+    }
+    bottleneck = max(stage_durations, key=stage_durations.get)
+    logger.info(
+        "event=chat.pipeline outcome=%s provider=%s model=%s duration_ms=%s "
+        "bottleneck=%s mcp_connect_ms=%s mcp_discovery_ms=%s "
+        "model_ms=%s mcp_tools_ms=%s model_calls=%s tool_calls=%s",
+        outcome,
+        settings.model_provider,
+        settings.chat_model,
+        total_ms,
+        bottleneck,
+        metrics["mcp_connect_ms"],
+        metrics["mcp_discovery_ms"],
+        metrics["model_ms"],
+        metrics["mcp_tools_ms"],
+        metrics["model_calls"],
+        metrics["tool_calls"],
+    )
 
 
 # 대화 이력과 연관 trace를 모델 입력 메시지로 구성한다.

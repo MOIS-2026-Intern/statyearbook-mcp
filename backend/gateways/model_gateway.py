@@ -25,6 +25,10 @@ class ModelGateway(Protocol):
     ) -> ModelTurn:
         ...
 
+    # 공유 HTTP 연결 풀을 애플리케이션 종료 시 정리한다.
+    async def close(self) -> None:
+        ...
+
 
 # 설정에서 선택한 공급자에 맞는 모델 gateway를 생성한다.
 def create_model_gateway(settings: Settings) -> ModelGateway:

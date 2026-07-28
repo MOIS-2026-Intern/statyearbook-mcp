@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { Bot, ChevronDown, ChevronRight, UserRound } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage as ChatMessageType, McpTrace } from "../types/chat";
 import { McpTraceCard } from "./McpTraceCard";
-import { VegaLiteChart } from "./VegaLiteChart";
+
+const VegaLiteChart = lazy(() =>
+  import("./VegaLiteChart").then((module) => ({ default: module.VegaLiteChart })),
+);
 
 interface ChatMessageProps {
   message: ChatMessageType;
@@ -86,7 +89,14 @@ export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessagePr
         </div>
 
         {!isUser && charts.length > 0
-          ? charts.map((chart) => <VegaLiteChart key={chart.key} spec={chart.spec} />)
+          ? charts.map((chart) => (
+              <Suspense
+                fallback={<p className="vega-chart__loading">시각화를 표시하는 중입니다.</p>}
+                key={chart.key}
+              >
+                <VegaLiteChart spec={chart.spec} />
+              </Suspense>
+            ))
           : null}
 
         {!isUser && showMcpTrace && traces.length > 0 ? (

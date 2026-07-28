@@ -52,3 +52,17 @@ export interface ChatResponse {
   message: ChatMessage;
   traces: McpTrace[];
 }
+
+export type ChatProgressStage =
+  | "connecting_mcp"
+  | "discovering_tools"
+  | "planning"
+  | "calling_tool"
+  | "reviewing_results"
+  | "finalizing";
+
+export interface ChatProgress {
+  stage: ChatProgressStage;
+  message: string;
+  tool?: string;
+}
