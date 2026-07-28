@@ -35,6 +35,10 @@ class OpenAICompatibleGateway:
         self._settings = settings
         self._client = client
 
+    # 여러 채팅 요청이 재사용한 HTTP 클라이언트의 연결 풀을 정리한다.
+    async def close(self) -> None:
+        await self._client.close()
+
     # 현재 입력과 도구 사양으로 Responses API 요청을 실행한다.
     async def create_response(
         self,

@@ -9,6 +9,14 @@ from pydantic import BaseModel, Field
 MessageRole = Literal["user", "assistant", "system"]
 McpTraceKind = Literal["tool_discovery", "tool_call", "tool_result", "resource_read", "error"]
 McpTraceStatus = Literal["queued", "running", "success", "error"]
+ChatProgressStage = Literal[
+    "connecting_mcp",
+    "discovering_tools",
+    "planning",
+    "calling_tool",
+    "reviewing_results",
+    "finalizing",
+]
 
 
 class McpTrace(BaseModel):
@@ -45,3 +53,9 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     message: ChatMessage
     traces: list[McpTrace]
+
+
+class ChatProgress(BaseModel):
+    stage: ChatProgressStage
+    message: str
+    tool: str | None = None

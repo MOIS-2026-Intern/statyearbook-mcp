@@ -540,6 +540,12 @@ button {
   font-size: 13px;
 }
 
+.vega-chart__loading {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .message__content--markdown p,
 .message__content--markdown blockquote,
 .message__content--markdown ul,
