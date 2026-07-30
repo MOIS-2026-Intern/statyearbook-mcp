@@ -33,6 +33,7 @@ TABLE_VECTOR_WEIGHT = 1.8
 TABLE_LEXICAL_WEIGHT = 3.0
 EXACT_LABEL_BONUS = 0.05
 LABEL_TOKEN_BONUS = 0.04
+LATEST_PUBLICATION_YEAR_SQL = "SELECT MAX(year) AS publication_year FROM statistics"
 _QUERY_STOP_TOKENS = {
     "알려줘",
     "알려주세요",
@@ -387,11 +388,22 @@ def _empty_response(query: str, publication_year: int | None = None) -> dict:
         "tokens": [],
         "requested_publication_year": publication_year,
         "applied_publication_year": publication_year,
+        "publication_year_defaulted": False,
         "publication_year_filter_relaxed": False,
         "message": None,
         "count": 0,
         "results": [],
     }
+
+
+# 적재된 통계표에서 가장 최근 통계연보 발간연도를 조회한다.
+def _latest_publication_year() -> int | None:
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(LATEST_PUBLICATION_YEAR_SQL)
+        row = cur.fetchone()
+    if not row or row.get("publication_year") is None:
+        return None
+    return int(row["publication_year"])
 
 
 # 자연어 질의를 임베딩하고 후보군을 결합해 최종 통계 검색 결과를 만든다.
@@ -403,6 +415,12 @@ def search_statistics_data(
 ) -> dict:
     if not query or not query.strip():
         return _empty_response(query, publication_year)
+
+    requested_publication_year = publication_year
+    publication_year_defaulted = False
+    if publication_year is None:
+        publication_year = _latest_publication_year()
+        publication_year_defaulted = publication_year is not None
 
     tokens = _tokenize(query)
     semantic_query = _lexical_query(query) or query.strip()
@@ -420,7 +438,7 @@ def search_statistics_data(
     results = _merge_candidates(query, *rows, limit)
     filter_relaxed = False
 
-    if not results and publication_year is not None:
+    if not results and requested_publication_year is not None:
         rows = _fetch_rows(
             query,
             query_vec,
@@ -435,13 +453,18 @@ def search_statistics_data(
     return {
         "query": query,
         "tokens": tokens,
-        "requested_publication_year": publication_year,
+        "requested_publication_year": requested_publication_year,
         "applied_publication_year": None if filter_relaxed else publication_year,
+        "publication_year_defaulted": publication_year_defaulted,
         "publication_year_filter_relaxed": filter_relaxed,
         "message": (
             "요청한 발간연도에는 후보가 없어 발간연도 필터를 제외하고 재검색했습니다."
             if filter_relaxed
-            else None
+            else (
+                f"발간연도를 지정하지 않아 가장 최근 발간연도인 {publication_year}년을 적용했습니다."
+                if publication_year_defaulted
+                else None
+            )
         ),
         "count": len(results),
         "results": results,
