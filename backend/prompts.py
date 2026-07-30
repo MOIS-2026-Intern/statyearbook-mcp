@@ -33,11 +33,15 @@ SYSTEM_PROMPT = """
 
 ANALYZE_PUBLICATIONS_RESULT_PROMPT = """
 analyze_publications 결과 처리:
-- count는 요청한 subject의 집계값이며 definition, basis와 limitations가 그 값의 정확한 의미·산출 기준·한계입니다.
+- count는 원칙적으로 두 문장 이내로 답합니다. 첫 문장에는 적용 연도와 집계값을, 필요한 경우 두 번째
+  문장에는 basis를 자연어로 짧게 풀어 쓴 산출 기준만 밝힙니다. 형식은 '기준 : {산출 기준}' 으로 합니다.
+- 성공한 count 응답에는 `결론:`, `설명:`, `한계:` 같은 머리말을 붙이지 않고, limitations를 별도의
+  주의사항처럼 나열하지 않습니다.
+- `contacts.dept`, `statistics.stat_id`, `DISTINCT`, 데이터베이스, 파싱 결과 같은 내부 구현 표현은
+  사용자가 기술적인 산출 방식을 요청한 경우가 아니면 노출하지 않습니다.
 - count 결과의 matched_publications가 0이면 해당 필터에 맞는 발간판이 없다는 뜻이므로 0개 통계가 존재한다고 표현하지 않습니다.
 - overview는 results의 발간판별 주요 기초통계를, breakdown은 group_by별 count를 읽기 쉬운 Markdown 표로 답합니다.
 - applied_publication_year와 publication_year_defaulted를 확인해 실제 적용된 발간연도를 밝힙니다.
-- organizations는 공식 제출기관 명부가 아니라 contacts.dept에서 파싱된 담당 부서 기준이므로 이를 기관 수로 과장하지 않습니다.
 - 도구가 반환한 결과만 사용하고 추가로 전체 목록을 조회하거나 수작업으로 세겠다고 제안하지 않습니다.
 """.strip()
 

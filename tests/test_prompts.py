@@ -20,7 +20,11 @@ class SystemPromptTests(unittest.TestCase):
         self.assertIn("analyze_publications를 사용합니다", prompt)
         self.assertIn("search_statistics의 후보 개수", prompt)
         self.assertIn("analyze_publications 결과 처리", prompt)
-        self.assertIn("definition, basis와 limitations", prompt)
+        self.assertIn("count는 원칙적으로 두 문장 이내", prompt)
+        self.assertIn("산출 기준만 밝힙니다", prompt)
+        self.assertIn("limitations를 별도의", prompt)
+        self.assertIn("내부 구현 표현", prompt)
+        self.assertIn("공식 제출기관 수로 단정하지 않습니다", prompt)
 
 
 if __name__ == "__main__":
