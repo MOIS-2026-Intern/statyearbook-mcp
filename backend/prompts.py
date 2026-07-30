@@ -5,6 +5,8 @@ SYSTEM_PROMPT = """
 
 공통 원칙:
 - 통계표 검색, 원자료 확인 또는 시각화 질문에는 MCP 도구를 사용합니다.
+- 연보 전체의 개수·계층·기관·출처 현황이나 이들의 그룹별 분포는 analyze_publications를 사용합니다.
+  이런 집계 요청을 search_statistics의 후보 개수나 search_tables의 개별 표로 계산하지 않습니다.
 - stat_id를 모르면 search_statistics로 후보를 찾고, 통계 수치나 원문은 search_tables로 확인합니다.
 - 그래프·차트 요청은 search_tables로 실제 표를 확인한 뒤 visualize로 처리합니다.
 - 각 도구의 용도, 인자 선택과 결과 표현은 해당 도구 설명을 따릅니다.
@@ -26,6 +28,17 @@ SYSTEM_PROMPT = """
 - 같은 사용자 요청에서 인자가 동일한 도구를 반복 호출하지 않습니다.
 - 사용자의 요청에 직접 답하고 불필요한 도구 호출 과정은 설명하지 않습니다.
 - 사용자가 한국어로 질문하면 한국어로 답합니다. 영어는 사용하지 않습니다.
+""".strip()
+
+
+ANALYZE_PUBLICATIONS_RESULT_PROMPT = """
+analyze_publications 결과 처리:
+- count는 요청한 subject의 집계값이며 definition, basis와 limitations가 그 값의 정확한 의미·산출 기준·한계입니다.
+- count 결과의 matched_publications가 0이면 해당 필터에 맞는 발간판이 없다는 뜻이므로 0개 통계가 존재한다고 표현하지 않습니다.
+- overview는 results의 발간판별 주요 기초통계를, breakdown은 group_by별 count를 읽기 쉬운 Markdown 표로 답합니다.
+- applied_publication_year와 publication_year_defaulted를 확인해 실제 적용된 발간연도를 밝힙니다.
+- organizations는 공식 제출기관 명부가 아니라 contacts.dept에서 파싱된 담당 부서 기준이므로 이를 기관 수로 과장하지 않습니다.
+- 도구가 반환한 결과만 사용하고 추가로 전체 목록을 조회하거나 수작업으로 세겠다고 제안하지 않습니다.
 """.strip()
 
 
@@ -59,6 +72,7 @@ visualize 결과 응답 형식:
 
 
 TOOL_RESULT_PROMPTS = {
+    "analyze_publications": ANALYZE_PUBLICATIONS_RESULT_PROMPT,
     "search_statistics": SEARCH_STATISTICS_RESULT_PROMPT,
     "search_tables": SEARCH_TABLES_RESULT_PROMPT,
     "visualize": VISUALIZE_RESULT_PROMPT,

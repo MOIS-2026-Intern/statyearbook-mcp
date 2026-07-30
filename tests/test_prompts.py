@@ -14,6 +14,14 @@ class SystemPromptTests(unittest.TestCase):
         self.assertIn("도구의 한계를 설명한 뒤 그대로 종료", prompt)
         self.assertNotIn("한 번 질문", prompt)
 
+    def test_prompt_routes_publication_aggregates_to_analysis_tool(self) -> None:
+        prompt = build_system_prompt(("analyze_publications",))
+
+        self.assertIn("analyze_publications를 사용합니다", prompt)
+        self.assertIn("search_statistics의 후보 개수", prompt)
+        self.assertIn("analyze_publications 결과 처리", prompt)
+        self.assertIn("definition, basis와 limitations", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

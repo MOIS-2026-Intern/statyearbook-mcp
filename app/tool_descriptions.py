@@ -1,5 +1,45 @@
 # -*- coding: utf-8 -*-
 
+ANALYZE_PUBLICATIONS = (
+    "통계연보 한 발간판 또는 여러 발간판 전체를 대상으로 DB 기초통계를 집계한다. "
+    "개별 통계표의 본문 수치 검색이 아니라 연보 전체 건수, 계층 수, 기관·출처 수와 "
+    "장·절·기관별 분포를 계산할 때 사용한다. operation은 다음 SQL 템플릿을 고른다: "
+    "overview는 한 번에 발간판 메타데이터와 주요 개수를 반환하고, count는 subject 하나의 "
+    "정확한 개수를 반환하며, breakdown은 subject를 group_by 기준으로 묶어 반환한다. "
+    "subject=statistics는 statistics.stat_id 기준 논리 통계 항목, tables는 stat_tables.table_id "
+    "기준 물리 표 레코드, chapters/sections는 번호 계층, organizations는 contacts.dept에 파싱된 "
+    "담당 부서, source_systems는 contacts.source_system, publications는 publications.pub_id를 뜻한다. "
+    "발간연도를 생략하면 최신 발간판을 적용한다. 여러 연도 전체가 필요할 때만 "
+    "all_publication_years=true를 사용한다. 임의 SQL은 받지 않으며 허용된 SELECT·JOIN·WHERE·GROUP BY "
+    "조각만 조합한다. organizations는 공식 제출기관 테이블이 아니라 출처 문단의 담당 부서 기준이므로 "
+    "응답의 definition과 basis를 그대로 밝혀야 한다."
+)
+ANALYZE_PUBLICATIONS_FIELDS = {
+    "operation": (
+        "SQL 템플릿. overview=주요 기초통계 묶음, count=subject 단일 개수, "
+        "breakdown=group_by별 subject 개수."
+    ),
+    "subject": (
+        "집계 대상. statistics=논리 통계 항목(stat_id), tables=물리 표 레코드(table_id), "
+        "chapters=장, sections=절, organizations=contacts.dept 담당 부서, "
+        "source_systems=출처 시스템, publications=발간판."
+    ),
+    "group_by": (
+        "breakdown 전용 그룹 기준. publication_year, chapter, section, organization, "
+        "source_system 중 하나. overview/count에서는 생략한다."
+    ),
+    "publication_year": (
+        "통계연보 발간연도. 표 안 데이터 연도가 아니다. 생략하면 최신 발간연도를 적용한다."
+    ),
+    "all_publication_years": (
+        "모든 발간판을 대상으로 비교·집계할 때만 true. publication_year와 동시에 사용하지 않는다."
+    ),
+    "chapter_no": "특정 장만 집계하는 선택 필터.",
+    "section_no": "특정 절 번호만 집계하는 선택 필터. 장 번호와 함께 쓰면 한 절로 좁혀진다.",
+    "limit": "breakdown이 반환할 최대 그룹 수. overview/count에는 영향이 없다.",
+}
+
+
 SEARCH_STATISTICS = (
     "제목 계층, 표 컬럼명과 숫자가 아닌 행·분류 항목을 함께 사용해 통계표 후보와 stat_id를 검색한다. "
     "level3_title은 상위 통계 주제이고 level4_title/title_ko는 실제 표 제목이다. "
