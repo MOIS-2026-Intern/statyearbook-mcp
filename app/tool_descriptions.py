@@ -33,14 +33,15 @@ ANALYZE_PUBLICATIONS = (
     "함께 지정한다. 개수만 필요하면 list 대신 count와 distinct_field를 쓴다. "
     "전체 통계표별 연락처를 구분해야 하면 statistic_title 또는 stat_id를 fields에 포함한다. "
     "특정 담당자·담당 부서·출처가 맡은 통계표만 필요하면 value_filters에 필드와 검색어를 넣어 "
-    "그 값을 가진 레코드만 남긴다. '위운비 주무관이 담당한 통계표', '재난정보통신과가 제출한 표'처럼 "
+    "그 값을 가진 레코드만 남긴다. '홍길동 주무관이 담당한 통계표', '데이터정보화담당관이 제출한 표'처럼 "
     "사람 이름이나 부서명으로 표를 찾는 질문이 여기에 해당한다. 담당자 이름은 통계표 제목이나 "
     "본문에 없어 search_statistics로는 찾을 수 없으므로 subject=contacts와 value_filters를 사용한다. "
     "담당자가 맡은 표의 제목이 필요하면 fields에 statistic_title을 포함하고, 표가 몇 개인지만 "
     "필요하면 count와 distinct_field=stat_id를 함께 쓴다. "
-    "발간연도를 생략하면 최신 발간판을 적용한다. 담당자는 발간판마다 바뀌므로 사용자가 "
-    "'2025년 연보'처럼 발간판을 밝힌 이름 조회에서는 publication_year를 반드시 함께 전달한다. "
-    "여러 연도 전체가 필요할 때만 "
+    "발간연도를 생략하면 최신 발간판을 적용한다. 담당자와 담당 부서는 발간판마다 바뀌지만, "
+    "적용한 발간판에 결과가 없으면 도구가 전체 발간판으로 넓혀 한 번 더 조회하므로 발간연도를 "
+    "바꿔 가며 다시 호출하지 않는다. 이때 publication_year_filter_relaxed가 true가 되고 결과의 "
+    "publication_year가 실제 발간판이다. 처음부터 여러 연도 전체가 필요할 때만 "
     "all_publication_years=true를 사용한다. 임의 SQL은 받지 않으며 허용된 SELECT·JOIN·WHERE·GROUP BY "
     "조각과 필드만 조합한다. organizations는 공식 제출기관 테이블이 아니라 출처 문단의 담당 부서 기준이다. "
     "이 도구는 발간판마다 따로 집계할 뿐 판 사이에서 같은 항목을 잇지 못하므로, "
@@ -92,7 +93,7 @@ ANALYZE_PUBLICATIONS_FIELDS = {
         "전화번호는 phone, 주석 내용은 note로 지정한다. subject=contacts는 department·officer·"
         "phone·source_system·source_url, footnotes는 note_no·note, organizations는 department, "
         "source_systems는 source_system만 조건으로 받는다. "
-        "비교는 공백·가운뎃점·대소문자를 무시한 부분 일치이므로 '위운비'로 '주무관 위운비'를 찾는다. "
+        "비교는 공백·가운뎃점·대소문자를 무시한 부분 일치이므로 '홍길동'으로 '주무관 홍길동'을 찾는다. "
         "여러 조건을 함께 주면 모두 만족하는 레코드만 남는다."
     ),
     "deduplicate": (
@@ -122,7 +123,7 @@ VALUE_FILTER_FIELDS = {
     ),
     "contains": (
         "그 필드에 포함되어야 할 검색어. 직함이나 괄호 설명은 빼고 이름·부서명만 넣는다. "
-        "예: '주무관 위운비'를 찾을 때는 '위운비'."
+        "예: '주무관 홍길동'을 찾을 때는 '홍길동'."
     ),
 }
 

@@ -888,6 +888,60 @@ def _execute_plan(plan: QueryPlan) -> list[dict[str, Any]]:
         return list(cur.fetchall())
 
 
+# 결과가 비었는지 판정한다. count는 행이 아니라 집계값이 0인지를 본다.
+def _is_empty_result(operation: str, rows: list[dict[str, Any]]) -> bool:
+    if operation == "count":
+        return not rows or not int(rows[0].get("count") or 0)
+    return not rows
+
+
+# 전체 발간판으로 넓혀 다시 조회할 수 있는 호출인지 판단한다.
+# 담당자와 담당 부서는 발간판마다 바뀌므로 최신판에만 없는 이름을 구판에서 찾아준다.
+def _can_relax_publication_year(
+    applied_publication_year: int | None,
+    all_publication_years: bool,
+    offset: int,
+) -> bool:
+    if applied_publication_year is None or all_publication_years:
+        return False
+    # 페이지를 넘기는 중이면 앞 페이지와 범위가 달라지므로 넓히지 않는다.
+    return offset == 0
+
+
+# 넓혀 조회한 결과의 발간판을 답변에서 밝힐 수 있도록 발간연도를 목록에 넣는다.
+def _fields_with_publication_year(
+    subject: str,
+    fields: list[AnalysisField] | None,
+) -> list[AnalysisField]:
+    selected = list(fields if fields is not None else LISTS[subject].default_fields)
+    if "publication_year" in selected:
+        return selected
+    return ["publication_year", *selected]
+
+
+# 적용한 발간판 범위를 모델이 그대로 인용할 수 있는 안내 문구로 만든다.
+def _publication_scope_message(
+    attempted_publication_year: int | None,
+    publication_year_defaulted: bool,
+    filter_relaxed: bool,
+) -> str | None:
+    if attempted_publication_year is None:
+        return None
+    source = (
+        f"발간연도를 지정하지 않아 최신 발간판인 {attempted_publication_year}년판을 먼저 조회했으나"
+        if publication_year_defaulted
+        else f"{attempted_publication_year}년 발간판에는"
+    )
+    if filter_relaxed:
+        return (
+            f"{source} 결과가 없어 전체 발간판에서 다시 조회했습니다. "
+            "각 결과의 publication_year가 실제 발간판입니다."
+        )
+    return (
+        f"{source} 결과가 없었고, 전체 발간판을 다시 조회해도 결과가 없습니다."
+    )
+
+
 # 현재 스키마 위에서 연보 단위 기초통계 또는 전체 메타데이터 목록을 조회한다.
 def analyze_publications_data(
     *,
@@ -925,6 +979,7 @@ def analyze_publications_data(
     applied_publication_year, publication_year_defaulted = (
         _resolve_publication_scope(publication_year, all_publication_years)
     )
+    applied_fields = fields
     plan = build_query_plan(
         operation=operation,
         subject=subject,
@@ -934,13 +989,57 @@ def analyze_publications_data(
         chapter_no=chapter_no,
         section_no=section_no,
         limit=limit,
-        fields=fields,
+        fields=applied_fields,
         required_fields=required_fields,
         deduplicate=deduplicate,
         offset=offset,
         value_filters=applied_value_filters,
     )
     rows = _execute_plan(plan)
+
+    # 한 발간판에서 결과가 없으면 전체 발간판으로 넓혀 한 번만 다시 조회한다.
+    attempted_publication_year = applied_publication_year
+    publication_year_filter_relaxed = False
+    scope_message: str | None = None
+    if _is_empty_result(operation, rows) and _can_relax_publication_year(
+        applied_publication_year,
+        all_publication_years,
+        offset,
+    ):
+        relaxed_fields = (
+            _fields_with_publication_year(subject, fields)
+            if operation == "list"
+            else applied_fields
+        )
+        relaxed_plan = build_query_plan(
+            operation=operation,
+            subject=subject,
+            group_by=group_by,
+            distinct_field=distinct_field,
+            applied_publication_year=None,
+            chapter_no=chapter_no,
+            section_no=section_no,
+            limit=limit,
+            fields=relaxed_fields,
+            required_fields=required_fields,
+            deduplicate=deduplicate,
+            offset=offset,
+            value_filters=applied_value_filters,
+        )
+        relaxed_rows = _execute_plan(relaxed_plan)
+        publication_year_filter_relaxed = not _is_empty_result(operation, relaxed_rows)
+        # 넓혀도 결과가 없으면 원래 발간판 기준 응답을 그대로 둔다.
+        if publication_year_filter_relaxed:
+            plan = relaxed_plan
+            rows = relaxed_rows
+            applied_fields = relaxed_fields
+            applied_publication_year = None
+        scope_message = _publication_scope_message(
+            attempted_publication_year,
+            publication_year_defaulted,
+            publication_year_filter_relaxed,
+        )
+
     metric = METRICS[subject]
     selected_fields: list[str] | None = None
     applied_required_fields: list[str] | None = None
@@ -949,7 +1048,9 @@ def analyze_publications_data(
     if operation == "list":
         list_spec = LISTS[subject]
         selected_fields = list(
-            dict.fromkeys(fields if fields is not None else list_spec.default_fields)
+            dict.fromkeys(
+                applied_fields if applied_fields is not None else list_spec.default_fields
+            )
         )
         applied_required_fields = list(dict.fromkeys(required_fields or ()))
         deduplicated = (
@@ -1027,6 +1128,11 @@ def analyze_publications_data(
             for item in applied_value_filters
         )
         basis = f"{basis}; {conditions} 조건을 만족하는 행만 대상으로 한다"
+    if publication_year_filter_relaxed:
+        basis = (
+            f"{basis}; {attempted_publication_year}년 발간판에 결과가 없어 "
+            "전체 발간판을 대상으로 다시 조회했다"
+        )
 
     response: dict[str, Any] = {
         "ok": True,
@@ -1044,7 +1150,9 @@ def analyze_publications_data(
         "requested_publication_year": publication_year,
         "applied_publication_year": applied_publication_year,
         "publication_year_defaulted": publication_year_defaulted,
+        "publication_year_filter_relaxed": publication_year_filter_relaxed,
         "all_publication_years": all_publication_years,
+        "message": scope_message,
         "filters": filters,
         "definition": definition,
         "basis": basis,

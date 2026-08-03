@@ -20,7 +20,8 @@ SYSTEM_PROMPT = """
   담당자·부서 이름은 표 제목이나 본문에 없으므로 search_statistics로 검색하지 않으며, 사람 이름을
   search_statistics의 query에 넣지 않습니다.
 - 사용자가 '2025년 연보', '2025년판'처럼 발간판을 밝히면 그 연도를 publication_year로 그대로 전달합니다.
-  담당자와 담당 부서는 발간판마다 바뀌므로 이름으로 찾는 요청에서 발간연도를 생략하면 안 됩니다.
+  밝히지 않으면 도구가 최신 발간판을 적용하고 거기에 결과가 없으면 전체 발간판에서 다시 찾으므로,
+  발간연도만 바꿔 같은 도구를 다시 호출하지 않습니다.
 - stat_id를 모르면 search_statistics로 후보를 찾고, 통계 수치나 원문은 search_tables로 확인합니다.
 - 그래프·차트 요청은 search_tables로 실제 표를 확인한 뒤 visualize로 처리합니다.
 - 각 도구의 용도, 인자 선택과 결과 표현은 해당 도구 설명을 따릅니다.
@@ -56,9 +57,10 @@ analyze_publications 결과 처리:
 - count 결과의 matched_publications가 0이면 해당 필터에 맞는 발간판이 없다는 뜻이므로 0개 통계가 존재한다고 표현하지 않습니다.
   다만 value_filters를 지정한 호출에서 matched_publications가 0이면 발간판이 없다는 뜻이 아니라
   그 값 조건에 맞는 레코드가 없다는 뜻이므로, 발간판이 없다고 말하지 않습니다.
-- value_filters를 지정했는데 결과가 0건이면 적용된 발간연도를 밝히고 그 발간판에는 해당 담당자·부서가
-  없다고 답합니다. 사용자가 발간연도를 밝히지 않아 publication_year_defaulted가 true였다면
-  all_publication_years=true로 한 번만 다시 확인한 뒤, 다른 발간판에서 찾은 경우 그 발간연도를 밝힙니다.
+- publication_year_filter_relaxed가 true이면 처음 적용한 발간판에 결과가 없어 도구가 전체 발간판에서
+  다시 찾은 결과입니다. message를 근거로 어느 발간판에서 찾았는지 밝히고, 결과의 publication_year를
+  그대로 인용합니다. 이미 전체 발간판을 확인했으므로 발간연도를 바꿔 다시 호출하지 않습니다.
+- 그래도 결과가 0건이면 message대로 어느 발간판에도 없다고 답하고 다른 검색어로 다시 시도하지 않습니다.
 - overview는 results의 발간판별 주요 기초통계를, breakdown은 group_by별 count를 읽기 쉬운 Markdown 표로 답합니다.
 - list는 selected_fields에 해당하는 results만 읽기 쉬운 Markdown 표 또는 짧은 목록으로 답합니다.
   원시 필드명 대신 자연스러운 한국어 머리글을 사용하고 사용자가 요청하지 않은 필드는 덧붙이지 않습니다.

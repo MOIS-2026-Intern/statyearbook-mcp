@@ -219,6 +219,106 @@ class AnalyzePublicationsTests(unittest.TestCase):
 
         self.assertIn("value_filters can only be used with", str(error.exception))
 
+    @patch(
+        "app.tools.analyze_publications._latest_publication_year",
+        return_value=2026,
+    )
+    # 최신 발간판에 없으면 전체 발간판에서 다시 찾고 어느 판인지 밝혀야 한다.
+    def test_falls_back_to_all_publications_when_latest_has_no_rows(
+        self,
+        latest_publication_year_mock,
+    ) -> None:
+        with patch(
+            "app.tools.analyze_publications._execute_plan",
+            side_effect=[
+                [],
+                [
+                    {
+                        "publication_year": 2025,
+                        "statistic_title": "지역별 재난 예･경보시스템 보유",
+                        "_total_count": 1,
+                    }
+                ],
+            ],
+        ) as execute_plan_mock:
+            result = analyze_publications_data(
+                operation="list",
+                subject="contacts",
+                fields=["statistic_title"],
+                value_filters=[{"field": "officer", "contains": "홍길동"}],
+            )
+
+        self.assertEqual(execute_plan_mock.call_count, 2)
+        self.assertTrue(result["publication_year_filter_relaxed"])
+        self.assertIsNone(result["applied_publication_year"])
+        self.assertEqual(result["result_count"], 1)
+        # 넓혀 찾은 결과는 어느 발간판인지 밝힐 수 있어야 하므로 발간연도를 덧붙인다.
+        self.assertEqual(
+            result["selected_fields"],
+            ["publication_year", "statistic_title"],
+        )
+        self.assertEqual(result["results"][0]["publication_year"], 2025)
+        self.assertIn("2026", result["message"])
+        # 두 번째 조회는 발간연도 조건 없이 값 조건만 남아야 한다.
+        self.assertEqual(execute_plan_mock.call_args_list[1].args[0].params, ("홍길동", 500, 0))
+
+    @patch(
+        "app.tools.analyze_publications._execute_plan",
+        side_effect=[
+            [{"matched_publications": 0, "count": 0}],
+            [{"matched_publications": 0, "count": 0}],
+        ],
+    )
+    @patch(
+        "app.tools.analyze_publications._latest_publication_year",
+        return_value=2026,
+    )
+    # count가 0이면 행이 있어도 비어 있는 결과로 보고 전체 발간판을 확인해야 한다.
+    def test_falls_back_when_count_is_zero(
+        self,
+        latest_publication_year_mock,
+        execute_plan_mock,
+    ) -> None:
+        result = analyze_publications_data(
+            operation="count",
+            subject="contacts",
+            distinct_field="stat_id",
+            value_filters=[{"field": "officer", "contains": "없는이름"}],
+        )
+
+        self.assertEqual(execute_plan_mock.call_count, 2)
+        # 넓혀도 없으면 처음 적용한 발간판 기준 응답을 유지한다.
+        self.assertFalse(result["publication_year_filter_relaxed"])
+        self.assertEqual(result["applied_publication_year"], 2026)
+        self.assertEqual(result["count"], 0)
+        self.assertIn("전체 발간판을 다시 조회해도", result["message"])
+
+    @patch(
+        "app.tools.analyze_publications._execute_plan",
+        return_value=[],
+    )
+    @patch(
+        "app.tools.analyze_publications._latest_publication_year",
+        return_value=2026,
+    )
+    # 페이지를 넘기는 중에는 범위가 달라지면 안 되므로 넓히지 않는다.
+    def test_does_not_relax_while_paging(
+        self,
+        latest_publication_year_mock,
+        execute_plan_mock,
+    ) -> None:
+        result = analyze_publications_data(
+            operation="list",
+            subject="contacts",
+            fields=["statistic_title"],
+            offset=500,
+        )
+
+        self.assertEqual(execute_plan_mock.call_count, 1)
+        self.assertFalse(result["publication_year_filter_relaxed"])
+        self.assertEqual(result["applied_publication_year"], 2026)
+        self.assertIsNone(result["message"])
+
     # 빈 검색어는 모든 행과 일치하므로 거부해야 한다.
     def test_rejects_empty_filter_value(self) -> None:
         with self.assertRaises(ValueError) as error:
