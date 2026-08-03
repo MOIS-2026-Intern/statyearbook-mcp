@@ -230,6 +230,20 @@ class ChatService:
                     pipeline_metrics["mcp_tools_ms"] += _elapsed_ms(tool_started)
                     pipeline_metrics["tool_calls"] += 1
 
+            if tool_results and all(result.is_error for result in tool_results):
+                logger.warning(
+                    "event=chat.tool_results outcome=failed tools=%s",
+                    ",".join(result.name or "unknown" for result in tool_results),
+                )
+                return _tool_failure_message(tool_results)
+
+            if tool_results and all(_tool_result_has_no_data(result) for result in tool_results):
+                logger.info(
+                    "event=chat.tool_results outcome=no_results tools=%s",
+                    ",".join(result.name or "unknown" for result in tool_results),
+                )
+                return _tool_no_results_message(tool_results)
+
         self._emit_progress(
             on_progress,
             "finalizing",
@@ -483,6 +497,119 @@ def _model_result_for_tool(tool_name: str | None, result: dict[str, Any]) -> dic
         },
         "isError": False,
     }
+
+
+# 실패한 도구 이름과 반환된 원인을 사용자에게 설명하는 종료 문구를 만든다.
+def _tool_failure_message(results: list[ToolResult]) -> str:
+    tool_names = list(
+        dict.fromkeys(_tool_display_name(result.name) for result in results)
+    )
+    reasons = list(
+        dict.fromkeys(_tool_error_reason(result) for result in results)
+    )
+    return (
+        f"{', '.join(tool_names)} 호출이 실패해 답변에 필요한 자료를 확인하지 못했습니다. "
+        f"원인: {'; '.join(reasons)} "
+        "확인되지 않은 값은 추측해 답하지 않겠습니다."
+    )
+
+
+# 도구 오류 payload에서 사용자에게 필요한 실패 이유만 추출한다.
+def _tool_error_reason(result: ToolResult) -> str:
+    detail = _tool_error_detail(result)
+    lowered = detail.casefold()
+    if "session terminated" in lowered:
+        return "MCP 연결 세션이 종료되었습니다."
+    if "timed out" in lowered or "timeout" in lowered:
+        return "통계 도구가 제한 시간 안에 응답하지 않았습니다."
+    if "limit" in lowered and (
+        "less than or equal to 20" in lowered
+        or "less_than_equal" in lowered
+    ):
+        return "요청한 검색 결과 개수(limit)가 허용 범위인 20 이하를 벗어났습니다."
+    if "validation error" in lowered or "input should be" in lowered:
+        return "도구 호출 입력값이 허용 형식이나 범위를 벗어났습니다."
+    if not detail:
+        return "통계 도구가 오류 결과를 반환했습니다."
+    return truncate_text(" ".join(detail.split()), 240)
+
+
+# 구조화 오류, 일반 error 필드, text content 순서로 원문 오류를 찾는다.
+def _tool_error_detail(result: ToolResult) -> str:
+    if not isinstance(result.result, dict):
+        return str(result.result or "")
+
+    error = result.result.get("error")
+    if error:
+        return str(error)
+
+    structured = _structured_content_from_result(result.result)
+    if isinstance(structured, dict):
+        error = structured.get("error") or structured.get("message")
+        if error:
+            return str(error)
+
+    for item in result.result.get("content") or []:
+        if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
+            return str(item["text"])
+    return ""
+
+
+# 빈 검색 결과의 검색어·발간연도·식별자를 사용해 답할 수 없는 이유를 설명한다.
+def _tool_no_results_message(results: list[ToolResult]) -> str:
+    for result in results:
+        if not isinstance(result.result, dict):
+            continue
+        structured = _structured_content_from_result(result.result)
+        if not isinstance(structured, dict):
+            continue
+
+        if result.name == "search_statistics":
+            query = str(structured.get("query") or "").strip()
+            publication_year = structured.get("applied_publication_year")
+            scope = f"{publication_year}년 발간판에서 " if publication_year else ""
+            query_text = f"검색어 '{query}'와 일치하는 " if query else ""
+            return (
+                f"{scope}{query_text}통계표 후보가 반환되지 않아 답변에 필요한 자료를 "
+                "확인하지 못했습니다. 확인되지 않은 내용은 추측해 답하지 않겠습니다."
+            )
+
+        if result.name == "search_tables":
+            stat_id = structured.get("stat_id")
+            identifier = f"stat_id {stat_id}에 해당하는 " if stat_id is not None else ""
+            return (
+                f"{identifier}통계표 원문이 없어 답변에 필요한 수치를 확인하지 못했습니다. "
+                "확인되지 않은 내용은 추측해 답하지 않겠습니다."
+            )
+
+    return (
+        "통계 도구가 빈 결과를 반환해 답변에 필요한 자료를 확인하지 못했습니다. "
+        "확인되지 않은 내용은 추측해 답하지 않겠습니다."
+    )
+
+
+# 내부 도구 이름을 사용자에게 읽기 쉬운 명칭으로 바꾼다.
+def _tool_display_name(tool_name: str) -> str:
+    return {
+        "search_statistics": "통계표 검색 도구",
+        "search_tables": "통계표 원문 조회 도구",
+        "visualize": "시각화 도구",
+    }.get(tool_name, "통계 도구")
+
+
+# 검색 도구가 명시적으로 빈 결과를 반환했는지 판별한다.
+def _tool_result_has_no_data(result: ToolResult) -> bool:
+    if result.is_error or result.name not in {"search_statistics", "search_tables"}:
+        return False
+    if not isinstance(result.result, dict):
+        return False
+
+    structured = _structured_content_from_result(result.result)
+    if not isinstance(structured, dict):
+        return False
+    if result.name == "search_statistics":
+        return structured.get("count") == 0 or structured.get("results") == []
+    return structured.get("found") is False
 
 
 # 구조화 필드를 우선하고 없으면 text content의 JSON object를 찾는다.

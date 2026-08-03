@@ -105,6 +105,9 @@ CREATE TABLE IF NOT EXISTS embedding_jobs (
     finished_at     TIMESTAMPTZ
 );
 
+-- 한 연도에 발간물은 하나라는 전제를 강제한다. 적재 스크립트와 통계 검색의 발간판 병합이
+-- 이 전제에 기대므로, 발간물 종류를 늘리려면 발간물 구분 컬럼을 먼저 추가하고
+-- app/tools/search_statistics.py의 LATEST_EDITIONS_CTE를 함께 고쳐야 한다.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_publications_unique_year
     ON publications(year);
 CREATE INDEX IF NOT EXISTS idx_stat_year

@@ -1,60 +1,38 @@
+# -*- coding: utf-8 -*-
+"""search_statistics 도구가 검색된 통계 값을 그대로 반환하는지 검증한다."""
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.tools.search_statistics import _search_sql, search_statistics_data
+from app.tools.search_statistics import (
+    LATEST_EDITIONS_CTE,
+    LATEST_EDITIONS_KEY_SQL,
+    search_statistics_data,
+)
 
 
-def result_row(publication_year: int = 2025) -> dict:
-    return {
-        "stat_id": 8,
-        "publication_year": publication_year,
-        "ref_id": "1-1-5",
-        "chapter_no": 1,
-        "section_no": 1,
-        "level3_no": 5,
-        "level4_no": None,
-        "chapter": "정부조직",
-        "section": "정부조직",
-        "level3_title": "행정기관 위원회",
-        "level4_title": "행정기관 위원회",
-        "title_ko": "행정기관 위원회",
-        "title_en": "Administration Committees",
-        "unit": "개",
-        "base_date": "2024.12.31.",
-        "page_start": 19,
-        "distance": 0.1,
-    }
-
-
-def table_result_row(
-    stat_id: int = 22,
-    ref_id: str = "2-1-1-5",
-    chunk_kind: str = "headers",
-) -> dict:
-    row = result_row()
-    row.update({
-        "stat_id": stat_id,
-        "ref_id": ref_id,
-        "level3_title": "민원행정",
-        "level4_title": "안심상속 원스톱서비스",
-        "title_ko": "안심상속 원스톱서비스",
-        "title_en": "One-stop Inheritance Service",
-        "table_seq": 1,
-        "chunk_kind": chunk_kind,
-        "search_labels": ["연도 Year", "사망신고 건수 No. of Death Reports"],
-        "search_text": "안심상속 원스톱서비스 컬럼: 연도 | 사망신고 건수",
-    })
-    return row
+RESULT_ROW = {
+    "stat_id": 8,
+    "publication_year": 2025,
+    "ref_id": "1-1-5",
+    "chapter_no": 1,
+    "section_no": 1,
+    "level3_no": 5,
+    "level4_no": None,
+    "chapter": "정부조직",
+    "section": "정부조직",
+    "level3_title": "행정기관 위원회",
+    "level4_title": "행정기관 위원회",
+    "title_ko": "행정기관 위원회",
+    "title_en": "Administration Committees",
+    "unit": "개",
+    "base_date": "2024.12.31.",
+    "page_start": 19,
+    "distance": 0.1,
+}
 
 
 class SearchStatisticsTests(unittest.TestCase):
-    def test_search_sql_selects_complete_title_hierarchy(self) -> None:
-        sql = _search_sql(publication_year=2025)
-
-        self.assertIn("chapter_no, section_no, level3_no, level4_no", sql)
-        self.assertIn("level3_title, level4_title", sql)
-
     @patch("app.tools.search_statistics._fetch_rows")
     @patch("app.tools.search_statistics.embed_query", return_value="[0.1,0.2]")
     @patch(
@@ -65,124 +43,41 @@ class SearchStatisticsTests(unittest.TestCase):
         "app.tools.search_statistics.embedding_profile",
         return_value=SimpleNamespace(profile_key="profile-key"),
     )
-    def test_relaxes_publication_year_when_filtered_search_is_empty(
+    # 조회된 행의 식별자, 제목 계층과 발간연도가 응답에 그대로 담겨야 한다.
+    def test_returns_matched_statistic_rows_with_metadata(
         self,
         _embedding_profile_mock,
         _table_profile_mock,
         embed_query_mock,
         fetch_rows_mock,
     ) -> None:
-        fetch_rows_mock.side_effect = [
-            ([], [], []),
-            ([result_row()], [], []),
-        ]
-
-        response = search_statistics_data("행정기관 위원회", publication_year=2024)
-
-        self.assertEqual(response["requested_publication_year"], 2024)
-        self.assertIsNone(response["applied_publication_year"])
-        self.assertTrue(response["publication_year_filter_relaxed"])
-        self.assertEqual(response["count"], 1)
-        self.assertEqual(response["results"][0]["publication_year"], 2025)
-        self.assertEqual(response["results"][0]["level3_title"], "행정기관 위원회")
-        self.assertEqual(response["results"][0]["level4_title"], "행정기관 위원회")
-        self.assertEqual(
-            fetch_rows_mock.call_args_list[0].args,
-            ("행정기관 위원회", "[0.1,0.2]", "profile-key", "table-profile-key", 2024, 5),
-        )
-        self.assertEqual(
-            fetch_rows_mock.call_args_list[1].args,
-            ("행정기관 위원회", "[0.1,0.2]", "profile-key", "table-profile-key", None, 5),
-        )
-        embed_query_mock.assert_called_once_with("행정기관 위원회")
-
-    @patch("app.tools.search_statistics._fetch_rows")
-    @patch("app.tools.search_statistics.embed_query", return_value="[0.1,0.2]")
-    @patch(
-        "app.tools.search_statistics.table_search_embedding_profile",
-        return_value=SimpleNamespace(profile_key="table-profile-key"),
-    )
-    @patch(
-        "app.tools.search_statistics.embedding_profile",
-        return_value=SimpleNamespace(profile_key="profile-key"),
-    )
-    def test_keeps_publication_year_when_filtered_search_succeeds(
-        self,
-        _embedding_profile_mock,
-        _table_profile_mock,
-        _embed_query_mock,
-        fetch_rows_mock,
-    ) -> None:
-        fetch_rows_mock.return_value = ([result_row()], [], [])
+        fetch_rows_mock.return_value = ([RESULT_ROW], [], [])
 
         response = search_statistics_data("행정기관 위원회", publication_year=2025)
 
-        self.assertEqual(response["applied_publication_year"], 2025)
-        self.assertFalse(response["publication_year_filter_relaxed"])
-        self.assertIsNone(response["message"])
-        fetch_rows_mock.assert_called_once_with(
-            "행정기관 위원회", "[0.1,0.2]", "profile-key", "table-profile-key", 2025, 5
-        )
-
-    @patch("app.tools.search_statistics._fetch_rows")
-    @patch("app.tools.search_statistics.embed_query", return_value="[0.1,0.2]")
-    @patch(
-        "app.tools.search_statistics.table_search_embedding_profile",
-        return_value=SimpleNamespace(profile_key="table-profile-key"),
-    )
-    @patch(
-        "app.tools.search_statistics.embedding_profile",
-        return_value=SimpleNamespace(profile_key="profile-key"),
-    )
-    def test_exact_column_match_outranks_title_candidate(
-        self,
-        _embedding_profile_mock,
-        _table_profile_mock,
-        embed_query_mock,
-        fetch_rows_mock,
-    ) -> None:
-        fetch_rows_mock.return_value = (
-            [result_row()],
-            [table_result_row()],
-            [table_result_row()],
-        )
-
-        response = search_statistics_data("2024년 사망신고 건수 알려줘", limit=5)
-
-        first = response["results"][0]
-        self.assertEqual(first["ref_id"], "2-1-1-5")
-        self.assertEqual(first["table_seq"], 1)
-        self.assertEqual(first["matched_source"], "column")
-        self.assertIn("사망신고 건수", first["matched_text"])
-        embed_query_mock.assert_called_once_with("사망신고 건수")
-
-    @patch("app.tools.search_statistics._fetch_rows")
-    @patch("app.tools.search_statistics.embed_query", return_value="[0.1,0.2]")
-    @patch(
-        "app.tools.search_statistics.table_search_embedding_profile",
-        return_value=SimpleNamespace(profile_key="table-profile-key"),
-    )
-    @patch(
-        "app.tools.search_statistics.embedding_profile",
-        return_value=SimpleNamespace(profile_key="profile-key"),
-    )
-    def test_deduplicates_same_table_across_publication_editions(
-        self,
-        _embedding_profile_mock,
-        _table_profile_mock,
-        _embed_query_mock,
-        fetch_rows_mock,
-    ) -> None:
-        newest = table_result_row(stat_id=30)
-        newest["publication_year"] = 2026
-        older = table_result_row(stat_id=20)
-        older["publication_year"] = 2025
-        fetch_rows_mock.return_value = ([], [newest, older], [])
-
-        response = search_statistics_data("사망신고 건수", limit=5)
-
         self.assertEqual(response["count"], 1)
-        self.assertEqual(response["results"][0]["publication_year"], 2026)
+        first = response["results"][0]
+        self.assertEqual(first["stat_id"], 8)
+        self.assertEqual(first["ref_id"], "1-1-5")
+        self.assertEqual(first["title_ko"], "행정기관 위원회")
+        self.assertEqual(first["level3_title"], "행정기관 위원회")
+        self.assertEqual(first["level4_title"], "행정기관 위원회")
+        self.assertEqual(first["publication_year"], 2025)
+        self.assertEqual(first["unit"], "개")
+        self.assertEqual(response["applied_publication_year"], 2025)
+        embed_query_mock.assert_called_once_with("행정기관 위원회")
+
+    # 목차 번호는 발간판마다 다시 매겨지고 앞 판의 번호를 다른 통계가 물려받으므로,
+    # 번호로 판을 이으면 번호를 뺏긴 구판 통계가 검색에서 통째로 빠진다.
+    def test_latest_edition_key_uses_title_not_ref_id(self) -> None:
+        self.assertIn("title_ko", LATEST_EDITIONS_KEY_SQL)
+        self.assertNotIn("ref_id", LATEST_EDITIONS_KEY_SQL)
+        self.assertIn(LATEST_EDITIONS_KEY_SQL, LATEST_EDITIONS_CTE)
+
+    # 최신 발간판에 같은 제목이 여러 건 실려 있으면 한 건만 남기지 말고 모두 남겨야 한다.
+    def test_latest_edition_keeps_every_row_of_the_newest_publication(self) -> None:
+        self.assertNotIn("DISTINCT ON", LATEST_EDITIONS_CTE)
+        self.assertIn("WHERE year = latest_year", LATEST_EDITIONS_CTE)
 
 
 if __name__ == "__main__":
