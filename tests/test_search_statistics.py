@@ -147,13 +147,23 @@ class SearchStatisticsTests(unittest.TestCase):
             [table_result_row()],
         )
 
-        response = search_statistics_data("2024년 사망신고 건수 알려줘", limit=5)
+        with patch(
+            "app.tools.search_statistics._latest_publication_year",
+            return_value=2026,
+        ) as latest_publication_year_mock:
+            response = search_statistics_data("2024년 사망신고 건수 알려줘", limit=5)
 
         first = response["results"][0]
         self.assertEqual(first["ref_id"], "2-1-1-5")
         self.assertEqual(first["table_seq"], 1)
         self.assertEqual(first["matched_source"], "column")
         self.assertIn("사망신고 건수", first["matched_text"])
+        self.assertIsNone(response["requested_publication_year"])
+        self.assertEqual(response["applied_publication_year"], 2026)
+        self.assertTrue(response["publication_year_defaulted"])
+        self.assertIn("가장 최근 발간연도인 2026년", response["message"])
+        latest_publication_year_mock.assert_called_once_with()
+        self.assertEqual(fetch_rows_mock.call_args.args[4], 2026)
         embed_query_mock.assert_called_once_with("사망신고 건수")
 
     @patch("app.tools.search_statistics._fetch_rows")
@@ -179,10 +189,43 @@ class SearchStatisticsTests(unittest.TestCase):
         older["publication_year"] = 2025
         fetch_rows_mock.return_value = ([], [newest, older], [])
 
-        response = search_statistics_data("사망신고 건수", limit=5)
+        with patch(
+            "app.tools.search_statistics._latest_publication_year",
+            return_value=2026,
+        ):
+            response = search_statistics_data("사망신고 건수", limit=5)
 
         self.assertEqual(response["count"], 1)
         self.assertEqual(response["results"][0]["publication_year"], 2026)
+
+    @patch("app.tools.search_statistics._fetch_rows", return_value=([], [], []))
+    @patch("app.tools.search_statistics.embed_query", return_value="[0.1,0.2]")
+    @patch(
+        "app.tools.search_statistics.table_search_embedding_profile",
+        return_value=SimpleNamespace(profile_key="table-profile-key"),
+    )
+    @patch(
+        "app.tools.search_statistics.embedding_profile",
+        return_value=SimpleNamespace(profile_key="profile-key"),
+    )
+    @patch(
+        "app.tools.search_statistics._latest_publication_year",
+        return_value=2026,
+    )
+    def test_empty_latest_publication_result_does_not_fall_back_to_older_editions(
+        self,
+        _latest_publication_year_mock,
+        _embedding_profile_mock,
+        _table_profile_mock,
+        _embed_query_mock,
+        fetch_rows_mock,
+    ) -> None:
+        response = search_statistics_data("없는 통계")
+
+        self.assertEqual(response["count"], 0)
+        self.assertEqual(response["applied_publication_year"], 2026)
+        self.assertTrue(response["publication_year_defaulted"])
+        fetch_rows_mock.assert_called_once()
 
 
 if __name__ == "__main__":

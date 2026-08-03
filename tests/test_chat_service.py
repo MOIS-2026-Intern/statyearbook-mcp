@@ -41,6 +41,25 @@ class RepeatingToolModel:
         return ModelTurn(text="찾은 결과입니다.", state="done")
 
 
+class ToolCallingModel:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def create_turn(self, **_kwargs) -> ModelTurn:
+        self.call_count += 1
+        return ModelTurn(
+            text="",
+            state=f"round-{self.call_count}",
+            tool_calls=[
+                ToolCall(
+                    id=f"call-{self.call_count}",
+                    name="search_statistics",
+                    arguments={"query": "통계표", "limit": 200},
+                )
+            ],
+        )
+
+
 class FakeMcp:
     def prepare_tool_arguments(self, _name: str, arguments: dict) -> dict:
         return dict(arguments)
@@ -48,6 +67,38 @@ class FakeMcp:
     async def call_tool(self, _name: str, _arguments: dict) -> dict:
         return {
             "structuredContent": {"count": 1},
+            "content": [],
+            "isError": False,
+        }
+
+
+class ErrorMcp(FakeMcp):
+    async def call_tool(self, _name: str, _arguments: dict) -> dict:
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "limit: Input should be less than or equal to 20",
+                }
+            ],
+            "isError": True,
+        }
+
+
+class SessionErrorMcp(FakeMcp):
+    async def call_tool(self, _name: str, _arguments: dict) -> dict:
+        raise RuntimeError("Session terminated")
+
+
+class EmptyMcp(FakeMcp):
+    async def call_tool(self, _name: str, _arguments: dict) -> dict:
+        return {
+            "structuredContent": {
+                "query": "없는 통계",
+                "applied_publication_year": 2026,
+                "count": 0,
+                "results": [],
+            },
             "content": [],
             "isError": False,
         }
@@ -98,6 +149,7 @@ class ChatServiceModelResultTests(unittest.TestCase):
         self.assertEqual(text, "자세한 내용입니다.")
         self.assertEqual(len(model.calls), 1)
         self.assertIn("search_tables 결과 응답 형식", model.calls[0]["instructions"])
+        self.assertIn("가장 최근 발간연도", model.calls[0]["instructions"])
         self.assertEqual(model.calls[0]["tool_results"], [])
 
     def test_result_prompt_names_exclude_failed_tools(self) -> None:
@@ -191,6 +243,61 @@ class ChatServiceModelResultTests(unittest.TestCase):
 
         self.assertEqual(compact["structuredContent"]["unit"], "명")
         self.assertEqual(compact["structuredContent"]["tables"][0]["table_md"], "| 연도 | 소계 |")
+
+    def test_tool_error_stops_without_model_retry_or_permission_question(self) -> None:
+        model = ToolCallingModel()
+        service = ChatService(Settings(), model_gateway=model)
+
+        text = asyncio.run(
+            service._run_model_loop(
+                request=ChatRequest(conversationId="tool-error", message="통계표를 찾아줘"),
+                mcp=ErrorMcp(),
+                traces=[],
+                messages=[],
+                tools=[ToolSpec(name="search_statistics", description="검색", input_schema={})],
+            )
+        )
+
+        self.assertIn("통계표 검색 도구 호출이 실패", text)
+        self.assertIn("허용 범위인 20 이하를 벗어났습니다", text)
+        self.assertNotIn("계속 진행", text)
+        self.assertEqual(model.call_count, 1)
+
+    def test_session_termination_reason_is_explained_without_model_retry(self) -> None:
+        model = ToolCallingModel()
+        service = ChatService(Settings(), model_gateway=model)
+
+        text = asyncio.run(
+            service._run_model_loop(
+                request=ChatRequest(conversationId="session-error", message="통계표를 찾아줘"),
+                mcp=SessionErrorMcp(),
+                traces=[],
+                messages=[],
+                tools=[ToolSpec(name="search_statistics", description="검색", input_schema={})],
+            )
+        )
+
+        self.assertIn("MCP 연결 세션이 종료되었습니다", text)
+        self.assertEqual(model.call_count, 1)
+
+    def test_empty_search_result_stops_without_model_retry(self) -> None:
+        model = ToolCallingModel()
+        service = ChatService(Settings(), model_gateway=model)
+
+        text = asyncio.run(
+            service._run_model_loop(
+                request=ChatRequest(conversationId="empty", message="없는 통계를 찾아줘"),
+                mcp=EmptyMcp(),
+                traces=[],
+                messages=[],
+                tools=[ToolSpec(name="search_statistics", description="검색", input_schema={})],
+            )
+        )
+
+        self.assertIn("2026년 발간판", text)
+        self.assertIn("검색어 '없는 통계'", text)
+        self.assertIn("후보가 반환되지 않아", text)
+        self.assertEqual(model.call_count, 1)
 
 
 if __name__ == "__main__":
