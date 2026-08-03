@@ -2,6 +2,12 @@
 
 통계연보를 검색하고 원자료 표와 Vega-Lite 시각화를 제공하는 서비스입니다.
 
+
+
+https://github.com/user-attachments/assets/20630c68-0cc8-4a16-8c34-6256d2f9e189
+
+
+
 ## 서비스 구조
 
 | 디렉터리 | 배포 단위 |
