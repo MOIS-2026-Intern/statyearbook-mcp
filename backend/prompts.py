@@ -15,7 +15,8 @@ SYSTEM_PROMPT = """
 - stat_id를 모르면 search_statistics로 후보를 찾고, 통계 수치나 원문은 search_tables로 확인합니다.
 - 그래프·차트 요청은 search_tables로 실제 표를 확인한 뒤 visualize로 처리합니다.
 - 각 도구의 용도, 인자 선택과 결과 표현은 해당 도구 설명을 따릅니다.
-  발간연도를 되묻지 않으며, 표 안의 데이터 연도와 발간연도를 혼동하지 않습니다.
+- 사용자가 통계연보 발간연도(publication_year)를 명시하지 않으면 도구가 통계마다 가장 최근 발간판을
+  적용하므로 발간연도를 되묻지 않으며, 표 안의 데이터 연도와 발간연도를 혼동하지 않습니다.
 - 도구 결과에 없는 숫자, 단위, 출처 또는 표 제목은 추측하지 않습니다.
 - 현재 도구 결과만으로 확인할 수 없는 요청은 무엇이 부족해 답할 수 없는지 설명하고 종료합니다.
 - 답변은 결론부터 친절하게 설명합니다. 단답으로 끝내지 말고 결과를 이해하는 데 필요한 설명을 1~2문장 포함합니다.
@@ -59,7 +60,9 @@ analyze_publications 결과 처리:
 SEARCH_STATISTICS_RESULT_PROMPT = """
 search_statistics 결과 처리:
 - 검색 결과는 통계표 후보일 뿐입니다. 수치 질문에는 후보 메타데이터만으로 답하지 말고 search_tables로 본문을 확인합니다.
-- publication_year_defaulted가 true이면 applied_publication_year가 자동 적용된 최신 발간연도입니다.
+- latest_edition_per_statistic가 true이면 통계마다 최신 발간판을 적용한 결과이므로, 단일 발간연도를
+  말하지 말고 인용한 통계의 publication_year를 그대로 밝힙니다. false이면 applied_publication_year가
+  적용된 발간연도입니다.
 - 질문과 직접 관련된 후보가 없으면 찾지 못했다고 답하고, 관련 없는 후보의 제목이나 수치를 대신 사용하지 않습니다.
 """.strip()
 

@@ -33,7 +33,15 @@ TABLE_VECTOR_WEIGHT = 1.8
 TABLE_LEXICAL_WEIGHT = 3.0
 EXACT_LABEL_BONUS = 0.05
 LABEL_TOKEN_BONUS = 0.04
-LATEST_PUBLICATION_YEAR_SQL = "SELECT MAX(year) AS publication_year FROM statistics"
+# 같은 통계는 ref_id로 판을 잇고, 통계마다 가장 최근 발간판 한 건만 검색 대상으로 남긴다.
+LATEST_EDITIONS_CTE = """
+    WITH latest_editions AS (
+        SELECT DISTINCT ON (coalesce(nullif(ref_id, ''), title_ko)) stat_id
+        FROM statistics
+        ORDER BY coalesce(nullif(ref_id, ''), title_ko), year DESC, stat_id DESC
+    )
+"""
+LATEST_EDITIONS_FILTER = "stat_id IN (SELECT stat_id FROM latest_editions)"
 _QUERY_STOP_TOKENS = {
     "알려줘",
     "알려주세요",
@@ -78,15 +86,43 @@ def _matched_tokens(tokens: list[str], row: dict) -> list[str]:
     return [token for token in tokens if token.lower() in text]
 
 
-# 임베딩 프로필과 선택적 발간연도를 강제하는 WHERE 절을 만든다.
-def _where_sql(publication_year: int | None, alias: str = "") -> str:
+# 검색 대상을 지정 발간연도 또는 통계별 최신 발간판으로 좁히는 조건을 만든다.
+def _edition_filters(
+    publication_year: int | None,
+    latest_editions: bool,
+    alias: str = "",
+) -> list[str]:
     prefix = f"{alias}." if alias else ""
-    where = [
-        f"{prefix}embedding IS NOT NULL",
-        f"{prefix}embedding_profile_key = %s",
-    ]
+    filters = []
     if publication_year is not None:
-        where.append(f"{prefix}year = %s")
+        filters.append(f"{prefix}year = %s")
+    if latest_editions:
+        filters.append(f"{prefix}{LATEST_EDITIONS_FILTER}")
+    return filters
+
+
+# 이미 조건이 있는 WHERE 절 뒤에 붙일 발간판 조건 조각을 만든다.
+def _edition_filter_sql(
+    publication_year: int | None,
+    latest_editions: bool,
+    alias: str = "",
+) -> str:
+    filters = _edition_filters(publication_year, latest_editions, alias)
+    return "".join(f" AND {condition}" for condition in filters)
+
+
+# 통계별 최신 발간판이 필요할 때만 CTE를 앞에 붙인다.
+def _cte_sql(latest_editions: bool) -> str:
+    return LATEST_EDITIONS_CTE if latest_editions else ""
+
+
+# 임베딩 프로필과 발간판 범위를 강제하는 WHERE 절을 만든다.
+def _where_sql(publication_year: int | None, latest_editions: bool) -> str:
+    where = [
+        "embedding IS NOT NULL",
+        "embedding_profile_key = %s",
+        *_edition_filters(publication_year, latest_editions),
+    ]
     return " AND ".join(where)
 
 
@@ -105,9 +141,10 @@ def _params(
 
 
 # 통계 제목 임베딩의 최근접 후보를 조회하는 SQL을 만든다.
-def _search_sql(publication_year: int | None) -> str:
-    where_sql = _where_sql(publication_year)
+def _search_sql(publication_year: int | None, latest_editions: bool = False) -> str:
+    where_sql = _where_sql(publication_year, latest_editions)
     return f"""
+        {_cte_sql(latest_editions)}
         SELECT stat_id, year AS publication_year, ref_id,
                chapter_no, section_no, level3_no, level4_no,
                chapter, section, level3_title, level4_title,
@@ -132,25 +169,27 @@ def _table_metadata_sql() -> str:
 
 
 # 표 헤더와 행 라벨을 대상으로 전문 검색 SQL을 만든다.
-def _table_lexical_sql(publication_year: int | None) -> str:
-    year_filter = " AND s.year = %s" if publication_year is not None else ""
+def _table_lexical_sql(publication_year: int | None, latest_editions: bool) -> str:
+    edition_filter = _edition_filter_sql(publication_year, latest_editions, "s")
     return f"""
+        {_cte_sql(latest_editions)}
         SELECT {_table_metadata_sql()},
                ts_rank_cd(c.search_doc, plainto_tsquery('simple', %s)) AS lexical_rank
         FROM table_search_chunks c
         JOIN stat_tables t ON t.table_id = c.table_id
         JOIN statistics s ON s.stat_id = t.stat_id
         WHERE c.search_doc @@ plainto_tsquery('simple', %s)
-              {year_filter}
+              {edition_filter}
         ORDER BY lexical_rank DESC, s.year DESC, s.stat_id, t.seq
         LIMIT %s
     """
 
 
 # 동일 프로필의 표 검색 청크를 벡터 거리로 조회하는 SQL을 만든다.
-def _table_vector_sql(publication_year: int | None) -> str:
-    year_filter = " AND s.year = %s" if publication_year is not None else ""
+def _table_vector_sql(publication_year: int | None, latest_editions: bool) -> str:
+    edition_filter = _edition_filter_sql(publication_year, latest_editions, "s")
     return f"""
+        {_cte_sql(latest_editions)}
         SELECT {_table_metadata_sql()},
                (c.embedding <=> %s::vector) AS distance
         FROM table_search_chunks c
@@ -158,7 +197,7 @@ def _table_vector_sql(publication_year: int | None) -> str:
         JOIN statistics s ON s.stat_id = t.stat_id
         WHERE c.embedding IS NOT NULL
           AND c.embedding_profile_key = %s
-          {year_filter}
+          {edition_filter}
         ORDER BY c.embedding <=> %s::vector, s.year DESC, s.stat_id, t.seq
         LIMIT %s
     """
@@ -172,13 +211,14 @@ def _fetch_rows(
     title_profile_key: str,
     table_profile_key: str,
     publication_year: int | None,
+    latest_editions: bool,
     limit: int,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     candidate_limit = max(20, limit * 5)
     lexical_query = _lexical_query(query)
     with connect() as conn, conn.cursor() as cur:
         cur.execute(
-            _search_sql(publication_year),
+            _search_sql(publication_year, latest_editions),
             _params(query_vec, title_profile_key, publication_year, candidate_limit),
         )
         title_rows = cur.fetchall()
@@ -191,14 +231,20 @@ def _fetch_rows(
                 if publication_year is not None:
                     lexical_params.append(publication_year)
                 lexical_params.append(candidate_limit)
-                cur.execute(_table_lexical_sql(publication_year), lexical_params)
+                cur.execute(
+                    _table_lexical_sql(publication_year, latest_editions),
+                    lexical_params,
+                )
                 lexical_rows = cur.fetchall()
 
             vector_params: list = [query_vec, table_profile_key]
             if publication_year is not None:
                 vector_params.append(publication_year)
             vector_params.extend([query_vec, candidate_limit])
-            cur.execute(_table_vector_sql(publication_year), vector_params)
+            cur.execute(
+                _table_vector_sql(publication_year, latest_editions),
+                vector_params,
+            )
             vector_rows = cur.fetchall()
         except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
             # 점진 배포 중 새 schema가 아직 적용되지 않은 DB는 제목 검색만 제공한다.
@@ -388,7 +434,7 @@ def _empty_response(query: str, publication_year: int | None = None) -> dict:
         "tokens": [],
         "requested_publication_year": publication_year,
         "applied_publication_year": publication_year,
-        "publication_year_defaulted": False,
+        "latest_edition_per_statistic": False,
         "publication_year_filter_relaxed": False,
         "message": None,
         "count": 0,
@@ -396,18 +442,27 @@ def _empty_response(query: str, publication_year: int | None = None) -> dict:
     }
 
 
-# 적재된 통계표에서 가장 최근 통계연보 발간연도를 조회한다.
-def _latest_publication_year() -> int | None:
-    with connect() as conn, conn.cursor() as cur:
-        cur.execute(LATEST_PUBLICATION_YEAR_SQL)
-        row = cur.fetchone()
-    if not row or row.get("publication_year") is None:
-        return None
-    return int(row["publication_year"])
+# 적용한 발간판 범위를 모델이 그대로 인용할 수 있는 안내 문구로 만든다.
+def _publication_scope_message(
+    latest_editions: bool,
+    filter_relaxed: bool,
+) -> str | None:
+    if filter_relaxed:
+        return (
+            "요청한 발간연도에는 후보가 없어 통계별 최신 발간판으로 재검색했습니다. "
+            "각 결과의 publication_year가 실제 발간판입니다."
+        )
+    if latest_editions:
+        return (
+            "발간연도를 지정하지 않아 통계마다 가장 최근 발간판을 적용했습니다. "
+            "통계별로 최신 발간판이 다를 수 있으므로 각 결과의 publication_year를 사용하세요."
+        )
+    return None
 
 
 # 자연어 질의를 임베딩하고 후보군을 결합해 최종 통계 검색 결과를 만든다.
-# 지정 연도에 결과가 없을 때만 연도 필터를 풀어 한 번 더 검색한다.
+# 발간연도를 지정하지 않으면 통계마다 가장 최근 발간판만 검색해 구판에만 있는 통계도 찾는다.
+# 지정 연도에 결과가 없을 때만 같은 최신판 범위로 한 번 더 검색한다.
 def search_statistics_data(
     query: str,
     publication_year: int | None = None,
@@ -417,10 +472,7 @@ def search_statistics_data(
         return _empty_response(query, publication_year)
 
     requested_publication_year = publication_year
-    publication_year_defaulted = False
-    if publication_year is None:
-        publication_year = _latest_publication_year()
-        publication_year_defaulted = publication_year is not None
+    latest_editions = publication_year is None
 
     tokens = _tokenize(query)
     semantic_query = _lexical_query(query) or query.strip()
@@ -433,18 +485,21 @@ def search_statistics_data(
         title_profile_key,
         table_profile_key,
         publication_year,
+        latest_editions,
         limit,
     )
     results = _merge_candidates(query, *rows, limit)
     filter_relaxed = False
 
     if not results and requested_publication_year is not None:
+        latest_editions = True
         rows = _fetch_rows(
             query,
             query_vec,
             title_profile_key,
             table_profile_key,
             None,
+            latest_editions,
             limit,
         )
         results = _merge_candidates(query, *rows, limit)
@@ -454,18 +509,10 @@ def search_statistics_data(
         "query": query,
         "tokens": tokens,
         "requested_publication_year": requested_publication_year,
-        "applied_publication_year": None if filter_relaxed else publication_year,
-        "publication_year_defaulted": publication_year_defaulted,
+        "applied_publication_year": None if latest_editions else publication_year,
+        "latest_edition_per_statistic": latest_editions,
         "publication_year_filter_relaxed": filter_relaxed,
-        "message": (
-            "요청한 발간연도에는 후보가 없어 발간연도 필터를 제외하고 재검색했습니다."
-            if filter_relaxed
-            else (
-                f"발간연도를 지정하지 않아 가장 최근 발간연도인 {publication_year}년을 적용했습니다."
-                if publication_year_defaulted
-                else None
-            )
-        ),
+        "message": _publication_scope_message(latest_editions, filter_relaxed),
         "count": len(results),
         "results": results,
     }
