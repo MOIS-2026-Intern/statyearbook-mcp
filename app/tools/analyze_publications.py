@@ -531,6 +531,7 @@ def _validate_request(
     operation: str,
     subject: str,
     group_by: str | None,
+    distinct_field: str | None,
     fields: list[str] | None,
     required_fields: list[str] | None,
     deduplicate: bool | None,
@@ -545,6 +546,13 @@ def _validate_request(
         raise ValueError(f"unsupported operation: {operation}")
     if subject not in METRICS:
         raise ValueError(f"unsupported subject: {subject}")
+    if distinct_field is not None:
+        if operation not in {"count", "breakdown"}:
+            raise ValueError("distinct_field can only be used with count or breakdown")
+        if distinct_field not in LISTS[subject].allowed_fields:
+            raise ValueError(
+                f"unsupported distinct_field for subject={subject}: {distinct_field}"
+            )
     if group_by is not None and group_by not in GROUPS:
         raise ValueError(f"unsupported group_by: {group_by}")
     if all_publication_years and publication_year is not None:
@@ -657,12 +665,22 @@ def _from_sql(metric: MetricSpec, group: GroupSpec | None) -> str:
     return "\n".join(parts)
 
 
+# 한 필드의 값 종류를 세는 COUNT 식을 만든다. 빈 값은 집계에서 제외한다.
+def _distinct_field_expression(field_name: str) -> str:
+    field = FIELDS[field_name]
+    expression = f"COUNT(DISTINCT {field.expression})"
+    if field.nonempty_sql:
+        expression = f"{expression} FILTER (WHERE {field.nonempty_sql})"
+    return expression
+
+
 # 검증된 overview/count/breakdown/list 템플릿 중 하나로 SQL 계획을 만든다.
 def build_query_plan(
     *,
     operation: AnalysisOperation,
     subject: AnalysisSubject,
     group_by: AnalysisGroup | None,
+    distinct_field: AnalysisField | None,
     applied_publication_year: int | None,
     chapter_no: int | None,
     section_no: int | None,
@@ -751,13 +769,18 @@ def build_query_plan(
             source_tables=metric.source_tables,
         )
 
+    count_expression = (
+        _distinct_field_expression(distinct_field)
+        if distinct_field is not None
+        else metric.expression
+    )
     if operation == "count":
         sql = "\n".join(
             part
             for part in (
                 (
                     "SELECT COUNT(DISTINCT p.pub_id) AS matched_publications, "
-                    f"{metric.expression} AS count"
+                    f"{count_expression} AS count"
                 ),
                 from_sql,
                 where_sql,
@@ -771,7 +794,7 @@ def build_query_plan(
     sql = "\n".join(
         part
         for part in (
-            f"SELECT {group.select_sql}, {metric.expression} AS count",
+            f"SELECT {group.select_sql}, {count_expression} AS count",
             from_sql,
             where_sql,
             f"GROUP BY {group.group_sql}",
@@ -806,6 +829,7 @@ def analyze_publications_data(
     operation: AnalysisOperation,
     subject: AnalysisSubject = "statistics",
     group_by: AnalysisGroup | None = None,
+    distinct_field: AnalysisField | None = None,
     fields: list[AnalysisField] | None = None,
     required_fields: list[AnalysisField] | None = None,
     deduplicate: bool | None = None,
@@ -820,6 +844,7 @@ def analyze_publications_data(
         operation,
         subject,
         group_by,
+        distinct_field,
         fields,
         required_fields,
         deduplicate,
@@ -837,6 +862,7 @@ def analyze_publications_data(
         operation=operation,
         subject=subject,
         group_by=group_by,
+        distinct_field=distinct_field,
         applied_publication_year=applied_publication_year,
         chapter_no=chapter_no,
         section_no=section_no,
@@ -899,6 +925,27 @@ def analyze_publications_data(
         )
         basis = f"{LISTS[subject].basis}; {duplicate_basis}"
         limitations = metric.limitations
+    elif distinct_field is not None:
+        alias = FIELDS[distinct_field].alias
+        response_subject = subject
+        if group_by is None:
+            definition = f"{subject} 범위에서 {alias} 필드의 중복 없는 값 종류 수"
+            basis = (
+                f"선택한 발간연도의 {subject}에 연결된 DISTINCT {alias}; "
+                "값이 비어 있는 행은 제외하며 레코드 수가 아니라 값의 가짓수"
+            )
+            limitations = metric.limitations
+        else:
+            definition = f"{group_by}별 {alias} 필드의 중복 없는 값 종류 수"
+            basis = (
+                f"선택한 발간연도의 {subject}를 {group_by} 기준으로 묶고 그룹마다 "
+                f"DISTINCT {alias}를 집계; 값이 비어 있는 행은 제외"
+            )
+            limitations = (
+                *metric.limitations,
+                f"같은 {alias} 값이 여러 그룹에 걸쳐 있으면 그룹마다 각각 세므로 "
+                "그룹 count의 합은 전체 값 종류 수보다 클 수 있다",
+            )
     else:
         response_subject = subject
         definition = metric.definition
@@ -910,6 +957,7 @@ def analyze_publications_data(
         "operation": operation,
         "subject": response_subject,
         "group_by": group_by,
+        "distinct_field": distinct_field,
         "selected_fields": selected_fields,
         "required_fields": applied_required_fields,
         "deduplicated": deduplicated,
@@ -956,6 +1004,10 @@ def register(mcp: FastMCP) -> None:
         group_by: Annotated[
             AnalysisGroup | None,
             Field(description=ANALYZE_PUBLICATIONS_FIELDS["group_by"]),
+        ] = None,
+        distinct_field: Annotated[
+            AnalysisField | None,
+            Field(description=ANALYZE_PUBLICATIONS_FIELDS["distinct_field"]),
         ] = None,
         fields: Annotated[
             list[AnalysisField] | None,
@@ -1015,6 +1067,7 @@ def register(mcp: FastMCP) -> None:
             operation=operation,
             subject=subject,
             group_by=group_by,
+            distinct_field=distinct_field,
             fields=fields,
             required_fields=required_fields,
             deduplicate=deduplicate,

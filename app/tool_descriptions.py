@@ -8,13 +8,21 @@ ANALYZE_PUBLICATIONS = (
     "overview는 한 번에 발간판 메타데이터와 주요 개수를 반환하고, count는 subject 하나의 "
     "정확한 개수를 반환하며, breakdown은 subject를 group_by 기준으로 묶고, list는 subject의 "
     "요청 필드 목록을 지정된 중복 처리 방식으로 반환한다. "
+    "'몇 개', '몇 곳', '몇 명', '몇 종류'처럼 개수를 묻는 질문은 목록이 아니라 count로 답한다. "
+    "이때 세어야 할 대상이 레코드가 아니라 특정 필드의 값이면 distinct_field에 그 필드를 넣어 "
+    "중복 없는 값의 가짓수를 센다. 예를 들어 전화번호가 몇 개인지 묻는 질문은 "
+    "subject=contacts, distinct_field=phone이며, 담당자 수는 distinct_field=officer다. "
+    "distinct_field 없이 subject=contacts로 세면 연락처 레코드 수가 나와 값의 가짓수보다 커진다. "
+    "'부서별 전화번호가 몇 개'처럼 그룹마다 값의 가짓수를 물으면 breakdown에 group_by와 "
+    "distinct_field를 함께 지정한다. "
     "subject=statistics는 statistics.stat_id 기준 논리 통계 항목, tables는 stat_tables.table_id "
     "기준 물리 표 레코드, chapters/sections는 번호 계층, organizations는 contacts.dept에 파싱된 "
     "담당 부서, source_systems는 contacts.source_system, publications는 publications.pub_id, "
     "contacts는 모든 통계 항목의 담당 부서·담당자·전화번호·출처, footnotes는 주석을 뜻한다. "
     "list에서는 사용자가 요구한 값과 이를 설명할 문맥만 fields에 넣고, 반드시 값이 있어야 하는 "
-    "핵심 필드는 required_fields에 넣는다. contacts와 footnotes는 기본적으로 각 레코드를 모두 "
-    "유지하며, 사용자가 고유값·중복 제거를 명시한 경우에만 deduplicate=true를 사용한다. "
+    "핵심 필드는 required_fields에 넣는다. contacts와 footnotes의 list는 통계 항목마다 연결된 "
+    "레코드를 모두 유지하므로, 값 자체를 겹치지 않게 나열해 달라는 요청에는 deduplicate=true를 "
+    "함께 지정한다. 개수만 필요하면 list 대신 count와 distinct_field를 쓴다. "
     "전체 통계표별 연락처를 구분해야 하면 statistic_title 또는 stat_id를 fields에 포함한다. "
     "발간연도를 생략하면 최신 발간판을 적용한다. 여러 연도 전체가 필요할 때만 "
     "all_publication_years=true를 사용한다. 임의 SQL은 받지 않으며 허용된 SELECT·JOIN·WHERE·GROUP BY "
@@ -38,6 +46,14 @@ ANALYZE_PUBLICATIONS_FIELDS = {
         "breakdown 전용 그룹 기준. publication_year, chapter, section, organization, "
         "source_system 중 하나. overview/count/list에서는 생략한다."
     ),
+    "distinct_field": (
+        "count와 breakdown 전용. 레코드 수가 아니라 이 필드의 중복 없는 값이 몇 가지인지 센다. "
+        "전화번호 개수는 subject=contacts와 distinct_field=phone, 담당자 수는 officer, "
+        "출처 URL 수는 source_url처럼 지정한다. breakdown에서는 group_by로 묶인 그룹마다 "
+        "값의 가짓수를 센다. 값이 비어 있는 행은 자동으로 제외한다. "
+        "subject가 이미 값 단위인 organizations·source_systems나 레코드 자체를 세는 "
+        "질문에서는 생략한다."
+    ),
     "fields": (
         "list 전용 반환 필드. subject에 맞는 필드 중 사용자가 요구한 것만 선택한다. "
         "발간판은 publication_year/publication_title/publication_page_count, 통계 항목은 "
@@ -52,9 +68,10 @@ ANALYZE_PUBLICATIONS_FIELDS = {
         "표시용 문맥 필드는 fields에만 넣고 required_fields에는 넣지 않는다."
     ),
     "deduplicate": (
-        "list 중복 처리. 고유값·중복 제거 요청은 true, 전체 통계 항목에 연결된 레코드를 빠짐없이 "
-        "보는 요청은 false. 생략하면 contacts/footnotes/statistics/tables는 전체 레코드를 유지하고 "
-        "장·절·담당 부서·출처 시스템·발간판 목록만 중복 제거한다."
+        "list 중복 처리. 값 자체의 목록을 겹치지 않게 보려면 true, 통계 항목마다 연결된 레코드를 "
+        "빠짐없이 보려면 false. 전화번호·담당자처럼 여러 통계 항목이 같은 값을 공유하는 필드만 "
+        "나열할 때는 true가 필요하다. 생략하면 contacts/footnotes/statistics/tables는 전체 "
+        "레코드를 유지하고 장·절·담당 부서·출처 시스템·발간판 목록만 중복 제거한다."
     ),
     "publication_year": (
         "통계연보 발간연도. 표 안 데이터 연도가 아니다. 생략하면 최신 발간연도를 적용한다."
