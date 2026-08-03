@@ -149,7 +149,7 @@ class ChatServiceModelResultTests(unittest.TestCase):
         self.assertEqual(text, "자세한 내용입니다.")
         self.assertEqual(len(model.calls), 1)
         self.assertIn("search_tables 결과 응답 형식", model.calls[0]["instructions"])
-        self.assertIn("가장 최근 발간연도", model.calls[0]["instructions"])
+        self.assertIn("통계마다 가장 최근 발간판", model.calls[0]["instructions"])
         self.assertEqual(model.calls[0]["tool_results"], [])
 
     def test_result_prompt_names_exclude_failed_tools(self) -> None:
