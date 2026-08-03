@@ -2,23 +2,51 @@
 
 ANALYZE_PUBLICATIONS = (
     "통계연보 한 발간판 또는 여러 발간판의 모든 통계 항목을 대상으로 기초통계를 집계하거나 "
-    "공통 메타데이터·연락처·출처·주석 목록을 조회한다. 개별 통계표 본문 속 수치 검색이 아니라 "
-    "연보 전체 건수, 계층 수, 기관·출처 수, 그룹별 분포 또는 전체 통계표에 걸친 정보 목록 요청에 "
-    "사용한다. operation은 다음 SQL 템플릿을 고른다: "
+    "공통 메타데이터·연락처·출처·주석 목록을 조회한다. 세는 대상은 연보라는 문서 자체의 구성 요소, "
+    "즉 수록된 통계 항목·표·장·절과 이를 작성한 담당 부서·담당자·출처·주석뿐이다. "
+    "연보 전체 건수, 계층 수, 담당 부서·출처 수, 그룹별 분포 또는 전체 통계표에 걸친 정보 목록 요청에 "
+    "사용한다. "
+    "반대로 통계표가 조사해 실어 둔 현실 세계 대상의 수는 이 도구로 세지 않는다. "
+    "'중앙행정기관은 총 몇 개', '지방자치단체 수', '공무원은 몇 명', '위원회가 몇 개'처럼 답이 "
+    "통계표 본문 수치에 있는 질문은 search_statistics로 표를 찾고 search_tables로 값을 읽는다. "
+    "이 도구의 count는 그 대상이 연보에 몇 건 수록됐는지를 셀 뿐 실제 기관 수가 아니므로, "
+    "'몇 개'라는 표현만 보고 이 도구를 고르지 않는다. "
+    "operation은 다음 SQL 템플릿을 고른다: "
     "overview는 한 번에 발간판 메타데이터와 주요 개수를 반환하고, count는 subject 하나의 "
     "정확한 개수를 반환하며, breakdown은 subject를 group_by 기준으로 묶고, list는 subject의 "
     "요청 필드 목록을 지정된 중복 처리 방식으로 반환한다. "
+    "위 대상을 두고 '몇 개', '몇 곳', '몇 명', '몇 종류'처럼 개수를 묻는 질문은 목록이 아니라 "
+    "count로 답한다. "
+    "이때 세어야 할 대상이 레코드가 아니라 특정 필드의 값이면 distinct_field에 그 필드를 넣어 "
+    "중복 없는 값의 가짓수를 센다. 예를 들어 전화번호가 몇 개인지 묻는 질문은 "
+    "subject=contacts, distinct_field=phone이며, 담당자 수는 distinct_field=officer다. "
+    "distinct_field 없이 subject=contacts로 세면 연락처 레코드 수가 나와 값의 가짓수보다 커진다. "
+    "'부서별 전화번호가 몇 개'처럼 그룹마다 값의 가짓수를 물으면 breakdown에 group_by와 "
+    "distinct_field를 함께 지정한다. "
     "subject=statistics는 statistics.stat_id 기준 논리 통계 항목, tables는 stat_tables.table_id "
     "기준 물리 표 레코드, chapters/sections는 번호 계층, organizations는 contacts.dept에 파싱된 "
     "담당 부서, source_systems는 contacts.source_system, publications는 publications.pub_id, "
     "contacts는 모든 통계 항목의 담당 부서·담당자·전화번호·출처, footnotes는 주석을 뜻한다. "
     "list에서는 사용자가 요구한 값과 이를 설명할 문맥만 fields에 넣고, 반드시 값이 있어야 하는 "
-    "핵심 필드는 required_fields에 넣는다. contacts와 footnotes는 기본적으로 각 레코드를 모두 "
-    "유지하며, 사용자가 고유값·중복 제거를 명시한 경우에만 deduplicate=true를 사용한다. "
+    "핵심 필드는 required_fields에 넣는다. contacts와 footnotes의 list는 통계 항목마다 연결된 "
+    "레코드를 모두 유지하므로, 값 자체를 겹치지 않게 나열해 달라는 요청에는 deduplicate=true를 "
+    "함께 지정한다. 개수만 필요하면 list 대신 count와 distinct_field를 쓴다. "
     "전체 통계표별 연락처를 구분해야 하면 statistic_title 또는 stat_id를 fields에 포함한다. "
-    "발간연도를 생략하면 최신 발간판을 적용한다. 여러 연도 전체가 필요할 때만 "
+    "특정 담당자·담당 부서·출처가 맡은 통계표만 필요하면 value_filters에 필드와 검색어를 넣어 "
+    "그 값을 가진 레코드만 남긴다. '홍길동 주무관이 담당한 통계표', '데이터정보화담당관이 제출한 표'처럼 "
+    "사람 이름이나 부서명으로 표를 찾는 질문이 여기에 해당한다. 담당자 이름은 통계표 제목이나 "
+    "본문에 없어 search_statistics로는 찾을 수 없으므로 subject=contacts와 value_filters를 사용한다. "
+    "담당자가 맡은 표의 제목이 필요하면 fields에 statistic_title을 포함하고, 표가 몇 개인지만 "
+    "필요하면 count와 distinct_field=stat_id를 함께 쓴다. "
+    "발간연도를 생략하면 최신 발간판을 적용한다. 담당자와 담당 부서는 발간판마다 바뀌지만, "
+    "적용한 발간판에 결과가 없으면 도구가 전체 발간판으로 넓혀 한 번 더 조회하므로 발간연도를 "
+    "바꿔 가며 다시 호출하지 않는다. 이때 publication_year_filter_relaxed가 true가 되고 결과의 "
+    "publication_year가 실제 발간판이다. 처음부터 여러 연도 전체가 필요할 때만 "
     "all_publication_years=true를 사용한다. 임의 SQL은 받지 않으며 허용된 SELECT·JOIN·WHERE·GROUP BY "
-    "조각과 필드만 조합한다. organizations는 공식 제출기관 테이블이 아니라 출처 문단의 담당 부서 기준이다."
+    "조각과 필드만 조합한다. organizations는 공식 제출기관 테이블이 아니라 출처 문단의 담당 부서 기준이다. "
+    "이 도구는 발간판마다 따로 집계할 뿐 판 사이에서 같은 항목을 잇지 못하므로, "
+    "'A년판에만 있고 B년판에는 없는', '새로 생긴', '빠진', '바뀐'처럼 두 발간판을 맞대어 봐야 하는 "
+    "질문에는 compare_publications를 사용한다."
 )
 ANALYZE_PUBLICATIONS_FIELDS = {
     "operation": (
@@ -29,11 +57,21 @@ ANALYZE_PUBLICATIONS_FIELDS = {
         "집계 대상. statistics=논리 통계 항목(stat_id), tables=물리 표 레코드(table_id), "
         "chapters=장, sections=절, organizations=contacts.dept 담당 부서, "
         "source_systems=출처 시스템, publications=발간판, contacts=담당 부서·담당자·전화번호·출처, "
-        "footnotes=주석."
+        "footnotes=주석. "
+        "organizations는 연보에 통계를 제공한 담당 부서일 뿐이므로, 통계표가 조사한 행정기관·"
+        "지방자치단체·위원회의 수를 묻는 질문에는 어떤 subject도 쓰지 않고 search_statistics로 넘긴다."
     ),
     "group_by": (
         "breakdown 전용 그룹 기준. publication_year, chapter, section, organization, "
         "source_system 중 하나. overview/count/list에서는 생략한다."
+    ),
+    "distinct_field": (
+        "count와 breakdown 전용. 레코드 수가 아니라 이 필드의 중복 없는 값이 몇 가지인지 센다. "
+        "전화번호 개수는 subject=contacts와 distinct_field=phone, 담당자 수는 officer, "
+        "출처 URL 수는 source_url처럼 지정한다. breakdown에서는 group_by로 묶인 그룹마다 "
+        "값의 가짓수를 센다. 값이 비어 있는 행은 자동으로 제외한다. "
+        "subject가 이미 값 단위인 organizations·source_systems나 레코드 자체를 세는 "
+        "질문에서는 생략한다."
     ),
     "fields": (
         "list 전용 반환 필드. subject에 맞는 필드 중 사용자가 요구한 것만 선택한다. "
@@ -46,12 +84,23 @@ ANALYZE_PUBLICATIONS_FIELDS = {
     "required_fields": (
         "list 전용 필수값 필드. fields 중 실제 요청의 핵심값으로, 값이 비어 있는 행을 제외할 때 사용한다. "
         "전화번호 요청은 phone, 담당자 요청은 officer, URL 요청은 source_url처럼 지정한다. "
+        "값이 비어 있는지만 판정하므로 특정 이름·부서로 좁히려면 value_filters를 쓴다. "
         "표시용 문맥 필드는 fields에만 넣고 required_fields에는 넣지 않는다."
     ),
+    "value_filters": (
+        "특정 값을 가진 레코드만 남기는 조건 목록으로 count·breakdown·list에서 쓴다. "
+        "담당자 이름은 officer, 담당 부서는 department, 출처 시스템은 source_system, "
+        "전화번호는 phone, 주석 내용은 note로 지정한다. subject=contacts는 department·officer·"
+        "phone·source_system·source_url, footnotes는 note_no·note, organizations는 department, "
+        "source_systems는 source_system만 조건으로 받는다. "
+        "비교는 공백·가운뎃점·대소문자를 무시한 부분 일치이므로 '홍길동'으로 '주무관 홍길동'을 찾는다. "
+        "여러 조건을 함께 주면 모두 만족하는 레코드만 남는다."
+    ),
     "deduplicate": (
-        "list 중복 처리. 고유값·중복 제거 요청은 true, 전체 통계 항목에 연결된 레코드를 빠짐없이 "
-        "보는 요청은 false. 생략하면 contacts/footnotes/statistics/tables는 전체 레코드를 유지하고 "
-        "장·절·담당 부서·출처 시스템·발간판 목록만 중복 제거한다."
+        "list 중복 처리. 값 자체의 목록을 겹치지 않게 보려면 true, 통계 항목마다 연결된 레코드를 "
+        "빠짐없이 보려면 false. 전화번호·담당자처럼 여러 통계 항목이 같은 값을 공유하는 필드만 "
+        "나열할 때는 true가 필요하다. 생략하면 contacts/footnotes/statistics/tables는 전체 "
+        "레코드를 유지하고 장·절·담당 부서·출처 시스템·발간판 목록만 중복 제거한다."
     ),
     "publication_year": (
         "통계연보 발간연도. 표 안 데이터 연도가 아니다. 생략하면 최신 발간연도를 적용한다."
@@ -67,6 +116,71 @@ ANALYZE_PUBLICATIONS_FIELDS = {
     ),
     "offset": "list 페이지 시작 위치. 첫 조회는 0이며 다음 조회는 반환된 next_offset을 사용한다.",
 }
+VALUE_FILTER_FIELDS = {
+    "field": (
+        "값을 대조할 필드. 담당자는 officer, 담당 부서는 department, 출처 시스템은 source_system, "
+        "전화번호는 phone, 출처 URL은 source_url, 주석은 note_no 또는 note를 쓴다."
+    ),
+    "contains": (
+        "그 필드에 포함되어야 할 검색어. 직함이나 괄호 설명은 빼고 이름·부서명만 넣는다. "
+        "예: '주무관 홍길동'을 찾을 때는 '홍길동'."
+    ),
+}
+
+
+COMPARE_PUBLICATIONS = (
+    "서로 다른 두 발간판(예: 2025년판과 2026년판)의 수록 항목을 맞대어, 한쪽에만 있는 항목, "
+    "양쪽에 다 있는 항목, 양쪽에 있으나 값이 달라진 항목을 찾는다. "
+    "'25년판에만 있고 26년판에는 없는 자료가 몇 개인지', '새로 생긴 통계', '없어진 통계', "
+    "'담당 부서가 바뀐 통계'처럼 두 판을 비교해야 답할 수 있는 질문에 사용한다. "
+    "한 발간판 안의 개수나 분포만 필요하면 analyze_publications를 사용한다. "
+    "operation은 summary=다섯 가지 건수를 한 번에, only_in_base=base 발간판에만 있는 항목 목록, "
+    "only_in_target=target 발간판에만 있는 항목 목록, in_both=양쪽 공통 항목을 base·target 값 쌍으로, "
+    "changed=공통 항목 중 비교 필드 값이 달라진 항목이다. 건수를 물으면 먼저 summary를 부르고, "
+    "'그게 뭔데'처럼 실제 항목을 물으면 only_in_base 또는 only_in_target으로 목록을 가져온다. "
+    "발간판마다 목차 번호가 다시 매겨지므로 기본 대응 기준은 이름(match_by=title)이다. "
+    "각 항목의 실제 표 수치나 내용까지 답해야 하면 결과의 stat_id로 search_tables를 호출한다. "
+    "응답의 limitations와 record_count를 그대로 근거로 인용하고, 임의 SQL은 받지 않는다."
+)
+COMPARE_PUBLICATIONS_FIELDS = {
+    "operation": (
+        "비교 방식. summary=한쪽에만 있는 수·공통 수·변경 수와 양쪽 총계, "
+        "only_in_base=base 발간판에만 있는 항목 목록, only_in_target=target 발간판에만 있는 항목 목록, "
+        "in_both=양쪽 공통 항목을 base_/target_ 값 쌍으로, changed=공통 항목 중 값이 달라진 항목."
+    ),
+    "subject": (
+        "비교 대상. statistics=논리 통계 항목, chapters=장, sections=절, "
+        "organizations=contacts.dept 담당 부서, source_systems=출처 시스템. "
+        "'자료', '통계', '표'를 묻는 질문은 statistics를 쓴다."
+    ),
+    "match_by": (
+        "두 발간판에서 같은 항목으로 볼 기준. title=이름의 공백·기호 차이를 지운 값(기본값), "
+        "title_and_unit=이름과 단위를 함께 비교해 이름이 같고 단위가 다른 항목을 나누며 statistics 전용, "
+        "number=목차 번호(statistics는 ref_id, chapters·sections는 장·절 번호). "
+        "목차 번호는 발간판마다 다시 매겨지므로 number는 사용자가 번호 기준을 요구할 때만 쓴다. "
+        "organizations와 source_systems는 title만 지원한다."
+    ),
+    "base_publication_year": (
+        "비교 기준이 되는 발간연도. '25년판에만 있고 26년판에 없는 자료'라면 2025다. "
+        "표 안 데이터 연도가 아니다. 두 연도를 모두 생략하면 가장 최근 두 발간판을 비교한다."
+    ),
+    "target_publication_year": (
+        "맞대어 볼 발간연도. '25년판에만 있고 26년판에 없는 자료'라면 2026이다. "
+        "생략하면 base 다음으로 가까운 최신 발간판을 적용한다."
+    ),
+    "fields": (
+        "반환할 항목 필드이자 changed의 변경 판정 대상. statistics는 stat_id/ref_id/장·절·제목·"
+        "단위·기준일·시작 페이지, chapters는 chapter_no/chapter, sections는 chapter_no/section_no/"
+        "section, organizations는 organization, source_systems는 source_system을 쓸 수 있다. "
+        "생략하면 subject별 기본 필드를 반환한다. 항목의 표 내용을 이어서 조회하려면 stat_id를 포함한다. "
+        "stat_id와 page_start는 발간판마다 새로 부여되므로 변경 판정에서 제외된다."
+    ),
+    "limit": (
+        "목록 operation이 반환할 최대 행 수로 1~500. truncated=true이면 next_offset으로 "
+        "다음 목록을 조회한다. summary에는 영향이 없다."
+    ),
+    "offset": "목록 페이지 시작 위치. 첫 조회는 0이며 다음 조회는 반환된 next_offset을 사용한다.",
+}
 
 
 SEARCH_STATISTICS = (
@@ -76,6 +190,9 @@ SEARCH_STATISTICS = (
     "제목·컬럼·행 항목 중 실제 검색 근거를 나타낸다. "
     "이 도구의 결과는 후보 메타데이터이므로 "
     "통계 수치를 답할 때는 선택한 stat_id로 search_tables를 호출해 표 본문을 확인한다. "
+    "'중앙행정기관은 총 몇 개', '공무원은 몇 명'처럼 개수를 묻더라도 그 대상이 연보의 수록 항목이나 "
+    "담당 부서가 아니라 통계표가 조사한 현실 대상(행정기관, 지방자치단체, 위원회, 공무원, 인구 등)이면 "
+    "analyze_publications가 아니라 이 도구로 표를 찾은 뒤 search_tables로 수치를 읽는다. "
     "publication_year는 통계연보의 발간판 연도이며 표 안의 데이터 연도나 기준연도가 아니다. "
     "publication_year를 생략하면 통계마다 가장 최근 발간판을 적용하므로 최신판에서 빠진 통계도 "
     "직전 발간판에서 찾는다. 이때 후보마다 발간판이 다를 수 있으므로 발간연도는 각 결과의 "

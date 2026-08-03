@@ -5,12 +5,22 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from app.db import connect
 from app.tool_descriptions import (
     ANALYZE_PUBLICATIONS,
     ANALYZE_PUBLICATIONS_FIELDS,
+    VALUE_FILTER_FIELDS,
+)
+from app.tools._publication_sql import (
+    OFFICER_SQL,
+    ORGANIZATION_SQL,
+    PHONE_SQL,
+    SOURCE_SYSTEM_SQL,
+    SOURCE_URL_SQL,
+    contains_match_key_sql,
+    normalize_match_key,
 )
 
 
@@ -67,15 +77,6 @@ AnalysisField = Literal[
 ]
 
 LATEST_PUBLICATION_YEAR_SQL = "SELECT MAX(year) AS publication_year FROM publications"
-ORGANIZATION_SQL = (
-    "NULLIF(regexp_replace(BTRIM(c.dept), '\\s+', ' ', 'g'), '')"
-)
-SOURCE_SYSTEM_SQL = (
-    "NULLIF(regexp_replace(BTRIM(c.source_system), '\\s+', ' ', 'g'), '')"
-)
-OFFICER_SQL = "NULLIF(regexp_replace(BTRIM(c.officer), '\\s+', ' ', 'g'), '')"
-PHONE_SQL = "NULLIF(BTRIM(c.phone), '')"
-SOURCE_URL_SQL = "NULLIF(BTRIM(c.source_url), '')"
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,18 @@ class QueryPlan:
     sql: str
     params: tuple[Any, ...]
     source_tables: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AppliedValueFilter:
+    field: str
+    contains: str
+    match_key: str
+
+
+class ValueFilter(BaseModel):
+    field: AnalysisField = Field(description=VALUE_FILTER_FIELDS["field"])
+    contains: str = Field(description=VALUE_FILTER_FIELDS["contains"])
 
 
 METRICS: dict[str, MetricSpec] = {
@@ -459,6 +472,7 @@ LISTS: dict[str, ListSpec] = {
         row_filter_sql=f"{ORGANIZATION_SQL} IS NOT NULL",
         definition="각 통계표에 기재된 담당 부서 목록",
         basis="담당 부서명을 정규화해 조회",
+        filter_fields=frozenset({"department"}),
         deduplicate_default=True,
     ),
     "source_systems": ListSpec(
@@ -467,6 +481,7 @@ LISTS: dict[str, ListSpec] = {
         row_filter_sql=f"{SOURCE_SYSTEM_SQL} IS NOT NULL",
         definition="각 통계표에 기재된 출처 시스템 목록",
         basis="출처 시스템명을 정규화해 조회",
+        filter_fields=frozenset({"source_system"}),
         deduplicate_default=True,
     ),
     "contacts": ListSpec(
@@ -533,6 +548,7 @@ def _validate_request(
     operation: str,
     subject: str,
     group_by: str | None,
+    distinct_field: str | None,
     fields: list[str] | None,
     required_fields: list[str] | None,
     deduplicate: bool | None,
@@ -547,6 +563,13 @@ def _validate_request(
         raise ValueError(f"unsupported operation: {operation}")
     if subject not in METRICS:
         raise ValueError(f"unsupported subject: {subject}")
+    if distinct_field is not None:
+        if operation not in {"count", "breakdown"}:
+            raise ValueError("distinct_field can only be used with count or breakdown")
+        if distinct_field not in LISTS[subject].allowed_fields:
+            raise ValueError(
+                f"unsupported distinct_field for subject={subject}: {distinct_field}"
+            )
     if group_by is not None and group_by not in GROUPS:
         raise ValueError(f"unsupported group_by: {group_by}")
     if all_publication_years and publication_year is not None:
@@ -608,6 +631,45 @@ def _validate_request(
         )
 
 
+# 값 조건을 검증하고 SQL에서 쓸 비교 키까지 붙인 형태로 바꾼다.
+def _resolve_value_filters(
+    operation: str,
+    subject: str,
+    value_filters: list[dict[str, str]] | None,
+) -> tuple[AppliedValueFilter, ...]:
+    if not value_filters:
+        return ()
+    if operation == "overview":
+        raise ValueError(
+            "value_filters can only be used with count, breakdown, or list"
+        )
+    supported_fields = LISTS[subject].filter_fields
+    resolved: dict[tuple[str, str], AppliedValueFilter] = {}
+    for value_filter in value_filters:
+        field_name = value_filter.get("field")
+        contains = value_filter.get("contains") or ""
+        if field_name not in supported_fields:
+            supported = ", ".join(sorted(supported_fields)) or "없음"
+            raise ValueError(
+                f"unsupported value_filters field for subject={subject}: "
+                f"{field_name}; supported fields: {supported}"
+            )
+        match_key = normalize_match_key(contains)
+        if not match_key:
+            raise ValueError(
+                f"value_filters contains must not be empty: field={field_name}"
+            )
+        resolved.setdefault(
+            (field_name, match_key),
+            AppliedValueFilter(
+                field=field_name,
+                contains=contains,
+                match_key=match_key,
+            ),
+        )
+    return tuple(resolved.values())
+
+
 # 연도 범위를 최신·특정·전체 중 하나로 결정한다.
 def _resolve_publication_scope(
     publication_year: int | None,
@@ -627,6 +689,7 @@ def _where_parts(
     chapter_no: int | None,
     section_no: int | None,
     group: GroupSpec | None,
+    value_filters: tuple[AppliedValueFilter, ...] = (),
 ) -> tuple[list[str], list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
@@ -639,6 +702,12 @@ def _where_parts(
     if section_no is not None:
         clauses.append("s.section_no = %s")
         params.append(section_no)
+    # 공백·가운뎃점·대소문자를 지운 비교 키로 부분 일치를 판정한다.
+    for value_filter in value_filters:
+        clauses.append(
+            contains_match_key_sql(FIELDS[value_filter.field].expression)
+        )
+        params.append(value_filter.match_key)
     if group is not None and group.nonempty_sql:
         clauses.append(group.nonempty_sql)
     return clauses, params
@@ -659,12 +728,22 @@ def _from_sql(metric: MetricSpec, group: GroupSpec | None) -> str:
     return "\n".join(parts)
 
 
+# 한 필드의 값 종류를 세는 COUNT 식을 만든다. 빈 값은 집계에서 제외한다.
+def _distinct_field_expression(field_name: str) -> str:
+    field = FIELDS[field_name]
+    expression = f"COUNT(DISTINCT {field.expression})"
+    if field.nonempty_sql:
+        expression = f"{expression} FILTER (WHERE {field.nonempty_sql})"
+    return expression
+
+
 # 검증된 overview/count/breakdown/list 템플릿 중 하나로 SQL 계획을 만든다.
 def build_query_plan(
     *,
     operation: AnalysisOperation,
     subject: AnalysisSubject,
     group_by: AnalysisGroup | None,
+    distinct_field: AnalysisField | None,
     applied_publication_year: int | None,
     chapter_no: int | None,
     section_no: int | None,
@@ -673,6 +752,7 @@ def build_query_plan(
     required_fields: list[AnalysisField] | None = None,
     deduplicate: bool | None = None,
     offset: int = 0,
+    value_filters: tuple[AppliedValueFilter, ...] = (),
 ) -> QueryPlan:
     metric = METRICS[subject]
     group = GROUPS[group_by] if group_by is not None else None
@@ -681,6 +761,7 @@ def build_query_plan(
         chapter_no,
         section_no,
         group,
+        value_filters,
     )
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
@@ -753,13 +834,18 @@ def build_query_plan(
             source_tables=metric.source_tables,
         )
 
+    count_expression = (
+        _distinct_field_expression(distinct_field)
+        if distinct_field is not None
+        else metric.expression
+    )
     if operation == "count":
         sql = "\n".join(
             part
             for part in (
                 (
                     "SELECT COUNT(DISTINCT p.pub_id) AS matched_publications, "
-                    f"{metric.expression} AS count"
+                    f"{count_expression} AS count"
                 ),
                 from_sql,
                 where_sql,
@@ -773,7 +859,7 @@ def build_query_plan(
     sql = "\n".join(
         part
         for part in (
-            f"SELECT {group.select_sql}, {metric.expression} AS count",
+            f"SELECT {group.select_sql}, {count_expression} AS count",
             from_sql,
             where_sql,
             f"GROUP BY {group.group_sql}",
@@ -802,14 +888,70 @@ def _execute_plan(plan: QueryPlan) -> list[dict[str, Any]]:
         return list(cur.fetchall())
 
 
+# 결과가 비었는지 판정한다. count는 행이 아니라 집계값이 0인지를 본다.
+def _is_empty_result(operation: str, rows: list[dict[str, Any]]) -> bool:
+    if operation == "count":
+        return not rows or not int(rows[0].get("count") or 0)
+    return not rows
+
+
+# 전체 발간판으로 넓혀 다시 조회할 수 있는 호출인지 판단한다.
+# 담당자와 담당 부서는 발간판마다 바뀌므로 최신판에만 없는 이름을 구판에서 찾아준다.
+def _can_relax_publication_year(
+    applied_publication_year: int | None,
+    all_publication_years: bool,
+    offset: int,
+) -> bool:
+    if applied_publication_year is None or all_publication_years:
+        return False
+    # 페이지를 넘기는 중이면 앞 페이지와 범위가 달라지므로 넓히지 않는다.
+    return offset == 0
+
+
+# 넓혀 조회한 결과의 발간판을 답변에서 밝힐 수 있도록 발간연도를 목록에 넣는다.
+def _fields_with_publication_year(
+    subject: str,
+    fields: list[AnalysisField] | None,
+) -> list[AnalysisField]:
+    selected = list(fields if fields is not None else LISTS[subject].default_fields)
+    if "publication_year" in selected:
+        return selected
+    return ["publication_year", *selected]
+
+
+# 적용한 발간판 범위를 모델이 그대로 인용할 수 있는 안내 문구로 만든다.
+def _publication_scope_message(
+    attempted_publication_year: int | None,
+    publication_year_defaulted: bool,
+    filter_relaxed: bool,
+) -> str | None:
+    if attempted_publication_year is None:
+        return None
+    source = (
+        f"발간연도를 지정하지 않아 최신 발간판인 {attempted_publication_year}년판을 먼저 조회했으나"
+        if publication_year_defaulted
+        else f"{attempted_publication_year}년 발간판에는"
+    )
+    if filter_relaxed:
+        return (
+            f"{source} 결과가 없어 전체 발간판에서 다시 조회했습니다. "
+            "각 결과의 publication_year가 실제 발간판입니다."
+        )
+    return (
+        f"{source} 결과가 없었고, 전체 발간판을 다시 조회해도 결과가 없습니다."
+    )
+
+
 # 현재 스키마 위에서 연보 단위 기초통계 또는 전체 메타데이터 목록을 조회한다.
 def analyze_publications_data(
     *,
     operation: AnalysisOperation,
     subject: AnalysisSubject = "statistics",
     group_by: AnalysisGroup | None = None,
+    distinct_field: AnalysisField | None = None,
     fields: list[AnalysisField] | None = None,
     required_fields: list[AnalysisField] | None = None,
+    value_filters: list[dict[str, str]] | None = None,
     deduplicate: bool | None = None,
     publication_year: int | None = None,
     all_publication_years: bool = False,
@@ -822,6 +964,7 @@ def analyze_publications_data(
         operation,
         subject,
         group_by,
+        distinct_field,
         fields,
         required_fields,
         deduplicate,
@@ -832,23 +975,71 @@ def analyze_publications_data(
         limit,
         offset,
     )
+    applied_value_filters = _resolve_value_filters(operation, subject, value_filters)
     applied_publication_year, publication_year_defaulted = (
         _resolve_publication_scope(publication_year, all_publication_years)
     )
+    applied_fields = fields
     plan = build_query_plan(
         operation=operation,
         subject=subject,
         group_by=group_by,
+        distinct_field=distinct_field,
         applied_publication_year=applied_publication_year,
         chapter_no=chapter_no,
         section_no=section_no,
         limit=limit,
-        fields=fields,
+        fields=applied_fields,
         required_fields=required_fields,
         deduplicate=deduplicate,
         offset=offset,
+        value_filters=applied_value_filters,
     )
     rows = _execute_plan(plan)
+
+    # 한 발간판에서 결과가 없으면 전체 발간판으로 넓혀 한 번만 다시 조회한다.
+    attempted_publication_year = applied_publication_year
+    publication_year_filter_relaxed = False
+    scope_message: str | None = None
+    if _is_empty_result(operation, rows) and _can_relax_publication_year(
+        applied_publication_year,
+        all_publication_years,
+        offset,
+    ):
+        relaxed_fields = (
+            _fields_with_publication_year(subject, fields)
+            if operation == "list"
+            else applied_fields
+        )
+        relaxed_plan = build_query_plan(
+            operation=operation,
+            subject=subject,
+            group_by=group_by,
+            distinct_field=distinct_field,
+            applied_publication_year=None,
+            chapter_no=chapter_no,
+            section_no=section_no,
+            limit=limit,
+            fields=relaxed_fields,
+            required_fields=required_fields,
+            deduplicate=deduplicate,
+            offset=offset,
+            value_filters=applied_value_filters,
+        )
+        relaxed_rows = _execute_plan(relaxed_plan)
+        publication_year_filter_relaxed = not _is_empty_result(operation, relaxed_rows)
+        # 넓혀도 결과가 없으면 원래 발간판 기준 응답을 그대로 둔다.
+        if publication_year_filter_relaxed:
+            plan = relaxed_plan
+            rows = relaxed_rows
+            applied_fields = relaxed_fields
+            applied_publication_year = None
+        scope_message = _publication_scope_message(
+            attempted_publication_year,
+            publication_year_defaulted,
+            publication_year_filter_relaxed,
+        )
+
     metric = METRICS[subject]
     selected_fields: list[str] | None = None
     applied_required_fields: list[str] | None = None
@@ -857,7 +1048,9 @@ def analyze_publications_data(
     if operation == "list":
         list_spec = LISTS[subject]
         selected_fields = list(
-            dict.fromkeys(fields if fields is not None else list_spec.default_fields)
+            dict.fromkeys(
+                applied_fields if applied_fields is not None else list_spec.default_fields
+            )
         )
         applied_required_fields = list(dict.fromkeys(required_fields or ()))
         deduplicated = (
@@ -901,24 +1094,65 @@ def analyze_publications_data(
         )
         basis = f"{LISTS[subject].basis}; {duplicate_basis}"
         limitations = metric.limitations
+    elif distinct_field is not None:
+        alias = FIELDS[distinct_field].alias
+        response_subject = subject
+        if group_by is None:
+            definition = f"{subject} 범위에서 {alias} 필드의 중복 없는 값 종류 수"
+            basis = (
+                f"선택한 발간연도의 {subject}에 연결된 DISTINCT {alias}; "
+                "값이 비어 있는 행은 제외하며 레코드 수가 아니라 값의 가짓수"
+            )
+            limitations = metric.limitations
+        else:
+            definition = f"{group_by}별 {alias} 필드의 중복 없는 값 종류 수"
+            basis = (
+                f"선택한 발간연도의 {subject}를 {group_by} 기준으로 묶고 그룹마다 "
+                f"DISTINCT {alias}를 집계; 값이 비어 있는 행은 제외"
+            )
+            limitations = (
+                *metric.limitations,
+                f"같은 {alias} 값이 여러 그룹에 걸쳐 있으면 그룹마다 각각 세므로 "
+                "그룹 count의 합은 전체 값 종류 수보다 클 수 있다",
+            )
     else:
         response_subject = subject
         definition = metric.definition
         basis = metric.basis
         limitations = metric.limitations
 
+    # 값 조건은 어떤 operation이든 산출 근거에 함께 드러낸다.
+    if applied_value_filters:
+        conditions = ", ".join(
+            f"{FIELDS[item.field].alias}에 '{item.contains}' 포함"
+            for item in applied_value_filters
+        )
+        basis = f"{basis}; {conditions} 조건을 만족하는 행만 대상으로 한다"
+    if publication_year_filter_relaxed:
+        basis = (
+            f"{basis}; {attempted_publication_year}년 발간판에 결과가 없어 "
+            "전체 발간판을 대상으로 다시 조회했다"
+        )
+
     response: dict[str, Any] = {
         "ok": True,
         "operation": operation,
         "subject": response_subject,
         "group_by": group_by,
+        "distinct_field": distinct_field,
         "selected_fields": selected_fields,
         "required_fields": applied_required_fields,
+        "value_filters": [
+            {"field": item.field, "contains": item.contains}
+            for item in applied_value_filters
+        ],
         "deduplicated": deduplicated,
         "requested_publication_year": publication_year,
         "applied_publication_year": applied_publication_year,
         "publication_year_defaulted": publication_year_defaulted,
+        "publication_year_filter_relaxed": publication_year_filter_relaxed,
         "all_publication_years": all_publication_years,
+        "message": scope_message,
         "filters": filters,
         "definition": definition,
         "basis": basis,
@@ -959,6 +1193,10 @@ def register(mcp: FastMCP) -> None:
             AnalysisGroup | None,
             Field(description=ANALYZE_PUBLICATIONS_FIELDS["group_by"]),
         ] = None,
+        distinct_field: Annotated[
+            AnalysisField | None,
+            Field(description=ANALYZE_PUBLICATIONS_FIELDS["distinct_field"]),
+        ] = None,
         fields: Annotated[
             list[AnalysisField] | None,
             Field(description=ANALYZE_PUBLICATIONS_FIELDS["fields"]),
@@ -966,6 +1204,10 @@ def register(mcp: FastMCP) -> None:
         required_fields: Annotated[
             list[AnalysisField] | None,
             Field(description=ANALYZE_PUBLICATIONS_FIELDS["required_fields"]),
+        ] = None,
+        value_filters: Annotated[
+            list[ValueFilter] | None,
+            Field(description=ANALYZE_PUBLICATIONS_FIELDS["value_filters"]),
         ] = None,
         deduplicate: Annotated[
             bool | None,
@@ -1017,8 +1259,14 @@ def register(mcp: FastMCP) -> None:
             operation=operation,
             subject=subject,
             group_by=group_by,
+            distinct_field=distinct_field,
             fields=fields,
             required_fields=required_fields,
+            value_filters=(
+                [item.model_dump() for item in value_filters]
+                if value_filters is not None
+                else None
+            ),
             deduplicate=deduplicate,
             publication_year=publication_year,
             all_publication_years=all_publication_years,
