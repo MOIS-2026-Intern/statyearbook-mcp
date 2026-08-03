@@ -24,7 +24,15 @@ class SystemPromptTests(unittest.TestCase):
         self.assertIn("산출 기준만 밝힙니다", prompt)
         self.assertIn("limitations를 별도의", prompt)
         self.assertIn("내부 구현 표현", prompt)
-        self.assertIn("공식 제출기관 수로 단정하지 않습니다", prompt)
+        self.assertIn("모든 통계표에 걸친 메타데이터·연락처", prompt)
+        self.assertIn("analyze_publications의 list를 사용", prompt)
+        self.assertIn("통계표 지정을 요구하지 않습니다", prompt)
+        self.assertIn("핵심값은 required_fields", prompt)
+        self.assertIn("deduplicate=false", prompt)
+        self.assertIn("statistic_title을 fields에 포함", prompt)
+        self.assertIn("list는 selected_fields", prompt)
+        self.assertIn("고유 전화번호·고유 담당자", prompt)
+        self.assertIn("truncated가 true이면 next_offset", prompt)
 
 
 if __name__ == "__main__":

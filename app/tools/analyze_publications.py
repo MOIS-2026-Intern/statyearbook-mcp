@@ -14,7 +14,7 @@ from app.tool_descriptions import (
 )
 
 
-AnalysisOperation = Literal["overview", "count", "breakdown"]
+AnalysisOperation = Literal["overview", "count", "breakdown", "list"]
 AnalysisSubject = Literal[
     "statistics",
     "tables",
@@ -23,6 +23,8 @@ AnalysisSubject = Literal[
     "organizations",
     "source_systems",
     "publications",
+    "contacts",
+    "footnotes",
 ]
 AnalysisGroup = Literal[
     "publication_year",
@@ -30,6 +32,38 @@ AnalysisGroup = Literal[
     "section",
     "organization",
     "source_system",
+]
+AnalysisField = Literal[
+    "publication_year",
+    "publication_title",
+    "publication_page_count",
+    "stat_id",
+    "ref_id",
+    "chapter_no",
+    "chapter",
+    "section_no",
+    "section",
+    "level3_title",
+    "level4_title",
+    "statistic_title",
+    "unit",
+    "base_date",
+    "page_start",
+    "table_id",
+    "table_seq",
+    "table_caption",
+    "row_count",
+    "column_count",
+    "contact_id",
+    "department",
+    "officer",
+    "phone",
+    "source_system",
+    "source_url",
+    "note_id",
+    "note_seq",
+    "note_no",
+    "note",
 ]
 
 LATEST_PUBLICATION_YEAR_SQL = "SELECT MAX(year) AS publication_year FROM publications"
@@ -39,6 +73,9 @@ ORGANIZATION_SQL = (
 SOURCE_SYSTEM_SQL = (
     "NULLIF(regexp_replace(BTRIM(c.source_system), '\\s+', ' ', 'g'), '')"
 )
+OFFICER_SQL = "NULLIF(regexp_replace(BTRIM(c.officer), '\\s+', ' ', 'g'), '')"
+PHONE_SQL = "NULLIF(BTRIM(c.phone), '')"
+SOURCE_URL_SQL = "NULLIF(BTRIM(c.source_url), '')"
 
 
 @dataclass(frozen=True)
@@ -50,6 +87,7 @@ class MetricSpec:
     limitations: tuple[str, ...] = ()
     requires_tables: bool = False
     requires_contacts: bool = False
+    requires_footnotes: bool = False
 
 
 @dataclass(frozen=True)
@@ -59,6 +97,24 @@ class GroupSpec:
     nonempty_sql: str | None
     order_sql: str
     requires_contacts: bool = False
+
+
+@dataclass(frozen=True)
+class FieldSpec:
+    expression: str
+    alias: str
+    nonempty_sql: str | None = None
+
+
+@dataclass(frozen=True)
+class ListSpec:
+    default_fields: tuple[str, ...]
+    allowed_fields: frozenset[str]
+    row_filter_sql: str
+    definition: str
+    basis: str
+    filter_fields: frozenset[str] = frozenset()
+    deduplicate_default: bool = False
 
 
 @dataclass(frozen=True)
@@ -129,6 +185,20 @@ METRICS: dict[str, MetricSpec] = {
         basis="DISTINCT publications.pub_id",
         source_tables=("publications",),
     ),
+    "contacts": MetricSpec(
+        expression="COUNT(DISTINCT c.contact_id)",
+        definition="통계 항목에 연결된 연락처 레코드 수",
+        basis="선택한 발간연도의 고유 연락처 레코드",
+        source_tables=("publications", "statistics", "contacts"),
+        requires_contacts=True,
+    ),
+    "footnotes": MetricSpec(
+        expression="COUNT(DISTINCT f.note_id)",
+        definition="통계 항목에 연결된 주석 레코드 수",
+        basis="선택한 발간연도의 고유 주석 레코드",
+        source_tables=("publications", "statistics", "footnotes"),
+        requires_footnotes=True,
+    ),
 }
 
 GROUPS: dict[str, GroupSpec] = {
@@ -165,6 +235,264 @@ GROUPS: dict[str, GroupSpec] = {
         nonempty_sql=f"{SOURCE_SYSTEM_SQL} IS NOT NULL",
         order_sql="source_system",
         requires_contacts=True,
+    ),
+}
+
+FIELDS: dict[str, FieldSpec] = {
+    "publication_year": FieldSpec("p.year", "publication_year"),
+    "publication_title": FieldSpec("p.title", "publication_title"),
+    "publication_page_count": FieldSpec(
+        "p.page_count",
+        "publication_page_count",
+        "p.page_count IS NOT NULL",
+    ),
+    "stat_id": FieldSpec("s.stat_id", "stat_id", "s.stat_id IS NOT NULL"),
+    "ref_id": FieldSpec("s.ref_id", "ref_id", "NULLIF(BTRIM(s.ref_id), '') IS NOT NULL"),
+    "chapter_no": FieldSpec(
+        "s.chapter_no",
+        "chapter_no",
+        "s.chapter_no IS NOT NULL",
+    ),
+    "chapter": FieldSpec(
+        "s.chapter",
+        "chapter",
+        "NULLIF(BTRIM(s.chapter), '') IS NOT NULL",
+    ),
+    "section_no": FieldSpec(
+        "s.section_no",
+        "section_no",
+        "s.section_no IS NOT NULL",
+    ),
+    "section": FieldSpec(
+        "s.section",
+        "section",
+        "NULLIF(BTRIM(s.section), '') IS NOT NULL",
+    ),
+    "level3_title": FieldSpec(
+        "s.level3_title",
+        "level3_title",
+        "NULLIF(BTRIM(s.level3_title), '') IS NOT NULL",
+    ),
+    "level4_title": FieldSpec(
+        "s.level4_title",
+        "level4_title",
+        "NULLIF(BTRIM(s.level4_title), '') IS NOT NULL",
+    ),
+    "statistic_title": FieldSpec("s.title_ko", "statistic_title"),
+    "unit": FieldSpec("s.unit", "unit", "NULLIF(BTRIM(s.unit), '') IS NOT NULL"),
+    "base_date": FieldSpec(
+        "s.base_date",
+        "base_date",
+        "NULLIF(BTRIM(s.base_date), '') IS NOT NULL",
+    ),
+    "page_start": FieldSpec(
+        "s.page_start",
+        "page_start",
+        "s.page_start IS NOT NULL",
+    ),
+    "table_id": FieldSpec("t.table_id", "table_id", "t.table_id IS NOT NULL"),
+    "table_seq": FieldSpec("t.seq", "table_seq", "t.seq IS NOT NULL"),
+    "table_caption": FieldSpec(
+        "t.caption",
+        "table_caption",
+        "NULLIF(BTRIM(t.caption), '') IS NOT NULL",
+    ),
+    "row_count": FieldSpec("t.n_rows", "row_count", "t.n_rows IS NOT NULL"),
+    "column_count": FieldSpec(
+        "t.n_cols",
+        "column_count",
+        "t.n_cols IS NOT NULL",
+    ),
+    "contact_id": FieldSpec(
+        "c.contact_id",
+        "contact_id",
+        "c.contact_id IS NOT NULL",
+    ),
+    "department": FieldSpec(ORGANIZATION_SQL, "department", f"{ORGANIZATION_SQL} IS NOT NULL"),
+    "officer": FieldSpec(OFFICER_SQL, "officer", f"{OFFICER_SQL} IS NOT NULL"),
+    "phone": FieldSpec(PHONE_SQL, "phone", f"{PHONE_SQL} IS NOT NULL"),
+    "source_system": FieldSpec(
+        SOURCE_SYSTEM_SQL,
+        "source_system",
+        f"{SOURCE_SYSTEM_SQL} IS NOT NULL",
+    ),
+    "source_url": FieldSpec(
+        SOURCE_URL_SQL,
+        "source_url",
+        f"{SOURCE_URL_SQL} IS NOT NULL",
+    ),
+    "note_id": FieldSpec("f.note_id", "note_id", "f.note_id IS NOT NULL"),
+    "note_seq": FieldSpec("f.seq", "note_seq", "f.seq IS NOT NULL"),
+    "note_no": FieldSpec(
+        "f.note_no",
+        "note_no",
+        "NULLIF(BTRIM(f.note_no), '') IS NOT NULL",
+    ),
+    "note": FieldSpec(
+        "f.content",
+        "note",
+        "NULLIF(BTRIM(f.content), '') IS NOT NULL",
+    ),
+}
+
+PUBLICATION_FIELDS = frozenset(
+    {"publication_year", "publication_title", "publication_page_count"}
+)
+STATISTIC_FIELDS = frozenset(
+    {
+        "publication_year",
+        "stat_id",
+        "ref_id",
+        "chapter_no",
+        "chapter",
+        "section_no",
+        "section",
+        "level3_title",
+        "level4_title",
+        "statistic_title",
+        "unit",
+        "base_date",
+        "page_start",
+    }
+)
+TABLE_FIELDS = frozenset(
+    {
+        "publication_year",
+        "stat_id",
+        "ref_id",
+        "statistic_title",
+        "table_id",
+        "table_seq",
+        "table_caption",
+        "row_count",
+        "column_count",
+    }
+)
+CONTACT_FIELDS = frozenset(
+    {
+        "publication_year",
+        "stat_id",
+        "ref_id",
+        "statistic_title",
+        "contact_id",
+        "department",
+        "officer",
+        "phone",
+        "source_system",
+        "source_url",
+    }
+)
+FOOTNOTE_FIELDS = frozenset(
+    {
+        "publication_year",
+        "stat_id",
+        "ref_id",
+        "statistic_title",
+        "note_id",
+        "note_seq",
+        "note_no",
+        "note",
+    }
+)
+
+LISTS: dict[str, ListSpec] = {
+    "publications": ListSpec(
+        default_fields=(
+            "publication_year",
+            "publication_title",
+            "publication_page_count",
+        ),
+        allowed_fields=PUBLICATION_FIELDS,
+        row_filter_sql="p.pub_id IS NOT NULL",
+        definition="통계연보 발간판 목록",
+        basis="발간판 메타데이터를 조회",
+        deduplicate_default=True,
+    ),
+    "statistics": ListSpec(
+        default_fields=("stat_id", "ref_id", "statistic_title", "page_start"),
+        allowed_fields=STATISTIC_FIELDS,
+        row_filter_sql="s.stat_id IS NOT NULL",
+        definition="통계연보에 수록된 논리 통계 항목 목록",
+        basis="통계 항목 메타데이터를 조회",
+    ),
+    "tables": ListSpec(
+        default_fields=(
+            "stat_id",
+            "statistic_title",
+            "table_seq",
+            "table_caption",
+            "row_count",
+            "column_count",
+        ),
+        allowed_fields=TABLE_FIELDS,
+        row_filter_sql="t.table_id IS NOT NULL",
+        definition="통계연보에 저장된 물리 통계표 목록",
+        basis="통계표 레코드의 제목·순번·크기 메타데이터를 조회",
+    ),
+    "chapters": ListSpec(
+        default_fields=("chapter_no", "chapter"),
+        allowed_fields=frozenset({"publication_year", "chapter_no", "chapter"}),
+        row_filter_sql="s.chapter_no IS NOT NULL",
+        definition="통계연보의 장 목록",
+        basis="장 번호와 장 제목을 조회",
+        deduplicate_default=True,
+    ),
+    "sections": ListSpec(
+        default_fields=("chapter_no", "section_no", "section"),
+        allowed_fields=frozenset(
+            {
+                "publication_year",
+                "chapter_no",
+                "chapter",
+                "section_no",
+                "section",
+            }
+        ),
+        row_filter_sql="s.chapter_no IS NOT NULL AND s.section_no IS NOT NULL",
+        definition="통계연보의 절 목록",
+        basis="장·절 번호와 절 제목을 조회",
+        deduplicate_default=True,
+    ),
+    "organizations": ListSpec(
+        default_fields=("department",),
+        allowed_fields=frozenset({"publication_year", "department"}),
+        row_filter_sql=f"{ORGANIZATION_SQL} IS NOT NULL",
+        definition="각 통계표에 기재된 담당 부서 목록",
+        basis="담당 부서명을 정규화해 조회",
+        deduplicate_default=True,
+    ),
+    "source_systems": ListSpec(
+        default_fields=("source_system",),
+        allowed_fields=frozenset({"publication_year", "source_system"}),
+        row_filter_sql=f"{SOURCE_SYSTEM_SQL} IS NOT NULL",
+        definition="각 통계표에 기재된 출처 시스템 목록",
+        basis="출처 시스템명을 정규화해 조회",
+        deduplicate_default=True,
+    ),
+    "contacts": ListSpec(
+        default_fields=(
+            "statistic_title",
+            "department",
+            "officer",
+            "phone",
+            "source_system",
+            "source_url",
+        ),
+        allowed_fields=CONTACT_FIELDS,
+        row_filter_sql="c.contact_id IS NOT NULL",
+        definition="통계연보 전체 통계 항목의 연락처·출처 목록",
+        basis="각 통계 항목에 연결된 연락처·출처 레코드를 조회",
+        filter_fields=frozenset(
+            {"department", "officer", "phone", "source_system", "source_url"}
+        ),
+    ),
+    "footnotes": ListSpec(
+        default_fields=("statistic_title", "note_no", "note"),
+        allowed_fields=FOOTNOTE_FIELDS,
+        row_filter_sql="f.note_id IS NOT NULL",
+        definition="통계연보 전체 통계 항목의 주석 목록",
+        basis="각 통계 항목에 연결된 주석 레코드를 조회",
+        filter_fields=frozenset({"note_no", "note"}),
     ),
 }
 
@@ -205,13 +533,17 @@ def _validate_request(
     operation: str,
     subject: str,
     group_by: str | None,
+    fields: list[str] | None,
+    required_fields: list[str] | None,
+    deduplicate: bool | None,
     publication_year: int | None,
     all_publication_years: bool,
     chapter_no: int | None,
     section_no: int | None,
     limit: int,
+    offset: int,
 ) -> None:
-    if operation not in {"overview", "count", "breakdown"}:
+    if operation not in {"overview", "count", "breakdown", "list"}:
         raise ValueError(f"unsupported operation: {operation}")
     if subject not in METRICS:
         raise ValueError(f"unsupported subject: {subject}")
@@ -225,14 +557,51 @@ def _validate_request(
         raise ValueError("chapter_no must be greater than zero")
     if section_no is not None and section_no < 1:
         raise ValueError("section_no must be greater than zero")
-    if limit < 1 or limit > 200:
-        raise ValueError("limit must be between 1 and 200")
+    if limit < 1 or limit > 500:
+        raise ValueError("limit must be between 1 and 500")
+    if offset < 0:
+        raise ValueError("offset must be zero or greater")
     if operation == "overview" and group_by is not None:
         raise ValueError("overview does not accept group_by")
     if operation == "count" and group_by is not None:
         raise ValueError("count does not accept group_by; use breakdown")
     if operation == "breakdown" and group_by is None:
         raise ValueError("breakdown requires group_by")
+    if operation == "list" and group_by is not None:
+        raise ValueError("list does not accept group_by")
+    if operation != "list" and fields is not None:
+        raise ValueError("fields can only be used with list")
+    if operation != "list" and required_fields is not None:
+        raise ValueError("required_fields can only be used with list")
+    if operation != "list" and deduplicate is not None:
+        raise ValueError("deduplicate can only be used with list")
+    if operation != "list" and offset:
+        raise ValueError("offset can only be used with list")
+    if operation == "list":
+        if fields == []:
+            raise ValueError("fields must contain at least one field")
+        list_spec = LISTS[subject]
+        unsupported_fields = set(fields or ()) - list_spec.allowed_fields
+        if unsupported_fields:
+            unsupported = ", ".join(sorted(unsupported_fields))
+            raise ValueError(
+                f"unsupported fields for subject={subject}: {unsupported}"
+            )
+        selected_fields = set(fields or list_spec.default_fields)
+        unsupported_required_fields = (
+            set(required_fields or ()) - list_spec.filter_fields
+        )
+        if unsupported_required_fields:
+            unsupported = ", ".join(sorted(unsupported_required_fields))
+            raise ValueError(
+                f"unsupported required_fields for subject={subject}: {unsupported}"
+            )
+        unselected_required_fields = set(required_fields or ()) - selected_fields
+        if unselected_required_fields:
+            unselected = ", ".join(sorted(unselected_required_fields))
+            raise ValueError(
+                f"required_fields must also be selected in fields: {unselected}"
+            )
     if subject == "publications" and group_by not in {None, "publication_year"}:
         raise ValueError(
             "publications can only be counted without grouping or by publication_year"
@@ -285,10 +654,12 @@ def _from_sql(metric: MetricSpec, group: GroupSpec | None) -> str:
         parts.append("LEFT JOIN stat_tables t ON t.stat_id = s.stat_id")
     if metric.requires_contacts or (group is not None and group.requires_contacts):
         parts.append("LEFT JOIN contacts c ON c.stat_id = s.stat_id")
+    if metric.requires_footnotes:
+        parts.append("LEFT JOIN footnotes f ON f.stat_id = s.stat_id")
     return "\n".join(parts)
 
 
-# 검증된 overview/count/breakdown 템플릿 중 하나로 SQL 계획을 만든다.
+# 검증된 overview/count/breakdown/list 템플릿 중 하나로 SQL 계획을 만든다.
 def build_query_plan(
     *,
     operation: AnalysisOperation,
@@ -298,6 +669,10 @@ def build_query_plan(
     chapter_no: int | None,
     section_no: int | None,
     limit: int,
+    fields: list[AnalysisField] | None = None,
+    required_fields: list[AnalysisField] | None = None,
+    deduplicate: bool | None = None,
+    offset: int = 0,
 ) -> QueryPlan:
     metric = METRICS[subject]
     group = GROUPS[group_by] if group_by is not None else None
@@ -327,6 +702,57 @@ def build_query_plan(
         )
 
     from_sql = _from_sql(metric, group)
+    if operation == "list":
+        list_spec = LISTS[subject]
+        selected_fields = tuple(
+            dict.fromkeys(fields if fields is not None else list_spec.default_fields)
+        )
+        list_clauses = [*clauses, list_spec.row_filter_sql]
+        for field_name in dict.fromkeys(required_fields or ()):
+            nonempty_sql = FIELDS[field_name].nonempty_sql
+            if nonempty_sql:
+                list_clauses.append(nonempty_sql)
+        list_where_sql = f"WHERE {' AND '.join(list_clauses)}"
+        distinct_sql = (
+            "DISTINCT "
+            if (
+                list_spec.deduplicate_default
+                if deduplicate is None
+                else deduplicate
+            )
+            else ""
+        )
+        select_sql = ", ".join(
+            f"{FIELDS[field_name].expression} AS {FIELDS[field_name].alias}"
+            for field_name in selected_fields
+        )
+        order_sql = ", ".join(
+            (
+                f"{FIELDS[field_name].alias} DESC"
+                if FIELDS[field_name].alias == "publication_year"
+                else FIELDS[field_name].alias
+            )
+            for field_name in selected_fields
+        )
+        sql = "\n".join(
+            (
+                "WITH listed AS (",
+                f"    SELECT {distinct_sql}{select_sql}",
+                f"    {from_sql}",
+                f"    {list_where_sql}",
+                ")",
+                "SELECT listed.*, COUNT(*) OVER () AS _total_count",
+                "FROM listed",
+                f"ORDER BY {order_sql}",
+                "LIMIT %s OFFSET %s",
+            )
+        )
+        return QueryPlan(
+            sql=sql,
+            params=tuple([*params, limit, offset]),
+            source_tables=metric.source_tables,
+        )
+
     if operation == "count":
         sql = "\n".join(
             part
@@ -376,27 +802,35 @@ def _execute_plan(plan: QueryPlan) -> list[dict[str, Any]]:
         return list(cur.fetchall())
 
 
-# 현재 스키마 위에서 연보 단위 기초통계를 계산한다.
+# 현재 스키마 위에서 연보 단위 기초통계 또는 전체 메타데이터 목록을 조회한다.
 def analyze_publications_data(
     *,
     operation: AnalysisOperation,
     subject: AnalysisSubject = "statistics",
     group_by: AnalysisGroup | None = None,
+    fields: list[AnalysisField] | None = None,
+    required_fields: list[AnalysisField] | None = None,
+    deduplicate: bool | None = None,
     publication_year: int | None = None,
     all_publication_years: bool = False,
     chapter_no: int | None = None,
     section_no: int | None = None,
-    limit: int = 50,
+    limit: int = 500,
+    offset: int = 0,
 ) -> dict[str, Any]:
     _validate_request(
         operation,
         subject,
         group_by,
+        fields,
+        required_fields,
+        deduplicate,
         publication_year,
         all_publication_years,
         chapter_no,
         section_no,
         limit,
+        offset,
     )
     applied_publication_year, publication_year_defaulted = (
         _resolve_publication_scope(publication_year, all_publication_years)
@@ -409,9 +843,33 @@ def analyze_publications_data(
         chapter_no=chapter_no,
         section_no=section_no,
         limit=limit,
+        fields=fields,
+        required_fields=required_fields,
+        deduplicate=deduplicate,
+        offset=offset,
     )
     rows = _execute_plan(plan)
     metric = METRICS[subject]
+    selected_fields: list[str] | None = None
+    applied_required_fields: list[str] | None = None
+    deduplicated: bool | None = None
+    total_count: int | None = None
+    if operation == "list":
+        list_spec = LISTS[subject]
+        selected_fields = list(
+            dict.fromkeys(fields if fields is not None else list_spec.default_fields)
+        )
+        applied_required_fields = list(dict.fromkeys(required_fields or ()))
+        deduplicated = (
+            list_spec.deduplicate_default
+            if deduplicate is None
+            else deduplicate
+        )
+        total_count = int(rows[0].get("_total_count", len(rows))) if rows else 0
+        rows = [
+            {key: value for key, value in row.items() if key != "_total_count"}
+            for row in rows
+        ]
     filters = {
         key: value
         for key, value in {
@@ -433,6 +891,16 @@ def analyze_publications_data(
             "tables_count는 논리 통계 수가 아니라 물리 표 레코드 수",
             "organizations_count는 공식 제출기관이 아니라 contacts.dept 담당 부서 수",
         )
+    elif operation == "list":
+        response_subject = subject
+        definition = LISTS[subject].definition
+        duplicate_basis = (
+            "선택한 필드 조합의 중복을 제거"
+            if deduplicated
+            else "연결된 레코드를 중복 제거하지 않고 유지"
+        )
+        basis = f"{LISTS[subject].basis}; {duplicate_basis}"
+        limitations = metric.limitations
     else:
         response_subject = subject
         definition = metric.definition
@@ -444,6 +912,9 @@ def analyze_publications_data(
         "operation": operation,
         "subject": response_subject,
         "group_by": group_by,
+        "selected_fields": selected_fields,
+        "required_fields": applied_required_fields,
+        "deduplicated": deduplicated,
         "requested_publication_year": publication_year,
         "applied_publication_year": applied_publication_year,
         "publication_year_defaulted": publication_year_defaulted,
@@ -461,10 +932,18 @@ def analyze_publications_data(
         response["matched_publications"] = (
             int(rows[0]["matched_publications"]) if rows else 0
         )
+    if operation == "list":
+        response["total_count"] = total_count
+        response["offset"] = offset
+        response["limit"] = limit
+        response["truncated"] = offset + len(rows) < (total_count or 0)
+        response["next_offset"] = (
+            offset + len(rows) if response["truncated"] else None
+        )
     return response
 
 
-# 연보 단위 집계 도구를 MCP에 등록한다.
+# 연보 단위 집계·목록 도구를 MCP에 등록한다.
 def register(mcp: FastMCP) -> None:
     @mcp.tool(description=ANALYZE_PUBLICATIONS)
     def analyze_publications(
@@ -479,6 +958,18 @@ def register(mcp: FastMCP) -> None:
         group_by: Annotated[
             AnalysisGroup | None,
             Field(description=ANALYZE_PUBLICATIONS_FIELDS["group_by"]),
+        ] = None,
+        fields: Annotated[
+            list[AnalysisField] | None,
+            Field(description=ANALYZE_PUBLICATIONS_FIELDS["fields"]),
+        ] = None,
+        required_fields: Annotated[
+            list[AnalysisField] | None,
+            Field(description=ANALYZE_PUBLICATIONS_FIELDS["required_fields"]),
+        ] = None,
+        deduplicate: Annotated[
+            bool | None,
+            Field(description=ANALYZE_PUBLICATIONS_FIELDS["deduplicate"]),
         ] = None,
         publication_year: Annotated[
             int | None,
@@ -511,17 +1002,28 @@ def register(mcp: FastMCP) -> None:
             Field(
                 description=ANALYZE_PUBLICATIONS_FIELDS["limit"],
                 ge=1,
-                le=200,
+                le=500,
             ),
-        ] = 50,
+        ] = 500,
+        offset: Annotated[
+            int,
+            Field(
+                description=ANALYZE_PUBLICATIONS_FIELDS["offset"],
+                ge=0,
+            ),
+        ] = 0,
     ) -> dict[str, Any]:
         return analyze_publications_data(
             operation=operation,
             subject=subject,
             group_by=group_by,
+            fields=fields,
+            required_fields=required_fields,
+            deduplicate=deduplicate,
             publication_year=publication_year,
             all_publication_years=all_publication_years,
             chapter_no=chapter_no,
             section_no=section_no,
             limit=limit,
+            offset=offset,
         )
