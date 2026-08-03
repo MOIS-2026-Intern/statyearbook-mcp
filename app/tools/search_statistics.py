@@ -34,6 +34,10 @@ TABLE_LEXICAL_WEIGHT = 3.0
 EXACT_LABEL_BONUS = 0.05
 LABEL_TOKEN_BONUS = 0.04
 # 같은 통계는 ref_id로 판을 잇고, 통계마다 가장 최근 발간판 한 건만 검색 대상으로 남긴다.
+# ref_id는 발간물 안에서만 유일한 장·절 번호이므로 한 연도에 발간물이 하나라는 전제
+# (publications.year UNIQUE)에 기댄다. 한 연도에 여러 발간물을 적재하게 되면 서로 다른
+# 발간물의 같은 번호가 한 통계로 묶여 한쪽이 검색에서 통째로 빠지므로, 그룹 키와 ORDER BY
+# 앞에 발간물 구분을 함께 넣어야 한다.
 LATEST_EDITIONS_CTE = """
     WITH latest_editions AS (
         SELECT DISTINCT ON (coalesce(nullif(ref_id, ''), title_ko)) stat_id
