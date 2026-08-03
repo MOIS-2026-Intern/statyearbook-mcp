@@ -32,7 +32,15 @@ ANALYZE_PUBLICATIONS = (
     "레코드를 모두 유지하므로, 값 자체를 겹치지 않게 나열해 달라는 요청에는 deduplicate=true를 "
     "함께 지정한다. 개수만 필요하면 list 대신 count와 distinct_field를 쓴다. "
     "전체 통계표별 연락처를 구분해야 하면 statistic_title 또는 stat_id를 fields에 포함한다. "
-    "발간연도를 생략하면 최신 발간판을 적용한다. 여러 연도 전체가 필요할 때만 "
+    "특정 담당자·담당 부서·출처가 맡은 통계표만 필요하면 value_filters에 필드와 검색어를 넣어 "
+    "그 값을 가진 레코드만 남긴다. '위운비 주무관이 담당한 통계표', '재난정보통신과가 제출한 표'처럼 "
+    "사람 이름이나 부서명으로 표를 찾는 질문이 여기에 해당한다. 담당자 이름은 통계표 제목이나 "
+    "본문에 없어 search_statistics로는 찾을 수 없으므로 subject=contacts와 value_filters를 사용한다. "
+    "담당자가 맡은 표의 제목이 필요하면 fields에 statistic_title을 포함하고, 표가 몇 개인지만 "
+    "필요하면 count와 distinct_field=stat_id를 함께 쓴다. "
+    "발간연도를 생략하면 최신 발간판을 적용한다. 담당자는 발간판마다 바뀌므로 사용자가 "
+    "'2025년 연보'처럼 발간판을 밝힌 이름 조회에서는 publication_year를 반드시 함께 전달한다. "
+    "여러 연도 전체가 필요할 때만 "
     "all_publication_years=true를 사용한다. 임의 SQL은 받지 않으며 허용된 SELECT·JOIN·WHERE·GROUP BY "
     "조각과 필드만 조합한다. organizations는 공식 제출기관 테이블이 아니라 출처 문단의 담당 부서 기준이다. "
     "이 도구는 발간판마다 따로 집계할 뿐 판 사이에서 같은 항목을 잇지 못하므로, "
@@ -75,7 +83,17 @@ ANALYZE_PUBLICATIONS_FIELDS = {
     "required_fields": (
         "list 전용 필수값 필드. fields 중 실제 요청의 핵심값으로, 값이 비어 있는 행을 제외할 때 사용한다. "
         "전화번호 요청은 phone, 담당자 요청은 officer, URL 요청은 source_url처럼 지정한다. "
+        "값이 비어 있는지만 판정하므로 특정 이름·부서로 좁히려면 value_filters를 쓴다. "
         "표시용 문맥 필드는 fields에만 넣고 required_fields에는 넣지 않는다."
+    ),
+    "value_filters": (
+        "특정 값을 가진 레코드만 남기는 조건 목록으로 count·breakdown·list에서 쓴다. "
+        "담당자 이름은 officer, 담당 부서는 department, 출처 시스템은 source_system, "
+        "전화번호는 phone, 주석 내용은 note로 지정한다. subject=contacts는 department·officer·"
+        "phone·source_system·source_url, footnotes는 note_no·note, organizations는 department, "
+        "source_systems는 source_system만 조건으로 받는다. "
+        "비교는 공백·가운뎃점·대소문자를 무시한 부분 일치이므로 '위운비'로 '주무관 위운비'를 찾는다. "
+        "여러 조건을 함께 주면 모두 만족하는 레코드만 남는다."
     ),
     "deduplicate": (
         "list 중복 처리. 값 자체의 목록을 겹치지 않게 보려면 true, 통계 항목마다 연결된 레코드를 "
@@ -96,6 +114,16 @@ ANALYZE_PUBLICATIONS_FIELDS = {
         "truncated=true이면 next_offset으로 다음 목록을 조회한다. overview/count에는 영향이 없다."
     ),
     "offset": "list 페이지 시작 위치. 첫 조회는 0이며 다음 조회는 반환된 next_offset을 사용한다.",
+}
+VALUE_FILTER_FIELDS = {
+    "field": (
+        "값을 대조할 필드. 담당자는 officer, 담당 부서는 department, 출처 시스템은 source_system, "
+        "전화번호는 phone, 출처 URL은 source_url, 주석은 note_no 또는 note를 쓴다."
+    ),
+    "contains": (
+        "그 필드에 포함되어야 할 검색어. 직함이나 괄호 설명은 빼고 이름·부서명만 넣는다. "
+        "예: '주무관 위운비'를 찾을 때는 '위운비'."
+    ),
 }
 
 

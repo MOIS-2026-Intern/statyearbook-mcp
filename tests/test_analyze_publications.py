@@ -133,6 +133,103 @@ class AnalyzePublicationsTests(unittest.TestCase):
 
         self.assertIn("unsupported distinct_field", str(error.exception))
 
+    @patch(
+        "app.tools.analyze_publications._execute_plan",
+        return_value=[
+            {
+                "statistic_title": "지역별 재난 예･경보시스템 보유",
+                "officer": "주무관 위운비",
+                "_total_count": 1,
+            }
+        ],
+    )
+    @patch(
+        "app.tools.analyze_publications._latest_publication_year",
+        return_value=2026,
+    )
+    # 담당자 이름을 주면 그 값을 가진 레코드만 남기고 산출 근거에도 조건을 밝혀야 한다.
+    def test_filters_list_rows_by_field_value(
+        self,
+        latest_publication_year_mock,
+        execute_plan_mock,
+    ) -> None:
+        result = analyze_publications_data(
+            operation="list",
+            subject="contacts",
+            fields=["statistic_title", "officer"],
+            value_filters=[{"field": "officer", "contains": "위운비"}],
+            publication_year=2025,
+        )
+
+        plan = execute_plan_mock.call_args.args[0]
+        self.assertIn("strpos(", plan.sql)
+        # 값 조건은 페이지 자르기 전인 CTE 안에서 걸러야 total_count가 맞는다.
+        self.assertLess(plan.sql.index("strpos("), plan.sql.index("_total_count"))
+        self.assertEqual(plan.params, (2025, "위운비", 500, 0))
+        self.assertEqual(
+            result["value_filters"],
+            [{"field": "officer", "contains": "위운비"}],
+        )
+        self.assertEqual(result["total_count"], 1)
+        self.assertIn("'위운비' 포함", result["basis"])
+
+    @patch(
+        "app.tools.analyze_publications._execute_plan",
+        return_value=[{"matched_publications": 1, "count": 2}],
+    )
+    @patch(
+        "app.tools.analyze_publications._latest_publication_year",
+        return_value=2026,
+    )
+    # 검색어의 공백과 직함 표기가 달라도 비교 키가 같으면 찾아야 한다.
+    def test_normalizes_filter_value_before_matching(
+        self,
+        latest_publication_year_mock,
+        execute_plan_mock,
+    ) -> None:
+        result = analyze_publications_data(
+            operation="count",
+            subject="contacts",
+            distinct_field="stat_id",
+            value_filters=[{"field": "department", "contains": "재난 정보통신과"}],
+        )
+
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(execute_plan_mock.call_args.args[0].params, (2026, "재난정보통신과"))
+
+    # subject가 조인하지 않는 필드는 조건으로 받을 수 없어야 한다.
+    def test_rejects_filter_field_outside_subject(self) -> None:
+        with self.assertRaises(ValueError) as error:
+            analyze_publications_data(
+                operation="list",
+                subject="footnotes",
+                value_filters=[{"field": "officer", "contains": "위운비"}],
+            )
+
+        self.assertIn("unsupported value_filters field", str(error.exception))
+
+    # 발간판 단위 요약에는 값 조건을 걸 수 없어야 한다.
+    def test_rejects_filter_on_overview(self) -> None:
+        with self.assertRaises(ValueError) as error:
+            analyze_publications_data(
+                operation="overview",
+                subject="contacts",
+                value_filters=[{"field": "officer", "contains": "위운비"}],
+            )
+
+        self.assertIn("value_filters can only be used with", str(error.exception))
+
+    # 빈 검색어는 모든 행과 일치하므로 거부해야 한다.
+    def test_rejects_empty_filter_value(self) -> None:
+        with self.assertRaises(ValueError) as error:
+            analyze_publications_data(
+                operation="list",
+                subject="contacts",
+                value_filters=[{"field": "officer", "contains": "   "}],
+            )
+
+        self.assertIn("must not be empty", str(error.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

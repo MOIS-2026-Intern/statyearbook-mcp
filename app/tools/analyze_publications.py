@@ -5,12 +5,13 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from app.db import connect
 from app.tool_descriptions import (
     ANALYZE_PUBLICATIONS,
     ANALYZE_PUBLICATIONS_FIELDS,
+    VALUE_FILTER_FIELDS,
 )
 from app.tools._publication_sql import (
     OFFICER_SQL,
@@ -18,6 +19,8 @@ from app.tools._publication_sql import (
     PHONE_SQL,
     SOURCE_SYSTEM_SQL,
     SOURCE_URL_SQL,
+    contains_match_key_sql,
+    normalize_match_key,
 )
 
 
@@ -120,6 +123,18 @@ class QueryPlan:
     sql: str
     params: tuple[Any, ...]
     source_tables: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AppliedValueFilter:
+    field: str
+    contains: str
+    match_key: str
+
+
+class ValueFilter(BaseModel):
+    field: AnalysisField = Field(description=VALUE_FILTER_FIELDS["field"])
+    contains: str = Field(description=VALUE_FILTER_FIELDS["contains"])
 
 
 METRICS: dict[str, MetricSpec] = {
@@ -457,6 +472,7 @@ LISTS: dict[str, ListSpec] = {
         row_filter_sql=f"{ORGANIZATION_SQL} IS NOT NULL",
         definition="각 통계표에 기재된 담당 부서 목록",
         basis="담당 부서명을 정규화해 조회",
+        filter_fields=frozenset({"department"}),
         deduplicate_default=True,
     ),
     "source_systems": ListSpec(
@@ -465,6 +481,7 @@ LISTS: dict[str, ListSpec] = {
         row_filter_sql=f"{SOURCE_SYSTEM_SQL} IS NOT NULL",
         definition="각 통계표에 기재된 출처 시스템 목록",
         basis="출처 시스템명을 정규화해 조회",
+        filter_fields=frozenset({"source_system"}),
         deduplicate_default=True,
     ),
     "contacts": ListSpec(
@@ -614,6 +631,45 @@ def _validate_request(
         )
 
 
+# 값 조건을 검증하고 SQL에서 쓸 비교 키까지 붙인 형태로 바꾼다.
+def _resolve_value_filters(
+    operation: str,
+    subject: str,
+    value_filters: list[dict[str, str]] | None,
+) -> tuple[AppliedValueFilter, ...]:
+    if not value_filters:
+        return ()
+    if operation == "overview":
+        raise ValueError(
+            "value_filters can only be used with count, breakdown, or list"
+        )
+    supported_fields = LISTS[subject].filter_fields
+    resolved: dict[tuple[str, str], AppliedValueFilter] = {}
+    for value_filter in value_filters:
+        field_name = value_filter.get("field")
+        contains = value_filter.get("contains") or ""
+        if field_name not in supported_fields:
+            supported = ", ".join(sorted(supported_fields)) or "없음"
+            raise ValueError(
+                f"unsupported value_filters field for subject={subject}: "
+                f"{field_name}; supported fields: {supported}"
+            )
+        match_key = normalize_match_key(contains)
+        if not match_key:
+            raise ValueError(
+                f"value_filters contains must not be empty: field={field_name}"
+            )
+        resolved.setdefault(
+            (field_name, match_key),
+            AppliedValueFilter(
+                field=field_name,
+                contains=contains,
+                match_key=match_key,
+            ),
+        )
+    return tuple(resolved.values())
+
+
 # 연도 범위를 최신·특정·전체 중 하나로 결정한다.
 def _resolve_publication_scope(
     publication_year: int | None,
@@ -633,6 +689,7 @@ def _where_parts(
     chapter_no: int | None,
     section_no: int | None,
     group: GroupSpec | None,
+    value_filters: tuple[AppliedValueFilter, ...] = (),
 ) -> tuple[list[str], list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
@@ -645,6 +702,12 @@ def _where_parts(
     if section_no is not None:
         clauses.append("s.section_no = %s")
         params.append(section_no)
+    # 공백·가운뎃점·대소문자를 지운 비교 키로 부분 일치를 판정한다.
+    for value_filter in value_filters:
+        clauses.append(
+            contains_match_key_sql(FIELDS[value_filter.field].expression)
+        )
+        params.append(value_filter.match_key)
     if group is not None and group.nonempty_sql:
         clauses.append(group.nonempty_sql)
     return clauses, params
@@ -689,6 +752,7 @@ def build_query_plan(
     required_fields: list[AnalysisField] | None = None,
     deduplicate: bool | None = None,
     offset: int = 0,
+    value_filters: tuple[AppliedValueFilter, ...] = (),
 ) -> QueryPlan:
     metric = METRICS[subject]
     group = GROUPS[group_by] if group_by is not None else None
@@ -697,6 +761,7 @@ def build_query_plan(
         chapter_no,
         section_no,
         group,
+        value_filters,
     )
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
@@ -832,6 +897,7 @@ def analyze_publications_data(
     distinct_field: AnalysisField | None = None,
     fields: list[AnalysisField] | None = None,
     required_fields: list[AnalysisField] | None = None,
+    value_filters: list[dict[str, str]] | None = None,
     deduplicate: bool | None = None,
     publication_year: int | None = None,
     all_publication_years: bool = False,
@@ -855,6 +921,7 @@ def analyze_publications_data(
         limit,
         offset,
     )
+    applied_value_filters = _resolve_value_filters(operation, subject, value_filters)
     applied_publication_year, publication_year_defaulted = (
         _resolve_publication_scope(publication_year, all_publication_years)
     )
@@ -871,6 +938,7 @@ def analyze_publications_data(
         required_fields=required_fields,
         deduplicate=deduplicate,
         offset=offset,
+        value_filters=applied_value_filters,
     )
     rows = _execute_plan(plan)
     metric = METRICS[subject]
@@ -952,6 +1020,14 @@ def analyze_publications_data(
         basis = metric.basis
         limitations = metric.limitations
 
+    # 값 조건은 어떤 operation이든 산출 근거에 함께 드러낸다.
+    if applied_value_filters:
+        conditions = ", ".join(
+            f"{FIELDS[item.field].alias}에 '{item.contains}' 포함"
+            for item in applied_value_filters
+        )
+        basis = f"{basis}; {conditions} 조건을 만족하는 행만 대상으로 한다"
+
     response: dict[str, Any] = {
         "ok": True,
         "operation": operation,
@@ -960,6 +1036,10 @@ def analyze_publications_data(
         "distinct_field": distinct_field,
         "selected_fields": selected_fields,
         "required_fields": applied_required_fields,
+        "value_filters": [
+            {"field": item.field, "contains": item.contains}
+            for item in applied_value_filters
+        ],
         "deduplicated": deduplicated,
         "requested_publication_year": publication_year,
         "applied_publication_year": applied_publication_year,
@@ -1017,6 +1097,10 @@ def register(mcp: FastMCP) -> None:
             list[AnalysisField] | None,
             Field(description=ANALYZE_PUBLICATIONS_FIELDS["required_fields"]),
         ] = None,
+        value_filters: Annotated[
+            list[ValueFilter] | None,
+            Field(description=ANALYZE_PUBLICATIONS_FIELDS["value_filters"]),
+        ] = None,
         deduplicate: Annotated[
             bool | None,
             Field(description=ANALYZE_PUBLICATIONS_FIELDS["deduplicate"]),
@@ -1070,6 +1154,11 @@ def register(mcp: FastMCP) -> None:
             distinct_field=distinct_field,
             fields=fields,
             required_fields=required_fields,
+            value_filters=(
+                [item.model_dump() for item in value_filters]
+                if value_filters is not None
+                else None
+            ),
             deduplicate=deduplicate,
             publication_year=publication_year,
             all_publication_years=all_publication_years,
