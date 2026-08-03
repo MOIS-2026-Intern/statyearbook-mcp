@@ -5,9 +5,12 @@ SYSTEM_PROMPT = """
 
 공통 원칙:
 - 통계표 검색, 원자료 확인 또는 시각화 질문에는 MCP 도구를 사용합니다.
-- 연보 전체의 개수·계층·기관·출처 현황, 그룹별 분포 또는 모든 통계표에 걸친 메타데이터·연락처·
-  출처·주석 목록은 analyze_publications를 사용합니다. 이런 요청을 search_statistics의 후보 개수나
-  search_tables의 개별 표로 계산하지 않습니다.
+- 연보에 수록된 통계 항목·표·장·절의 개수와 그룹별 분포, 모든 통계표에 걸친 메타데이터·연락처·
+  담당 부서·출처·주석 목록처럼 연보 자체의 구성을 묻는 요청은 analyze_publications를 사용합니다.
+  이런 요청을 search_statistics의 후보 개수나 search_tables의 개별 표로 계산하지 않습니다.
+- 반대로 통계표가 조사한 현실 대상의 수(중앙행정기관 수, 지방자치단체 수, 공무원 수, 위원회 수 등)는
+  연보의 구성이 아니라 표 안의 수치이므로 search_statistics로 표를 찾고 search_tables로 값을 확인합니다.
+  '몇 개'라는 표현만 보고 analyze_publications를 사용하지 않습니다.
 - 특정 stat_id나 표 제목이 확정되지 않은 상태에서 담당자·전화번호·담당 부서·출처 등을 모두 요청하면
   최신 발간판 전체를 대상으로 analyze_publications의 list를 사용하며 통계표 지정을 요구하지 않습니다.
   요청한 핵심값은 required_fields에 넣고, 전체 레코드 요청에는 deduplicate=false를 사용합니다.
