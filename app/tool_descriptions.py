@@ -18,7 +18,10 @@ ANALYZE_PUBLICATIONS = (
     "전체 통계표별 연락처를 구분해야 하면 statistic_title 또는 stat_id를 fields에 포함한다. "
     "발간연도를 생략하면 최신 발간판을 적용한다. 여러 연도 전체가 필요할 때만 "
     "all_publication_years=true를 사용한다. 임의 SQL은 받지 않으며 허용된 SELECT·JOIN·WHERE·GROUP BY "
-    "조각과 필드만 조합한다. organizations는 공식 제출기관 테이블이 아니라 출처 문단의 담당 부서 기준이다."
+    "조각과 필드만 조합한다. organizations는 공식 제출기관 테이블이 아니라 출처 문단의 담당 부서 기준이다. "
+    "이 도구는 발간판마다 따로 집계할 뿐 판 사이에서 같은 항목을 잇지 못하므로, "
+    "'A년판에만 있고 B년판에는 없는', '새로 생긴', '빠진', '바뀐'처럼 두 발간판을 맞대어 봐야 하는 "
+    "질문에는 compare_publications를 사용한다."
 )
 ANALYZE_PUBLICATIONS_FIELDS = {
     "operation": (
@@ -66,6 +69,61 @@ ANALYZE_PUBLICATIONS_FIELDS = {
         "truncated=true이면 next_offset으로 다음 목록을 조회한다. overview/count에는 영향이 없다."
     ),
     "offset": "list 페이지 시작 위치. 첫 조회는 0이며 다음 조회는 반환된 next_offset을 사용한다.",
+}
+
+
+COMPARE_PUBLICATIONS = (
+    "서로 다른 두 발간판(예: 2025년판과 2026년판)의 수록 항목을 맞대어, 한쪽에만 있는 항목, "
+    "양쪽에 다 있는 항목, 양쪽에 있으나 값이 달라진 항목을 찾는다. "
+    "'25년판에만 있고 26년판에는 없는 자료가 몇 개인지', '새로 생긴 통계', '없어진 통계', "
+    "'담당 부서가 바뀐 통계'처럼 두 판을 비교해야 답할 수 있는 질문에 사용한다. "
+    "한 발간판 안의 개수나 분포만 필요하면 analyze_publications를 사용한다. "
+    "operation은 summary=다섯 가지 건수를 한 번에, only_in_base=base 발간판에만 있는 항목 목록, "
+    "only_in_target=target 발간판에만 있는 항목 목록, in_both=양쪽 공통 항목을 base·target 값 쌍으로, "
+    "changed=공통 항목 중 비교 필드 값이 달라진 항목이다. 건수를 물으면 먼저 summary를 부르고, "
+    "'그게 뭔데'처럼 실제 항목을 물으면 only_in_base 또는 only_in_target으로 목록을 가져온다. "
+    "발간판마다 목차 번호가 다시 매겨지므로 기본 대응 기준은 이름(match_by=title)이다. "
+    "각 항목의 실제 표 수치나 내용까지 답해야 하면 결과의 stat_id로 search_tables를 호출한다. "
+    "응답의 limitations와 record_count를 그대로 근거로 인용하고, 임의 SQL은 받지 않는다."
+)
+COMPARE_PUBLICATIONS_FIELDS = {
+    "operation": (
+        "비교 방식. summary=한쪽에만 있는 수·공통 수·변경 수와 양쪽 총계, "
+        "only_in_base=base 발간판에만 있는 항목 목록, only_in_target=target 발간판에만 있는 항목 목록, "
+        "in_both=양쪽 공통 항목을 base_/target_ 값 쌍으로, changed=공통 항목 중 값이 달라진 항목."
+    ),
+    "subject": (
+        "비교 대상. statistics=논리 통계 항목, chapters=장, sections=절, "
+        "organizations=contacts.dept 담당 부서, source_systems=출처 시스템. "
+        "'자료', '통계', '표'를 묻는 질문은 statistics를 쓴다."
+    ),
+    "match_by": (
+        "두 발간판에서 같은 항목으로 볼 기준. title=이름의 공백·기호 차이를 지운 값(기본값), "
+        "title_and_unit=이름과 단위를 함께 비교해 이름이 같고 단위가 다른 항목을 나누며 statistics 전용, "
+        "number=목차 번호(statistics는 ref_id, chapters·sections는 장·절 번호). "
+        "목차 번호는 발간판마다 다시 매겨지므로 number는 사용자가 번호 기준을 요구할 때만 쓴다. "
+        "organizations와 source_systems는 title만 지원한다."
+    ),
+    "base_publication_year": (
+        "비교 기준이 되는 발간연도. '25년판에만 있고 26년판에 없는 자료'라면 2025다. "
+        "표 안 데이터 연도가 아니다. 두 연도를 모두 생략하면 가장 최근 두 발간판을 비교한다."
+    ),
+    "target_publication_year": (
+        "맞대어 볼 발간연도. '25년판에만 있고 26년판에 없는 자료'라면 2026이다. "
+        "생략하면 base 다음으로 가까운 최신 발간판을 적용한다."
+    ),
+    "fields": (
+        "반환할 항목 필드이자 changed의 변경 판정 대상. statistics는 stat_id/ref_id/장·절·제목·"
+        "단위·기준일·시작 페이지, chapters는 chapter_no/chapter, sections는 chapter_no/section_no/"
+        "section, organizations는 organization, source_systems는 source_system을 쓸 수 있다. "
+        "생략하면 subject별 기본 필드를 반환한다. 항목의 표 내용을 이어서 조회하려면 stat_id를 포함한다. "
+        "stat_id와 page_start는 발간판마다 새로 부여되므로 변경 판정에서 제외된다."
+    ),
+    "limit": (
+        "목록 operation이 반환할 최대 행 수로 1~500. truncated=true이면 next_offset으로 "
+        "다음 목록을 조회한다. summary에는 영향이 없다."
+    ),
+    "offset": "목록 페이지 시작 위치. 첫 조회는 0이며 다음 조회는 반환된 next_offset을 사용한다.",
 }
 
 

@@ -12,6 +12,13 @@ from app.tool_descriptions import (
     ANALYZE_PUBLICATIONS,
     ANALYZE_PUBLICATIONS_FIELDS,
 )
+from app.tools._publication_sql import (
+    OFFICER_SQL,
+    ORGANIZATION_SQL,
+    PHONE_SQL,
+    SOURCE_SYSTEM_SQL,
+    SOURCE_URL_SQL,
+)
 
 
 AnalysisOperation = Literal["overview", "count", "breakdown", "list"]
@@ -67,15 +74,6 @@ AnalysisField = Literal[
 ]
 
 LATEST_PUBLICATION_YEAR_SQL = "SELECT MAX(year) AS publication_year FROM publications"
-ORGANIZATION_SQL = (
-    "NULLIF(regexp_replace(BTRIM(c.dept), '\\s+', ' ', 'g'), '')"
-)
-SOURCE_SYSTEM_SQL = (
-    "NULLIF(regexp_replace(BTRIM(c.source_system), '\\s+', ' ', 'g'), '')"
-)
-OFFICER_SQL = "NULLIF(regexp_replace(BTRIM(c.officer), '\\s+', ' ', 'g'), '')"
-PHONE_SQL = "NULLIF(BTRIM(c.phone), '')"
-SOURCE_URL_SQL = "NULLIF(BTRIM(c.source_url), '')"
 
 
 @dataclass(frozen=True)

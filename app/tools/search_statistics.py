@@ -16,6 +16,7 @@ from app.query_embedding import (
     table_search_embedding_profile,
 )
 from app.tool_descriptions import SEARCH_STATISTICS, SEARCH_STATISTICS_FIELDS
+from app.tools._publication_sql import match_key_sql
 
 
 SEARCH_TEXT_COLUMNS = (
@@ -33,16 +34,27 @@ TABLE_VECTOR_WEIGHT = 1.8
 TABLE_LEXICAL_WEIGHT = 3.0
 EXACT_LABEL_BONUS = 0.05
 LABEL_TOKEN_BONUS = 0.04
-# 같은 통계는 ref_id로 판을 잇고, 통계마다 가장 최근 발간판 한 건만 검색 대상으로 남긴다.
-# ref_id는 발간물 안에서만 유일한 장·절 번호이므로 한 연도에 발간물이 하나라는 전제
-# (publications.year UNIQUE)에 기댄다. 한 연도에 여러 발간물을 적재하게 되면 서로 다른
-# 발간물의 같은 번호가 한 통계로 묶여 한쪽이 검색에서 통째로 빠지므로, 그룹 키와 ORDER BY
-# 앞에 발간물 구분을 함께 넣어야 한다.
-LATEST_EDITIONS_CTE = """
+# 같은 통계는 정규화한 제목으로 판을 잇고, 통계마다 그 제목이 실린 가장 최근 발간판만
+# 검색 대상으로 남긴다. 목차 번호(ref_id)는 발간판마다 다시 매겨지고 앞 판의 번호를 다른
+# 통계가 물려받으므로 판을 잇는 키로 쓸 수 없다. 번호로 묶으면 번호를 뺏긴 구판 통계가
+# 검색에서 통째로 빠진다.
+# 최신 발간판에 같은 제목이 여러 건 실려 있으면(예: 이름은 같고 단위가 다른 별개 통계)
+# 그 판의 해당 제목 통계를 모두 남긴다. 한 건만 남기면 나머지가 검색되지 않는다.
+# 제목을 정규화해도 비어 있는 통계는 stat_id로 각자 묶어 서로를 가리지 않게 한다.
+# 발간연도로 판을 고르므로 한 연도에 발간물이 하나라는 전제(publications.year UNIQUE)에
+# 기댄다. 한 연도에 여러 발간물을 적재하려면 그룹 키에 발간물 구분을 함께 넣어야 한다.
+LATEST_EDITIONS_KEY_SQL = (
+    f"COALESCE({match_key_sql('title_ko')}, '#' || stat_id)"
+)
+LATEST_EDITIONS_CTE = f"""
     WITH latest_editions AS (
-        SELECT DISTINCT ON (coalesce(nullif(ref_id, ''), title_ko)) stat_id
-        FROM statistics
-        ORDER BY coalesce(nullif(ref_id, ''), title_ko), year DESC, stat_id DESC
+        SELECT stat_id
+        FROM (
+            SELECT stat_id, year,
+                   MAX(year) OVER (PARTITION BY {LATEST_EDITIONS_KEY_SQL}) AS latest_year
+            FROM statistics
+        ) ranked
+        WHERE year = latest_year
     )
 """
 LATEST_EDITIONS_FILTER = "stat_id IN (SELECT stat_id FROM latest_editions)"

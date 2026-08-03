@@ -11,6 +11,7 @@ from backend.main import create_app as create_backend_app
 
 PUBLIC_TOOLS = {
     "analyze_publications",
+    "compare_publications",
     "search_statistics",
     "search_tables",
     "visualize",
