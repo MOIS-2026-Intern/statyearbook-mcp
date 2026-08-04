@@ -22,6 +22,13 @@ def _csv(value: str | None, default: list[str]) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+# 참·거짓 환경 변수 표기를 해석하고 값이 없으면 기본값을 사용한다.
+def _bool(value: str | None, default: bool) -> bool:
+    if value is None or not value.strip():
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "statyearbook-backend"
@@ -43,7 +50,10 @@ class Settings:
     mcp_server_label: str = "statyearbook"
     mcp_url: str = "http://127.0.0.1:8001/mcp"
     mcp_call_timeout_seconds: float = 90.0
+    mcp_connect_timeout_seconds: float = 30.0
     mcp_tool_cache_ttl_seconds: float = 300.0
+    mcp_wake_enabled: bool = False
+    mcp_wake_timeout_seconds: float = 150.0
     log_level: str = "DEBUG"
 
     # 모델 공급자를 제한하고 운영 프로필의 필수 인증·MCP 설정을 시작 시 검증한다.
@@ -130,8 +140,17 @@ class Settings:
             mcp_call_timeout_seconds=float(
                 os.environ.get("STATYEARBOOK_BACKEND_MCP_CALL_TIMEOUT_SECONDS", "90")
             ),
+            mcp_connect_timeout_seconds=float(
+                os.environ.get("STATYEARBOOK_BACKEND_MCP_CONNECT_TIMEOUT_SECONDS", "30")
+            ),
             mcp_tool_cache_ttl_seconds=float(
                 os.environ.get("STATYEARBOOK_BACKEND_MCP_TOOL_CACHE_TTL_SECONDS", "300")
+            ),
+            mcp_wake_enabled=_bool(
+                os.environ.get("STATYEARBOOK_BACKEND_MCP_WAKE_ENABLED"), False
+            ),
+            mcp_wake_timeout_seconds=float(
+                os.environ.get("STATYEARBOOK_BACKEND_MCP_WAKE_TIMEOUT_SECONDS", "150")
             ),
             log_level=os.environ.get("STATYEARBOOK_BACKEND_LOG_LEVEL", "DEBUG"),
         )

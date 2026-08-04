@@ -1,23 +1,31 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import logging
 
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from datetime import timedelta
 from time import perf_counter
 from typing import Any
 
+import httpx
+
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from backend.config import Settings
+from backend.gateways.mcp_waker import wake_mcp
 from backend.models.tooling import ToolSpec
 from backend.serializers.mcp_result_serializer import sanitize_mcp_result, to_jsonable
 from utils.logging import compact_json
 
 
 logger = logging.getLogger(__name__)
+
+# 도구 호출 응답을 실어 나르는 SSE 스트림이 조용해도 끊지 않는 시간이다.
+_SSE_READ_TIMEOUT_SECONDS = 300.0
 
 _TOOL_SPECS_CACHE: dict[str, tuple[float, tuple[ToolSpec, ...]]] = {}
 
@@ -28,47 +36,106 @@ class McpGatewayError(RuntimeError):
 
 class McpGateway:
     # MCP 연결 설정과 세션 상태를 초기화한다.
-    def __init__(self, settings: Settings):
+    # on_cold_start는 휴면 인스턴스를 깨우기 시작할 때 한 번 호출된다.
+    def __init__(
+        self,
+        settings: Settings,
+        on_cold_start: Callable[[], None] | None = None,
+    ):
         self._settings = settings
+        self._on_cold_start = on_cold_start
         self._stack: AsyncExitStack | None = None
         self._session: ClientSession | None = None
         self._tool_specs_cache_hit = False
 
-    # streamable HTTP 연결을 열고 MCP 세션을 초기화한다.
+    # 휴면 인스턴스를 깨운 뒤 streamable HTTP 연결을 열고 MCP 세션을 초기화한다.
     async def __aenter__(self) -> "McpGateway":
         started = perf_counter()
+        await wake_mcp(self._settings, self._on_cold_start)
         self._stack = AsyncExitStack()
         try:
+            # 전송 계층이 종료 요청을 보낼 때까지 살아 있도록 클라이언트를 먼저 등록한다.
+            http_client = await self._stack.enter_async_context(self._create_http_client())
             read_stream, write_stream, _ = await self._stack.enter_async_context(
-                streamable_http_client(self._settings.mcp_url)
+                streamable_http_client(self._settings.mcp_url, http_client=http_client)
             )
             self._session = await self._stack.enter_async_context(
                 ClientSession(read_stream, write_stream)
             )
             await self._session.initialize()
-        except Exception as exc:
-            logger.exception(
-                "event=mcp.connect.error url=%s duration_ms=%s error_type=%s",
+        except BaseException as exc:
+            cause = await self._close(exc)
+            if _is_external_cancellation(exc):
+                raise
+            logger.error(
+                "event=mcp.connect.error url=%s duration_ms=%s error_type=%s error=%s",
                 self._settings.mcp_url,
                 _elapsed_ms(started),
-                exc.__class__.__name__,
+                cause.__class__.__name__,
+                cause,
+                exc_info=cause,
             )
-            await self._stack.aclose()
-            self._stack = None
-            self._session = None
-            raise
+            raise McpGatewayError(
+                f"MCP 서버에 연결하지 못했습니다 ({self._settings.mcp_url}): {cause}"
+            ) from cause
         logger.debug(
             "event=mcp.connect duration_ms=%s",
             _elapsed_ms(started),
         )
         return self
 
+    # 콜드 스타트 직후의 느린 첫 응답을 견디도록 MCP 전용 HTTP 클라이언트를 만든다.
+    def _create_http_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=httpx.Timeout(
+                self._settings.mcp_connect_timeout_seconds,
+                read=_SSE_READ_TIMEOUT_SECONDS,
+            ),
+        )
+
     # 컨텍스트 종료 시 MCP 연결 자원과 세션 상태를 정리한다.
+    # 세션 도중 전송이 끊기면 취소 예외 대신 원인을 알 수 있는 오류로 바꿔 알린다.
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
-        if self._stack is not None:
-            await self._stack.aclose()
-        self._session = None
+        cause = await self._close(None)
+        if cause is None:
+            return
+        # 본문에서 이미 원인이 분명한 예외가 올라오는 중이면 정리 오류로 덮지 않는다.
+        if isinstance(exc, BaseException) and not isinstance(exc, asyncio.CancelledError):
+            logger.warning(
+                "event=mcp.close.error url=%s error_type=%s error=%s",
+                self._settings.mcp_url,
+                cause.__class__.__name__,
+                cause,
+            )
+            return
+        if _is_external_cancellation(cause):
+            raise cause
+        logger.error(
+            "event=mcp.close.error url=%s error_type=%s error=%s",
+            self._settings.mcp_url,
+            cause.__class__.__name__,
+            cause,
+            exc_info=cause,
+        )
+        raise McpGatewayError(
+            f"MCP 연결이 끊겼습니다 ({self._settings.mcp_url}): {cause}"
+        ) from cause
+
+    # 연결 자원을 정리하고 취소 예외에 가려져 있던 실제 실패 원인을 돌려준다.
+    # 전송 계층이 실패하면 원인은 정리 단계에서 ExceptionGroup으로 드러난다.
+    async def _close(self, failure: BaseException | None) -> BaseException | None:
+        stack = self._stack
         self._stack = None
+        self._session = None
+        if stack is None:
+            return failure
+
+        try:
+            await stack.aclose()
+        except BaseException as close_error:
+            return _root_cause(close_error)
+        return failure
 
     # 초기화된 MCP 세션만 반환하고 미연결 상태는 오류로 알린다.
     @property
@@ -161,6 +228,27 @@ def _elapsed_ms(started: float) -> int:
     return round((perf_counter() - started) * 1000)
 
 
+# 취소가 호출자에게서 온 것인지 전송 계층 내부에서 온 것인지 구분한다.
+# 전송 실패로 생긴 취소는 자원 정리 과정에서 해제되어 카운터가 0으로 돌아오지만,
+# 요청 취소나 종료로 생긴 취소는 카운터가 남아 있으므로 그대로 전파해야 한다.
+def _is_external_cancellation(error: BaseException) -> bool:
+    if not isinstance(error, asyncio.CancelledError):
+        return False
+    task = asyncio.current_task()
+    return task is None or task.cancelling() > 0
+
+
+# ExceptionGroup에 감싸인 원인 중 취소가 아닌 첫 예외를 실제 실패 원인으로 고른다.
+def _root_cause(error: BaseException) -> BaseException:
+    if not isinstance(error, BaseExceptionGroup):
+        return error
+    for nested in error.exceptions:
+        found = _root_cause(nested)
+        if not isinstance(found, asyncio.CancelledError):
+            return found
+    return error
+
+
 # MCP 도구의 입력 스키마를 유효한 JSON object 스키마로 정규화한다.
 def _tool_schema(tool: Any) -> dict[str, Any]:
     schema = getattr(tool, "inputSchema", None) or getattr(tool, "input_schema", None) or {}
@@ -192,3 +280,30 @@ def describe_tool(tool: ToolSpec) -> dict[str, Any]:
 # 테스트와 명시적인 새로고침에서 공유 도구 사양 캐시를 비운다.
 def clear_tool_specs_cache() -> None:
     _TOOL_SPECS_CACHE.clear()
+
+
+# backend 기동 직후 MCP 인스턴스를 미리 깨우고 도구 사양 캐시를 채운다.
+# 첫 채팅 요청이 콜드 스타트를 기다리지 않도록 백그라운드에서 실행한다.
+async def warm_up_mcp(settings: Settings) -> None:
+    if not settings.mcp_wake_enabled:
+        return
+
+    started = perf_counter()
+    try:
+        async with McpGateway(settings) as gateway:
+            tools = await gateway.list_tool_specs()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "event=mcp.warmup.error duration_ms=%s error_type=%s",
+            _elapsed_ms(started),
+            exc.__class__.__name__,
+        )
+        return
+
+    logger.info(
+        "event=mcp.warmup tools=%s duration_ms=%s",
+        len(tools),
+        _elapsed_ms(started),
+    )
