@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import asyncio
-
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -12,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
 from backend.controllers import chat_controller, health_controller
-from backend.gateways.mcp_gateway import warm_up_mcp
 from backend.middleware.access_log import add_access_log_middleware
 from utils.logging import configure_service_logging
 
@@ -29,17 +26,13 @@ def print_banner() -> None:
     print(f"\n{banner}\n", flush=True)
 
 
-# FastAPI 시작 시 배너를 찍고 MCP 예열을 백그라운드로 시작한다.
-# 프런트엔드가 backend를 깨우는 동안 MCP도 함께 올라오도록 요청 처리는 막지 않는다.
+# FastAPI 시작 시 배너와 향후 생명주기 자원을 준비한다.
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     print_banner()
-    warm_up = asyncio.create_task(warm_up_mcp(settings))
     try:
         yield
     finally:
-        warm_up.cancel()
-        await asyncio.gather(warm_up, return_exceptions=True)
         await chat_controller.close_chat_service()
 
 
