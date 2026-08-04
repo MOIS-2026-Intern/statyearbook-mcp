@@ -17,6 +17,8 @@ def _values(values: list[object], casts: dict[int, str] | None = None) -> str:
 
 
 # DML 생성에 필요한 발간물 연도·제목·통계 목록의 최소 계약을 검증한다.
+# 중복 ref_id와 빈 제목은 DB 제약에 닿기 전에 여기서 막는다. SQL을 만들고 나서
+# 적재에 실패하면 원인이 파서인지 DB인지 가리기 어렵다.
 def validate_yearbook(data: dict) -> None:
     publication = data.get("publication") or {}
     year = publication.get("year")
@@ -28,6 +30,22 @@ def validate_yearbook(data: dict) -> None:
     if not isinstance(statistics, list) or not statistics:
         raise ValueError("parsed yearbook contains no statistics")
 
+    seen: set[str] = set()
+    duplicated: list[str] = []
+    for unit in statistics:
+        ref_id = unit.get("ref_id")
+        if not ref_id:
+            raise ValueError("every statistic needs a ref_id")
+        if not unit.get("title_ko"):
+            raise ValueError(f"statistic {ref_id} has no title_ko")
+        if ref_id in seen:
+            duplicated.append(ref_id)
+        seen.add(ref_id)
+    if duplicated:
+        raise ValueError(
+            "parsed yearbook contains duplicate ref_id: " + ", ".join(sorted(set(duplicated)))
+        )
+
 
 # 한 통계와 표·검색 청크·주석·담당자 INSERT 문을 출력 버퍼에 순서대로 추가한다.
 def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
@@ -35,6 +53,7 @@ def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
         "v_pub_id",
         sql_literal(year),
         sql_literal(unit.get("ref_id")),
+        sql_literal(unit.get("ordinal")),
         sql_literal(unit.get("chapter_no")),
         sql_literal(unit.get("section_no")),
         sql_literal(unit.get("level3_no")),
@@ -51,7 +70,7 @@ def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
     ]
     lines.extend([
         "    INSERT INTO statistics (",
-        "        pub_id, year, ref_id, chapter_no, section_no, level3_no, level4_no,",
+        "        pub_id, year, ref_id, ordinal, chapter_no, section_no, level3_no, level4_no,",
         "        chapter, section, level3_title, level4_title,",
         "        title_ko, title_en, unit, base_date, page_start",
         "    ) VALUES (" + ", ".join(stat_values) + ")",

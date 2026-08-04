@@ -1,5 +1,5 @@
 # 이 파일은 HWPX 문서 구조를 통계연보 JSON으로 파싱하고 검수용 Markdown을 렌더링한다.
-# 목차 계층, 표 병합 셀, 본문, 주석과 연락처 추출을 담당한다.
+# 계층 복원은 load_outline이 맡고, 여기서는 표 병합 셀, 본문, 주석과 연락처 추출을 담당한다.
 from __future__ import annotations
 
 import html
@@ -10,22 +10,27 @@ import zipfile
 from copy import deepcopy
 from xml.etree import ElementTree as ET
 
+from admin.backend.services.load_outline import (
+    APPENDIX_CHAPTER_NO,
+    Heading,
+    OutlineNode,
+    TocCatalog,
+    build_outline,
+    build_toc_catalog,
+    is_colophon,
+    parse_heading_cell,
+    parse_section_cover,
+    parse_toc_chapter_row,
+)
+
 HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
 
 RE_SECTION_XML = re.compile(r"^Contents/section(\d+)\.xml$")
-RE_REFID = re.compile(r"^(\d+-\d+-\d+(?:-\d+)?)\s*(.+)$", re.S)
-RE_REFID_ANYWHERE = re.compile(r"(?<![\d-])(\d+-\d+-\d+(?:-\d+)?)(?![\d-])")
-RE_TOC_SECTION = re.compile(r"^제\s*(\d+)\s*절\s*(.+)$")
-RE_TOC_LEVEL3 = re.compile(r"^(\d+-\d+-\d+)\s+(.+)$")
-RE_TOC_LEVEL4 = re.compile(r"^(\d+)\.\s*(.+)$")
 RE_BASEDATE = re.compile(r"\(?\s*(\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.?)\s*기준\s*\)?")
 RE_UNIT = re.compile(r"\(?\s*단위\s*[:：]\s*([^)\n]+?)\s*\)")
 RE_PHONE = re.compile(r"0\d{1,2}[-)]\s?\d{3,4}[-]\d{4}")
 RE_URL = re.compile(r"((?:https?://|www\.)[^\s()]+)")
 RE_NOTE_NO = re.compile(r"^#?\s*(주\d*\))")
-RE_PAGE_SUFFIX = re.compile(r"\s+\d{1,4}$")
-RE_KO_EN_BOUNDARY = re.compile(r"(?<=[가-힣)\]）])\s*(?=[A-Z][A-Za-z])")
-RE_EN_SPLIT = re.compile(r"\s(?=(?:[A-Z][A-Za-z-]|\d+-[A-Za-z]))")
 
 TEXT_SKIP_IN_PARAGRAPH = {HP + "tbl", HP + "pic", HP + "rect", HP + "ctrl"}
 TEXT_SKIP_IN_CELL = {HP + "tbl", HP + "pic", HP + "ctrl"}
@@ -116,6 +121,15 @@ def table_plain_text(table: dict, separator: str = " ") -> str:
             if text:
                 values.append(text)
     return clean_text(separator.join(values))
+
+
+# 표의 모든 셀 텍스트를 원본 순서대로 반환한다.
+def table_cell_texts(table: dict) -> list[str]:
+    return [
+        cell.get("text") or ""
+        for row in table.get("cells", [])
+        for cell in row
+    ]
 
 
 # 명시된 셀 주소를 읽고 없으면 현재 순회 위치를 안전한 좌표로 사용한다.
@@ -467,91 +481,6 @@ def enrich_table_body(table: dict) -> None:
     table["html"] = table_to_html(table)
 
 
-# 단일 열 제목 표의 가장 깊은 ref_id와 뒤따르는 제목을 추출한다.
-def title_from_table(table: dict) -> tuple[str, str] | None:
-    if table.get("cols") != 1:
-        return None
-    text = table_plain_text(table)
-    matches = list(RE_REFID_ANYWHERE.finditer(text))
-    if not matches:
-        return None
-    # 상위 제목과 첫 하위 제목이 한 표에 함께 있으면 실제 통계 단위인 가장
-    # 깊은(마지막) ref_id를 선택한다. 제목 자체는 아래 목차 catalog가 보정한다.
-    match = matches[-1]
-    return match.group(1), text[match.end():].strip()
-
-
-# 목차 제목 끝의 페이지 번호를 제거하고 공백을 정규화한다.
-def strip_title_page(raw_title: str) -> str:
-    title = clean_text(raw_title)
-    return RE_PAGE_SUFFIX.sub("", title).strip()
-
-
-# 줄바꿈과 한·영 경계 패턴으로 한국어 제목과 선택 영문 제목을 나눈다.
-def split_title(raw_title: str) -> tuple[str, str | None]:
-    text = strip_title_page(raw_title)
-    if "\n" in text:
-        ko, en = text.split("\n", 1)
-        return clean_text(ko), clean_text(en) or None
-    match = RE_KO_EN_BOUNDARY.search(text) or RE_EN_SPLIT.search(text)
-    if match:
-        return clean_text(text[:match.start()]), clean_text(text[match.start():]) or None
-    return text, None
-
-
-# 하이픈 ref_id를 장·절·3계층·4계층 정수 번호로 분해한다.
-def ref_numbers(
-    ref_id: str,
-) -> tuple[int | None, int | None, int | None, int | None]:
-    nums = ref_id.split("-")
-    chapter_no = int(nums[0]) if len(nums) > 0 and nums[0].isdigit() else None
-    section_no = int(nums[1]) if len(nums) > 1 and nums[1].isdigit() else None
-    level3_no = int(nums[2]) if len(nums) > 2 and nums[2].isdigit() else None
-    level4_no = int(nums[3]) if len(nums) > 3 and nums[3].isdigit() else None
-    return chapter_no, section_no, level3_no, level4_no
-
-
-# 본문 제목과 목차 보정값을 합쳐 새 통계 단위의 기본 구조를 만든다.
-def make_unit(ref_id: str, raw_title: str, page_start: int | None,
-              chapter: str | None, section: str | None,
-              toc_entry: dict | None = None) -> dict:
-    title_ko, title_en = split_title(raw_title)
-    chapter_no, section_no, level3_no, level4_no = ref_numbers(ref_id)
-    if toc_entry:
-        chapter_no = toc_entry.get("chapter_no", chapter_no)
-        section_no = toc_entry.get("section_no", section_no)
-        level3_no = toc_entry.get("level3_no", level3_no)
-        level4_no = toc_entry.get("level4_no", level4_no)
-        chapter = toc_entry.get("chapter") or chapter
-        section = toc_entry.get("section") or section
-        level3_title = toc_entry.get("level3_title") or title_ko or ref_id
-        level4_title = toc_entry.get("level4_title") or level3_title
-        title_ko = level4_title
-        title_en = toc_entry.get("level4_title_en") or title_en
-    else:
-        level3_title = title_ko or ref_id
-        level4_title = title_ko or level3_title
-    return {
-        "ref_id": ref_id,
-        "chapter_no": chapter_no,
-        "section_no": section_no,
-        "level3_no": level3_no,
-        "level4_no": level4_no,
-        "chapter": chapter,
-        "section": section,
-        "level3_title": level3_title,
-        "level4_title": level4_title,
-        "title_ko": title_ko or ref_id,
-        "title_en": title_en,
-        "unit": None,
-        "base_date": None,
-        "page_start": page_start,
-        "tables": [],
-        "footnotes": [],
-        "contacts": [],
-    }
-
-
 # 최소 2×2이며 텍스트가 하나 이상 있는 표만 통계 데이터 표로 인정한다.
 def data_table(table: dict) -> bool:
     if table.get("cols", 0) < 2 or table.get("rows", 0) < 2:
@@ -668,206 +597,34 @@ def note_record(text: str, seq: int) -> dict:
     }
 
 
+# 같은 내용의 주석·출처가 쪽 분할 때문에 반복 수록되는 것을 막는다.
+def _append_unique(items: list[dict], candidate: dict, keys: tuple[str, ...]) -> bool:
+    signature = tuple(candidate.get(key) for key in keys)
+    for item in items:
+        if tuple(item.get(key) for key in keys) == signature:
+            return False
+    items.append(candidate)
+    return True
+
+
 # 본문 문단을 주석·연속 주석·출처로 분류해 현재 통계 단위에 반영한다.
 def handle_paragraph(unit: dict, text: str, pending_note: dict | None) -> dict | None:
     if not text:
         return pending_note
     if is_note_text(text):
         note = note_record(text, len(unit["footnotes"]) + 1)
-        unit["footnotes"].append(note)
-        return note
+        if _append_unique(unit["footnotes"], note, ("content",)):
+            note["seq"] = len(unit["footnotes"])
+            return note
+        return None
     if text.startswith("-") and pending_note:
         pending_note["content"] = f'{pending_note["content"]} {text}'
         return pending_note
     if text.startswith("*"):
         contact = parse_contact(text)
         if contact.get("phone") or contact.get("dept"):
-            unit["contacts"].append(contact)
+            _append_unique(unit["contacts"], contact, ("dept", "officer", "phone"))
     return None
-
-
-# 제목용 단일 열 표에서 현재 장·절 문맥을 갱신하되 통계 ref 표는 제외한다.
-def context_from_title_table(table: dict, chapter: str | None,
-                             section: str | None) -> tuple[str | None, str | None]:
-    if table.get("cols") != 1:
-        return chapter, section
-    text = table_plain_text(table)
-    if RE_REFID.match(text):
-        return chapter, section
-    if "제" in text and "절" in text:
-        return chapter, text
-    if text and table.get("rows", 0) <= 5 and "GOVERNMENT" in text.upper():
-        return text, section
-    return chapter, section
-
-
-# 목차 행이 장 번호와 한·영 제목으로 구성됐는지 해석한다.
-def toc_chapter_row(row: list[dict]) -> tuple[int, str, str | None] | None:
-    values = [clean_text(cell.get("text") or "", keep_newlines=True) for cell in row]
-    if len(values) < 2 or not values[0].isdigit():
-        return None
-    raw_title = next((value for value in values[1:] if value), "")
-    if not raw_title:
-        return None
-    title_ko, title_en = split_title(raw_title)
-    return int(values[0]), title_ko, title_en
-
-
-# 목차 표를 순회해 각 leaf ref_id의 장·절·3·4계층 제목 catalog를 만든다.
-def build_toc_catalog(tables: list[dict]) -> dict[str, dict]:
-    """목차 표에서 실제 통계 leaf별 4계층 제목 catalog를 만든다."""
-    chapters: dict[int, dict] = {}
-    groups: dict[str, dict] = {}
-    entries: dict[str, dict] = {}
-    chapter_no: int | None = None
-    chapter: str | None = None
-    section_no: int | None = None
-    section: str | None = None
-    current_group: dict | None = None
-    pending: dict | None = None
-
-    # 여러 셀·줄에 걸친 목차 제목을 합쳐 한·영 제목으로 정규화한다.
-    def normalized_pending_title(parts: list[str]) -> tuple[str, str | None]:
-        raw = " ".join(strip_title_page(part) for part in parts if part)
-        return split_title(raw)
-
-    # 대기 중인 목차 항목을 현재 계층 상태와 최종 catalog에 확정한다.
-    def finish_pending() -> None:
-        nonlocal pending, section_no, section, current_group
-        if not pending:
-            return
-        title_ko, title_en = normalized_pending_title(pending["parts"])
-        if pending["kind"] == "section":
-            section_no = pending["number"]
-            section = title_ko
-            current_group = None
-        elif pending["kind"] == "level3":
-            ref_id = pending["ref_id"]
-            ref_chapter, ref_section, level3_no, _ = ref_numbers(ref_id)
-            current_group = {
-                "ref_id": ref_id,
-                "chapter_no": ref_chapter or chapter_no,
-                "section_no": ref_section or section_no,
-                "level3_no": level3_no,
-                "chapter": (chapters.get(ref_chapter or chapter_no or -1) or {}).get(
-                    "title", chapter
-                ),
-                "section": section,
-                "level3_title": title_ko or ref_id,
-                "level3_title_en": title_en,
-                "children": [],
-            }
-            groups[ref_id] = current_group
-        elif pending["kind"] == "level4" and current_group:
-            level4_no = pending["number"]
-            ref_id = f'{current_group["ref_id"]}-{level4_no}'
-            entry = {
-                key: value for key, value in current_group.items() if key != "children"
-            }
-            entry.update({
-                "ref_id": ref_id,
-                "level4_no": level4_no,
-                "level4_title": title_ko or current_group["level3_title"],
-                "level4_title_en": title_en,
-            })
-            entries[ref_id] = entry
-            current_group["children"].append(ref_id)
-        pending = None
-
-    # 목차 한 줄을 절·3계층·4계층 시작 또는 이전 제목의 연속 줄로 소비한다.
-    def consume_line(line: str) -> None:
-        nonlocal pending
-        line = clean_text(line)
-        if not line:
-            return
-        match = RE_TOC_SECTION.match(line)
-        if match:
-            finish_pending()
-            pending = {
-                "kind": "section",
-                "number": int(match.group(1)),
-                "parts": [match.group(2)],
-            }
-            return
-        match = RE_TOC_LEVEL3.match(line)
-        if match:
-            finish_pending()
-            pending = {
-                "kind": "level3",
-                "ref_id": match.group(1),
-                "parts": [match.group(2)],
-            }
-            return
-        match = RE_TOC_LEVEL4.match(line)
-        if match:
-            finish_pending()
-            pending = {
-                "kind": "level4",
-                "number": int(match.group(1)),
-                "parts": [match.group(2)],
-            }
-            return
-        if pending:
-            pending["parts"].append(line)
-
-    for table in tables:
-        for row in table.get("cells", []):
-            chapter_record = toc_chapter_row(row)
-            if chapter_record:
-                finish_pending()
-                chapter_no, chapter, chapter_en = chapter_record
-                chapters[chapter_no] = {
-                    "title": chapter,
-                    "title_en": chapter_en,
-                }
-                section_no = None
-                section = None
-                current_group = None
-                continue
-            for cell in row:
-                text = cell.get("text") or ""
-                if not ("제" in text or RE_REFID_ANYWHERE.search(text)):
-                    continue
-                for line in text.splitlines():
-                    consume_line(line)
-    finish_pending()
-
-    # 하위 항목이 없는 n-n-n은 그 자체가 실제 표 제목이다. 이때 4계층 제목은
-    # 요구사항대로 3계층 제목과 동일하게 채우고 level4_no만 NULL로 둔다.
-    for ref_id, group in groups.items():
-        if group["children"]:
-            continue
-        entry = {key: value for key, value in group.items() if key != "children"}
-        entry.update({
-            "level4_no": None,
-            "level4_title": group["level3_title"],
-            "level4_title_en": group.get("level3_title_en"),
-        })
-        entries[ref_id] = entry
-    return entries
-
-
-# 문서 앞부분에서 장 행과 ref_id를 함께 가진 연속 목차 표만 수집한다.
-def toc_tables(hwpx_path: str) -> list[dict]:
-    tables: list[dict] = []
-    for block in iter_blocks(hwpx_path):
-        if block["type"] != "table":
-            continue
-        table = block["table"]
-        has_chapter_row = any(toc_chapter_row(row) for row in table.get("cells", []))
-        has_toc_refs = bool(RE_REFID_ANYWHERE.search(table_plain_text(table)))
-        if has_chapter_row and has_toc_refs:
-            tables.append(table)
-            continue
-        if tables:
-            break
-    return tables
-
-
-# 데이터 표가 하나 이상 있는 완성 통계 단위만 결과에 추가한다.
-def append_unit(units: list[dict], unit: dict | None) -> None:
-    if unit and unit.get("tables"):
-        units.append(unit)
 
 
 # HWPX ZIP 안의 본문 section XML 이름을 숫자 순서로 정렬한다.
@@ -925,6 +682,251 @@ def iter_blocks(hwpx_path: str):
                     yield block
 
 
+# 문서 앞머리에서 장 행과 계층 번호를 함께 가진 연속 목차 표만 모은다.
+def collect_toc_tables(blocks: list[dict]) -> list[dict]:
+    tables: list[dict] = []
+    for block in blocks:
+        if block["type"] != "table":
+            continue
+        table = block["table"]
+        rows = [[cell.get("text") or "" for cell in row] for row in table.get("cells", [])]
+        has_chapter_row = any(parse_toc_chapter_row(row) for row in rows)
+        has_refs = bool(re.search(r"\d+-\d+-\d+|부록\s*\d", table_plain_text(table)))
+        if has_chapter_row and has_refs:
+            tables.append(table)
+            continue
+        if tables:
+            break
+    return tables
+
+
+# 목차 표 이후의 본문에서 표제 표, 절 표지와 데이터 표를 순서대로 골라낸다.
+def scan_body(blocks: list[dict], toc_table_count: int) -> tuple[
+    list[tuple[Heading, int | None]],
+    dict[tuple[int, int], tuple[str, str | None]],
+    list[dict],
+]:
+    headings: list[tuple[Heading, int | None]] = []
+    section_covers: dict[tuple[int, int], tuple[str, str | None]] = {}
+    body: list[dict] = []
+    seen_tables = 0
+    pending_section: tuple[int, str, str | None] | None = None
+
+    for block in blocks:
+        if block["type"] == "table":
+            seen_tables += 1
+            if seen_tables <= toc_table_count:
+                continue
+
+            table = block["table"]
+            plain = table_plain_text(table)
+            if is_colophon(plain):
+                break
+
+            if table.get("cols") == 1:
+                texts = table_cell_texts(table)
+                cover = parse_section_cover(texts)
+                if cover:
+                    pending_section = cover
+                    body.append({"kind": "section_cover"})
+                    continue
+
+                found = [
+                    parsed
+                    for parsed in (parse_heading_cell(text) for text in texts)
+                    if parsed is not None
+                ]
+                if found:
+                    for heading in found:
+                        if pending_section and heading.section_no is not None:
+                            number, title_ko, title_en = pending_section
+                            if number == heading.section_no and heading.chapter_no is not None:
+                                section_covers.setdefault(
+                                    (heading.chapter_no, number), (title_ko, title_en)
+                                )
+                            pending_section = None
+                        headings.append((heading, block.get("pageNumber")))
+                        body.append({"kind": "heading", "index": len(headings) - 1})
+                    continue
+
+            if data_table(table):
+                body.append({"kind": "table", "table": table})
+            continue
+
+        if block["type"] == "paragraph":
+            body.append({"kind": "paragraph", "text": block.get("text") or ""})
+
+    return headings, section_covers, body
+
+
+# 확정된 계층 노드를 표·주석·출처를 담을 수 있는 통계 단위 dict로 만든다.
+def node_to_unit(node: OutlineNode) -> dict:
+    title_ko = node.level4_title or node.level3_title or node.ref_id
+    title_en = node.level4_title_en if node.level4_title else node.level3_title_en
+    return {
+        "ref_id": node.ref_id,
+        "ordinal": node.ordinal,
+        "chapter_no": node.chapter_no,
+        "section_no": node.section_no,
+        "level3_no": node.level3_no,
+        "level4_no": node.level4_no,
+        "chapter": node.chapter,
+        "section": node.section,
+        "level3_title": node.level3_title,
+        "level3_title_en": node.level3_title_en,
+        "level4_title": node.level4_title,
+        "level4_title_en": node.level4_title_en,
+        "title_ko": title_ko,
+        "title_en": title_en,
+        "unit": None,
+        "base_date": None,
+        "page_start": node.page_start,
+        "tables": [],
+        "footnotes": [],
+        "contacts": [],
+    }
+
+
+# 본문 순서를 따라 각 표·주석·출처를 직전 표제가 가리키는 통계 단위에 붙인다.
+def attach_content(
+    body: list[dict],
+    headings: list[tuple[Heading, int | None]],
+    units_by_ref: dict[str, dict],
+) -> list[str]:
+    warnings: list[str] = []
+    current: dict | None = None
+    pending_note: dict | None = None
+
+    for item in body:
+        kind = item["kind"]
+        if kind == "section_cover":
+            current = None
+            pending_note = None
+            continue
+
+        if kind == "heading":
+            heading = headings[item["index"]][0]
+            unit = units_by_ref.get(heading.ref_id)
+            if unit is None:
+                # 하위 제목을 가진 3계층 묶음 제목이다. 표는 하위 제목이 받는다.
+                current = None
+            else:
+                # 영문 전용 표제는 앞 쪽에서 이어지는 같은 통계의 계속 표시다.
+                # 국문 쪽에 영문 제목이 없었다면 이때 채운다.
+                if unit is not current and not unit.get("title_en") and heading.title_en:
+                    unit["title_en"] = heading.title_en
+                    if unit.get("level4_no") is not None:
+                        unit["level4_title_en"] = heading.title_en
+                    else:
+                        unit["level3_title_en"] = heading.title_en
+                current = unit
+            pending_note = None
+            continue
+
+        if current is None:
+            if kind == "table":
+                warnings.append("표제 없이 등장한 데이터 표를 건너뛰었습니다.")
+            continue
+
+        if kind == "table":
+            add_table(current, item["table"])
+            pending_note = None
+        elif kind == "paragraph":
+            pending_note = handle_paragraph(current, item["text"], pending_note)
+
+    return warnings
+
+
+# 본문에서 복원한 계층을 앞머리 목차와 대조해 검수용 불일치 목록을 만든다.
+def reconcile_with_toc(units: list[dict], catalog: TocCatalog) -> dict:
+    body_titles: dict[str, str] = {}
+    for unit in units:
+        title = unit.get("title_ko") or ""
+        body_titles.setdefault(re.sub(r"\s+", "", title), unit["ref_id"])
+
+    ref_mismatch: list[dict] = []
+    toc_only: list[dict] = []
+    for leaf in catalog.leaves:
+        if leaf.get("children"):
+            continue
+        title = re.sub(r"\s+", "", leaf.get("title_ko") or "")
+        if not title:
+            continue
+        body_ref = body_titles.get(title)
+        if body_ref is None:
+            toc_only.append({
+                "toc_ref_id": leaf["ref_id"],
+                "title_ko": leaf.get("title_ko"),
+                "toc_page": leaf.get("page"),
+            })
+        elif body_ref != leaf["ref_id"]:
+            ref_mismatch.append({
+                "title_ko": leaf.get("title_ko"),
+                "toc_ref_id": leaf["ref_id"],
+                "body_ref_id": body_ref,
+            })
+
+    toc_titles = {
+        re.sub(r"\s+", "", leaf.get("title_ko") or "")
+        for leaf in catalog.leaves
+        if not leaf.get("children")
+    }
+    body_only = [
+        {"ref_id": unit["ref_id"], "title_ko": unit.get("title_ko")}
+        for unit in units
+        if re.sub(r"\s+", "", unit.get("title_ko") or "") not in toc_titles
+    ]
+    return {
+        "toc_ref_mismatch": ref_mismatch,
+        "toc_only_entries": toc_only,
+        "body_only_entries": body_only,
+    }
+
+
+# 적재 전에 반드시 잡아야 할 중복·누락·계층 결손을 통계 목록에서 검사한다.
+def check_units(units: list[dict]) -> dict:
+    seen: dict[str, int] = {}
+    duplicate_refs: list[str] = []
+    for unit in units:
+        ref = unit["ref_id"]
+        seen[ref] = seen.get(ref, 0) + 1
+        if seen[ref] == 2:
+            duplicate_refs.append(ref)
+
+    duplicate_titles: dict[str, list[str]] = {}
+    for unit in units:
+        key = "|".join([
+            str(unit.get("chapter_no")),
+            str(unit.get("section_no")),
+            re.sub(r"\s+", "", unit.get("title_ko") or ""),
+        ])
+        duplicate_titles.setdefault(key, []).append(unit["ref_id"])
+
+    return {
+        "statistics": len(units),
+        "tables": sum(len(unit["tables"]) for unit in units),
+        "duplicate_ref_ids": duplicate_refs,
+        "duplicate_titles_in_section": [
+            {"key": key, "ref_ids": refs}
+            for key, refs in duplicate_titles.items()
+            if len(refs) > 1
+        ],
+        "statistics_without_tables": [
+            {"ref_id": unit["ref_id"], "title_ko": unit.get("title_ko")}
+            for unit in units
+            if not unit["tables"]
+        ],
+        "statistics_without_chapter": [
+            unit["ref_id"] for unit in units if not unit.get("chapter")
+        ],
+        "statistics_without_section": [
+            unit["ref_id"]
+            for unit in units
+            if unit.get("section_no") is not None and not unit.get("section")
+        ],
+    }
+
+
 # 호출자가 덮어쓸 수 있는 기본 발간물 메타데이터를 페이지 수와 함께 만든다.
 def default_publication(page_count: int | None) -> dict:
     return {
@@ -945,53 +947,23 @@ def estimate_page_count(hwpx_path: str) -> int | None:
     return page_count
 
 
-# HWPX 목차와 본문 block을 결합해 적재 가능한 발간물·통계 JSON을 생성한다.
+# HWPX 목차와 본문을 결합해 적재 가능한 발간물·통계 JSON을 생성한다.
 def parse(
     hwpx_path: str,
     publication_year: int | None = None,
     publication_title: str | None = None,
     publication_no: str | None = None,
 ) -> dict:
-    units: list[dict] = []
-    current: dict | None = None
-    pending_note: dict | None = None
-    chapter: str | None = None
-    section: str | None = None
-    toc_catalog = build_toc_catalog(toc_tables(hwpx_path))
+    blocks = list(iter_blocks(hwpx_path))
+    toc_tables = collect_toc_tables(blocks)
+    catalog = build_toc_catalog(toc_tables)
+    headings, section_covers, body = scan_body(blocks, len(toc_tables))
+    nodes, _ = build_outline(headings, catalog, section_covers)
 
-    for block in iter_blocks(hwpx_path):
-        block_type = block["type"]
+    units = [node_to_unit(node) for node in nodes]
+    units_by_ref = {unit["ref_id"]: unit for unit in units}
+    warnings = attach_content(body, headings, units_by_ref)
 
-        if block_type == "table":
-            table = block["table"]
-            title = title_from_table(table)
-            if title:
-                append_unit(units, current)
-                ref_id, raw_title = title
-                current = make_unit(
-                    ref_id,
-                    raw_title,
-                    block.get("pageNumber"),
-                    chapter,
-                    section,
-                    toc_catalog.get(ref_id),
-                )
-                pending_note = None
-                continue
-
-            chapter, section = context_from_title_table(table, chapter, section)
-            if current and data_table(table):
-                add_table(current, table)
-                pending_note = None
-            continue
-
-        if current is None:
-            continue
-
-        if block_type == "paragraph":
-            pending_note = handle_paragraph(current, block.get("text") or "", pending_note)
-
-    append_unit(units, current)
     publication = default_publication(estimate_page_count(hwpx_path))
     if publication_year is not None:
         publication["year"] = publication_year
@@ -1008,21 +980,58 @@ def parse(
             "source": os.path.abspath(hwpx_path),
             "parser": "admin/backend/services/load_parser.py",
             "method": (
-                "HWPX 목차에서 chapter/section/3계층/4계층 제목 catalog를 만든 뒤 "
-                "Contents/section*.xml 본문의 ref_id와 매칭하고, "
-                "hp:cellAddr/hp:cellSpan으로 병합 셀을 보존한 뒤 grid/records/markdown을 생성"
+                "본문 표제 표(n-n-n / n-n-n-n / 부록N-M)를 계층의 정본으로 삼아 "
+                "장·절·3계층·4계층과 최종 제목을 확정하고, 앞머리 목차는 장·절 이름과 "
+                "교차검증에만 사용한다. 표는 hp:cellAddr/hp:cellSpan으로 병합 셀을 "
+                "보존한 뒤 grid/records/markdown으로 파생한다."
             ),
+            "toc_tables": len(toc_tables),
+            "warnings": sorted(set(warnings)),
         },
+        "checks": check_units(units),
+        "toc_reconciliation": reconcile_with_toc(units, catalog),
         "statistics": units,
     }
 
 
 # 파싱 결과를 통계·표·주석·출처 순서의 사람이 검수할 Markdown으로 렌더링한다.
 def parsed_to_markdown(data: dict) -> str:
+    checks = data.get("checks") or {}
+    reconciliation = data.get("toc_reconciliation") or {}
     out = [f"# {data['publication']['title']}", ""]
+    out.extend([
+        "## 파싱 요약",
+        "",
+        f"- 통계 수: {checks.get('statistics')}",
+        f"- 표 수: {checks.get('tables')}",
+        f"- 중복 ref_id: {len(checks.get('duplicate_ref_ids') or [])}",
+        f"- 표가 없는 통계: {len(checks.get('statistics_without_tables') or [])}",
+        f"- 장이 비어 있는 통계: {len(checks.get('statistics_without_chapter') or [])}",
+        f"- 절이 비어 있는 통계: {len(checks.get('statistics_without_section') or [])}",
+        "",
+    ])
+
+    for label, key in (
+        ("본문과 목차의 번호가 다른 항목", "toc_ref_mismatch"),
+        ("목차에만 있는 항목", "toc_only_entries"),
+        ("본문에만 있는 항목", "body_only_entries"),
+    ):
+        rows = reconciliation.get(key) or []
+        out.extend([f"### {label} ({len(rows)}건)", ""])
+        for row in rows:
+            parts = [f"{name}={value}" for name, value in row.items() if value is not None]
+            out.append("- " + ", ".join(parts))
+        out.append("")
+
     for unit in data.get("statistics", []):
-        title = f"{unit['ref_id']} {unit['title_ko']}".strip()
-        out.extend([f"## {title}", ""])
+        out.extend([f"## {unit['ref_id']} {unit['title_ko']}".rstrip(), ""])
+        hierarchy = [
+            f"장: {unit.get('chapter')}",
+            f"절: {unit.get('section')}",
+            f"3계층: {unit.get('level3_title')}",
+            f"4계층: {unit.get('level4_title')}",
+        ]
+        out.extend([" / ".join(hierarchy), ""])
         if unit.get("title_en"):
             out.extend([unit["title_en"], ""])
 
