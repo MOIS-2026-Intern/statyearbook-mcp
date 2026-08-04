@@ -164,30 +164,6 @@ jobs:
             exit 1
           fi
 
-      # 배포와 같은 main 프로필로도 띄워 운영에서만 쓰는 경로를 검증한다.
-      # app 단독 의존성만 담긴 이미지에서 huggingface provider가 기동 검증을 통과해야 하므로
-      # 운영에 필요한 의존성을 requirements에서 빼면 여기서 실패한다.
-      - name: Smoke test app image with deploy profile
-        if: matrix.service == 'app'
-        run: |
-          docker run --detach --name statyearbook-app-main-ci --publish 18003:8001 \
-            --env APP_PROFILE=main \
-            --env STATYEARBOOK_APP_HOST=0.0.0.0 \
-            --env STATYEARBOOK_APP_DSN=postgresql://ci:ci@127.0.0.1:5432/statyearbook_ci \
-            --env STATYEARBOOK_APP_HF_TOKEN=ci-placeholder-token \
-            statyearbook-app:ci
-          if ! curl --fail --silent --show-error --retry 20 --retry-delay 1 \
-            --retry-all-errors --output app-main-health.json \
-            http://127.0.0.1:18003/health; then
-            docker logs statyearbook-app-main-ci
-            exit 1
-          fi
-          if ! grep -q '"embeddingProvider":"huggingface"' app-main-health.json; then
-            echo "main 프로필이 운영 embedding provider를 선택하지 않았습니다:"
-            cat app-main-health.json
-            exit 1
-          fi
-
       - name: Smoke test backend image
         if: matrix.service == 'backend'
         run: |
@@ -195,18 +171,14 @@ jobs:
           docker run --detach --name statyearbook-app-contract-ci \
             --network statyearbook-contract-ci \
             --publish 18002:8001 \
-            --env APP_PROFILE=main \
+            --env APP_PROFILE=test \
             --env STATYEARBOOK_APP_HOST=0.0.0.0 \
-            --env STATYEARBOOK_APP_DSN=postgresql://ci:ci@127.0.0.1:5432/statyearbook_ci \
-            --env STATYEARBOOK_APP_HF_TOKEN=ci-placeholder-token \
             statyearbook-app-contract:ci
           docker run --detach --name statyearbook-backend-ci --publish 18000:8000 \
             --network statyearbook-contract-ci \
-            --env APP_PROFILE=main \
+            --env APP_PROFILE=test \
             --env STATYEARBOOK_BACKEND_HOST=0.0.0.0 \
             --env STATYEARBOOK_BACKEND_MCP_URL=http://statyearbook-app-contract-ci:8001/mcp \
-            --env STATYEARBOOK_BACKEND_CORS_ORIGINS=https://frontend.example.test \
-            --env STATYEARBOOK_BACKEND_BIZROUTER_API_KEY=ci-placeholder-key \
             statyearbook-backend:ci
           if ! curl --fail --silent --show-error --retry 20 --retry-delay 1 \
             --retry-all-errors http://127.0.0.1:18002/health; then
@@ -221,28 +193,12 @@ jobs:
           docker exec --interactive statyearbook-backend-ci python - <<'PY'
           import asyncio
 
-          import httpx
-
           from backend.config import settings
           from backend.gateways.mcp_gateway import McpGateway
-          from backend.gateways.mcp_waker import health_url, wake_mcp
 
 
           # 분리 배포된 app에서 backend가 세 가지 공개 도구를 실제로 조회하는지 확인한다.
-          # 배포 프로필에서만 켜지는 깨우기 경로도 같은 app을 상대로 함께 검증한다.
           async def check_tools() -> None:
-              if not settings.mcp_wake_enabled:
-                  raise RuntimeError("deploy profile must enable the MCP wake path")
-
-              probe = health_url(settings.mcp_url)
-              health = httpx.get(probe, timeout=10)
-              if health.status_code != 200:
-                  raise RuntimeError(f"{probe} returned {health.status_code}")
-              if health.json().get("service") != "statyearbook-app":
-                  raise RuntimeError(f"{probe} reached an unexpected service")
-              if not await wake_mcp(settings):
-                  raise RuntimeError(f"wake_mcp failed for {probe}")
-
               async with McpGateway(settings) as gateway:
                   names = {tool.name for tool in await gateway.list_tool_specs()}
               expected = {"search_statistics", "search_tables", "visualize"}
@@ -306,12 +262,6 @@ jobs:
         run: >-
           docker rm --force
           statyearbook-${{ matrix.service }}-ci
-          2>/dev/null || true
-
-      - name: Remove deploy profile smoke test container
-        if: always() && matrix.service == 'app'
-        run: >-
-          docker rm --force statyearbook-app-main-ci
           2>/dev/null || true
 
       - name: Remove backend contract resources

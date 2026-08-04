@@ -56,18 +56,9 @@ class ChatService:
             "connecting_mcp",
             "MCP 호스트에 연결하는 중입니다.",
         )
-
-        # 휴면 상태의 MCP 인스턴스를 깨우는 동안 대기가 길어지는 이유를 알린다.
-        def on_cold_start() -> None:
-            self._emit_progress(
-                on_progress,
-                "connecting_mcp",
-                "MCP 호스트를 깨우는 중입니다. 최대 1분 정도 걸릴 수 있습니다.",
-            )
-
         connect_started = time.perf_counter()
         try:
-            async with McpGateway(self._settings, on_cold_start) as mcp:
+            async with McpGateway(self._settings) as mcp:
                 metrics["mcp_connect_ms"] += _elapsed_ms(connect_started)
                 connect_recorded = True
                 self._emit_progress(
