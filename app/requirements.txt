@@ -1,5 +1,7 @@
+# 운영 app은 Hugging Face Inference API로 query 임베딩만 만들므로 sentence-transformers를
+# 넣지 않습니다. torch까지 따라 들어와 이미지가 커지고 콜드 스타트가 길어집니다.
+# 로컬 provider는 admin과 개발 환경에서만 쓰며 admin/requirements.txt가 의존성을 가집니다.
 mcp>=1.28,<2
 psycopg[binary]>=3.3,<4
 python-dotenv>=1.2,<2
 huggingface-hub>=1.3,<2
-sentence-transformers==5.6.0
