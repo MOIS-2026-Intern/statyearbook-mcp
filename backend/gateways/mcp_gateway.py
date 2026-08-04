@@ -25,7 +25,12 @@ from utils.logging import compact_json
 logger = logging.getLogger(__name__)
 
 # 도구 호출 응답을 실어 나르는 SSE 스트림이 조용해도 끊지 않는 시간이다.
+# 잠든 인스턴스로 보낸 요청을 라우터가 붙들고 있는 동안에도 이 시간만큼 기다린다.
 _SSE_READ_TIMEOUT_SECONDS = 300.0
+
+# 429를 돌려받았을 때 다시 연결해 보는 횟수와 한 번에 기다릴 최대 시간이다.
+_CONNECT_MAX_ATTEMPTS = 3
+_RETRY_AFTER_MAX_SECONDS = 30.0
 
 _TOOL_SPECS_CACHE: dict[str, tuple[float, tuple[ToolSpec, ...]]] = {}
 
@@ -49,40 +54,63 @@ class McpGateway:
         self._tool_specs_cache_hit = False
 
     # 휴면 인스턴스를 깨운 뒤 streamable HTTP 연결을 열고 MCP 세션을 초기화한다.
+    # 라우터가 요청량을 제한해 429를 돌려주면 잠시 기다렸다가 다시 시도한다.
     async def __aenter__(self) -> "McpGateway":
         started = perf_counter()
         await wake_mcp(self._settings, self._on_cold_start)
-        self._stack = AsyncExitStack()
-        try:
-            # 전송 계층이 종료 요청을 보낼 때까지 살아 있도록 클라이언트를 먼저 등록한다.
-            http_client = await self._stack.enter_async_context(self._create_http_client())
-            read_stream, write_stream, _ = await self._stack.enter_async_context(
-                streamable_http_client(self._settings.mcp_url, http_client=http_client)
-            )
-            self._session = await self._stack.enter_async_context(
-                ClientSession(read_stream, write_stream)
-            )
-            await self._session.initialize()
-        except BaseException as exc:
-            cause = await self._close(exc)
-            if _is_external_cancellation(exc):
-                raise
-            logger.error(
-                "event=mcp.connect.error url=%s duration_ms=%s error_type=%s error=%s",
-                self._settings.mcp_url,
-                _elapsed_ms(started),
-                cause.__class__.__name__,
-                cause,
-                exc_info=cause,
-            )
-            raise McpGatewayError(
-                f"MCP 서버에 연결하지 못했습니다 ({self._settings.mcp_url}): {cause}"
-            ) from cause
+
+        for attempt in range(1, _CONNECT_MAX_ATTEMPTS + 1):
+            try:
+                await self._open_session()
+            except BaseException as exc:
+                cause = await self._close(exc)
+                if _is_external_cancellation(exc):
+                    raise
+
+                delay = _retry_after_seconds(cause, attempt)
+                if delay is not None and attempt < _CONNECT_MAX_ATTEMPTS:
+                    logger.warning(
+                        "event=mcp.connect.retry attempt=%s delay_s=%s error=%s",
+                        attempt,
+                        delay,
+                        cause,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                logger.error(
+                    "event=mcp.connect.error url=%s duration_ms=%s attempts=%s error_type=%s error=%s",
+                    self._settings.mcp_url,
+                    _elapsed_ms(started),
+                    attempt,
+                    cause.__class__.__name__,
+                    cause,
+                    exc_info=cause,
+                )
+                raise McpGatewayError(
+                    f"MCP 서버에 연결하지 못했습니다 ({self._settings.mcp_url}): {cause}"
+                ) from cause
+            break
+
         logger.debug(
-            "event=mcp.connect duration_ms=%s",
+            "event=mcp.connect duration_ms=%s attempts=%s",
             _elapsed_ms(started),
+            attempt,
         )
         return self
+
+    # streamable HTTP 연결을 열고 MCP 세션을 초기화한다.
+    async def _open_session(self) -> None:
+        self._stack = AsyncExitStack()
+        # 전송 계층이 종료 요청을 보낼 때까지 살아 있도록 클라이언트를 먼저 등록한다.
+        http_client = await self._stack.enter_async_context(self._create_http_client())
+        read_stream, write_stream, _ = await self._stack.enter_async_context(
+            streamable_http_client(self._settings.mcp_url, http_client=http_client)
+        )
+        self._session = await self._stack.enter_async_context(
+            ClientSession(read_stream, write_stream)
+        )
+        await self._session.initialize()
 
     # 콜드 스타트 직후의 느린 첫 응답을 견디도록 MCP 전용 HTTP 클라이언트를 만든다.
     def _create_http_client(self) -> httpx.AsyncClient:
@@ -236,6 +264,21 @@ def _is_external_cancellation(error: BaseException) -> bool:
         return False
     task = asyncio.current_task()
     return task is None or task.cancelling() > 0
+
+
+# 429 응답이면 다시 시도하기까지 기다릴 시간을 정하고, 그 외 오류는 재시도하지 않는다.
+# 서버가 Retry-After를 주지 않으면 시도 횟수에 따라 지수적으로 물러난다.
+def _retry_after_seconds(error: BaseException, attempt: int) -> float | None:
+    if not isinstance(error, httpx.HTTPStatusError):
+        return None
+    if error.response.status_code != httpx.codes.TOO_MANY_REQUESTS:
+        return None
+
+    try:
+        delay = float(error.response.headers.get("retry-after", ""))
+    except ValueError:
+        delay = float(2**attempt)
+    return min(max(delay, 1.0), _RETRY_AFTER_MAX_SECONDS)
 
 
 # ExceptionGroup에 감싸인 원인 중 취소가 아닌 첫 예외를 실제 실패 원인으로 고른다.

@@ -53,7 +53,7 @@ class Settings:
     mcp_connect_timeout_seconds: float = 30.0
     mcp_tool_cache_ttl_seconds: float = 300.0
     mcp_wake_enabled: bool = False
-    mcp_wake_timeout_seconds: float = 150.0
+    mcp_wake_timeout_seconds: float = 300.0
     log_level: str = "DEBUG"
 
     # 모델 공급자를 제한하고 운영 프로필의 필수 인증·MCP 설정을 시작 시 검증한다.
@@ -150,7 +150,7 @@ class Settings:
                 os.environ.get("STATYEARBOOK_BACKEND_MCP_WAKE_ENABLED"), False
             ),
             mcp_wake_timeout_seconds=float(
-                os.environ.get("STATYEARBOOK_BACKEND_MCP_WAKE_TIMEOUT_SECONDS", "150")
+                os.environ.get("STATYEARBOOK_BACKEND_MCP_WAKE_TIMEOUT_SECONDS", "300")
             ),
             log_level=os.environ.get("STATYEARBOOK_BACKEND_LOG_LEVEL", "DEBUG"),
         )

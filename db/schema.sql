@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS statistics (
     pub_id                INT REFERENCES publications(pub_id),
     year                  INT NOT NULL,
     ref_id                TEXT,
+    -- 발간물 안에서의 본문 등장 순서다. 쪽 번호가 같아도 순서가 흔들리지 않게 한다.
+    ordinal               INT,
     chapter_no            INT,
     section_no            INT,
     level3_no             INT,
@@ -105,13 +107,46 @@ CREATE TABLE IF NOT EXISTS embedding_jobs (
     finished_at     TIMESTAMPTZ
 );
 
+-- 이미 만들어진 DB에도 statistics.ordinal을 더한다. CREATE TABLE IF NOT EXISTS만으로는
+-- 기존 테이블에 컬럼이 생기지 않는다.
+ALTER TABLE statistics ADD COLUMN IF NOT EXISTS ordinal INT;
+
+-- pub_id+ref_id 유일 색인을 만들기 전에 남아 있는 중복을 사람이 알아볼 수 있게 알린다.
+-- 중복이 있으면 해당 연도를 replace 모드로 다시 적재해야 한다.
+DO $statyearbook_dup_guard$
+DECLARE
+    v_dup TEXT;
+BEGIN
+    SELECT string_agg(DISTINCT year || ':' || ref_id, ', ')
+      INTO v_dup
+      FROM (
+          SELECT year, ref_id
+            FROM statistics
+           WHERE ref_id IS NOT NULL
+           GROUP BY pub_id, year, ref_id
+          HAVING COUNT(*) > 1
+      ) AS duplicated;
+    IF v_dup IS NOT NULL THEN
+        RAISE EXCEPTION
+            'statistics에 같은 발간물의 중복 ref_id가 있어 유일 색인을 만들 수 없습니다: %. '
+            '해당 연도를 replace 모드로 다시 적재하십시오.', v_dup;
+    END IF;
+END
+$statyearbook_dup_guard$;
+
 -- 한 연도에 발간물은 하나라는 전제를 강제한다. 적재 스크립트와 통계 검색의 발간판 병합이
 -- 이 전제에 기대므로, 발간물 종류를 늘리려면 발간물 구분 컬럼을 먼저 추가하고
 -- app/tools/search_statistics.py의 LATEST_EDITIONS_CTE를 함께 고쳐야 한다.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_publications_unique_year
     ON publications(year);
+-- 한 발간물 안에서 표 번호는 유일하다. 파서가 같은 표를 두 번 넣거나 번호를 밀어
+-- 쓰는 사고를 적재 단계에서 곧바로 막는다.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_statistics_unique_pub_ref
+    ON statistics(pub_id, ref_id);
 CREATE INDEX IF NOT EXISTS idx_stat_year
     ON statistics(year);
+CREATE INDEX IF NOT EXISTS idx_stat_ordinal
+    ON statistics(pub_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_stat_refid
     ON statistics(ref_id);
 CREATE INDEX IF NOT EXISTS idx_stat_search

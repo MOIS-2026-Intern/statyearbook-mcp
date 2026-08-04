@@ -41,7 +41,7 @@ cp frontend/.env.example frontend/.env.development.local
 - frontend: 이미지 빌드 인자 `VITE_BACKEND_BASE_URL`
 - db: `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
 
-BGE-M3는 Git과 이미지에 포함하지 않습니다. local/test의 app과 로컬 적재를 담당하는 admin은 호스트의 같은 모델 artifact를 사용합니다. 운영 app은 기본적으로 Hugging Face Inference API에서 같은 `BAAI/bge-m3` revision의 query embedding만 생성하므로 모델 볼륨이 필요하지 않습니다. `STATYEARBOOK_APP_EMBED_PROVIDER=local|huggingface`로 실행 provider를 선택하며, Hugging Face를 선택하면 `STATYEARBOOK_APP_HF_TOKEN`을 secret으로 주입해야 합니다. 두 provider는 1024차원·정규화·고정 revision과 같은 DB embedding profile key를 사용합니다.
+BGE-M3는 Git과 이미지에 포함하지 않습니다. local/test의 app과 로컬 적재를 담당하는 admin은 호스트의 같은 모델 artifact를 사용합니다. 운영 app은 기본적으로 Hugging Face Inference API에서 같은 `BAAI/bge-m3` revision의 query embedding만 생성하므로 모델 볼륨이 필요하지 않습니다. 같은 이유로 `app/requirements.txt`에는 `sentence-transformers`를 넣지 않습니다. torch까지 따라 들어와 이미지가 커지고 잠든 인스턴스의 콜드 스타트가 길어지기 때문입니다. 로컬 provider 의존성은 `admin/requirements.txt`가 가지므로, local/test에서 app을 직접 실행할 때는 아래 로컬 실행 명령처럼 admin 의존성도 함께 설치해야 합니다. `STATYEARBOOK_APP_EMBED_PROVIDER=local|huggingface`로 실행 provider를 선택하며, Hugging Face를 선택하면 `STATYEARBOOK_APP_HF_TOKEN`을 secret으로 주입해야 합니다. 두 provider는 1024차원·정규화·고정 revision과 같은 DB embedding profile key를 사용합니다.
 
 admin의 작업 이력과 업로드 작업공간은 각각 `/service/admin/state`, `/service/admin/workspaces`에 있으므로 운영에서는 두 경로에 영속 볼륨을 연결해야 합니다.
 
@@ -91,8 +91,13 @@ Render 무료 티어처럼 유휴 상태에서 인스턴스가 잠드는 호스�
 유발하는 공개 URL을 `STATYEARBOOK_BACKEND_MCP_URL`에 설정해야 합니다.
 
 `STATYEARBOOK_BACKEND_MCP_WAKE_ENABLED=true`이면 backend는 MCP에 연결하기 전에 app의
-`/health`를 응답할 때까지 반복 호출해 인스턴스를 깨웁니다. 최대 대기 시간은
-`STATYEARBOOK_BACKEND_MCP_WAKE_TIMEOUT_SECONDS`이고, 깨우는 동안 프런트엔드에는
+`/health`를 호출해 인스턴스를 깨웁니다. 먼저 5초짜리 요청으로 이미 깨어 있는지 확인하고,
+잠들어 있으면 남은 예산을 모두 쓰는 긴 요청 하나로 기다립니다. 잠든 인스턴스로 온 요청은
+호스팅 라우터가 붙들고 있다가 부팅이 끝나면 전달하므로, 짧게 끊어 재시도하면 어떤 요청도
+부팅을 기다리지 못해 오히려 깨우기가 실패합니다. 최대 대기 시간은
+`STATYEARBOOK_BACKEND_MCP_WAKE_TIMEOUT_SECONDS`이고 인스턴스의 부팅 시간보다 넉넉해야
+합니다. 라우터가 요청량을 제한해 `429`를 돌려주면 `Retry-After`를 존중해 최대 세 번까지
+다시 연결합니다. 깨우는 동안 프런트엔드에는
 `connecting_mcp` 진행 이벤트로 안내 문구가 전달됩니다. backend는 기동 직후에도
 백그라운드로 같은 깨우기와 도구 사양 조회를 실행해(`event=mcp.warmup`) 첫 채팅
 요청이 콜드 스타트를 기다리지 않게 합니다. `main` 프로필만 기본으로 켜져 있고
@@ -110,6 +115,26 @@ python -m admin ingest data/통계연보.hwpx --year 2026 --embedding bge-m3
 ```
 
 기본 적재, 두 임베딩과 검증은 하나의 DB 트랜잭션으로 실행되어 중간 실패 시 모두 롤백됩니다.
+
+DB에 넣기 전에 파싱 결과만 확인하려면 `build-sql`로 검수 문서와 적재 SQL만 만듭니다.
+
+```bash
+python -m admin build-sql data/2026통계연보.hwpx --year 2026 --out admin/workspaces/rebuild-2026
+```
+
+### 목차 계층 복원 규칙
+
+표 번호(`ref_id`)와 장·절·3계층·4계층 제목은 **본문 표제 표**를 정본으로 삼습니다.
+앞머리 목차는 장·절 이름과 교차검증에만 씁니다. 2026년 연보 목차에는 본문에서
+빠진 항목(`4-2-1 지역주도형 청년일자리 사업 실적`, `3-1-2 전자정부 수출실적조사 결과`,
+둘 다 쪽 번호가 `?`)이 남아 있어 그 뒤 leaf 번호가 본문보다 하나씩 밀려 있습니다.
+목차를 정본으로 쓰면 `기부금품 모집등록`이 `4-2-10`과 `4-2-11`에 두 번 들어가는 식으로
+제목과 번호가 어긋납니다.
+
+본문과 목차가 다른 지점은 `yearbook_review.md`의 `본문과 목차의 번호가 다른 항목`,
+`목차에만 있는 항목`, `본문에만 있는 항목`에 정리되므로 적재 전에 확인하십시오.
+같은 발간물 안에서 `ref_id`가 겹치면 SQL 생성 단계와 `statistics(pub_id, ref_id)`
+유일 색인이 각각 적재를 막습니다.
 
 ## 검증과 이미지 빌드
 
