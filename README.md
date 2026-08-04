@@ -84,6 +84,25 @@ MCP 연결, 도구 확인, 모델 분석, 도구 호출, 결과 검토 상태를
 동안 재사용하며 `STATYEARBOOK_BACKEND_MCP_TOOL_CACHE_TTL_SECONDS=0`으로 끌 수
 있습니다.
 
+## MCP 인스턴스 깨우기
+
+Render 무료 티어처럼 유휴 상태에서 인스턴스가 잠드는 호스팅에서는 backend가 MCP를
+호출해도 깨어나지 않습니다. 이런 환경에서는 사설 네트워크 주소가 아니라 스핀업을
+유발하는 공개 URL을 `STATYEARBOOK_BACKEND_MCP_URL`에 설정해야 합니다.
+
+`STATYEARBOOK_BACKEND_MCP_WAKE_ENABLED=true`이면 backend는 MCP에 연결하기 전에 app의
+`/health`를 응답할 때까지 반복 호출해 인스턴스를 깨웁니다. 최대 대기 시간은
+`STATYEARBOOK_BACKEND_MCP_WAKE_TIMEOUT_SECONDS`이고, 깨우는 동안 프런트엔드에는
+`connecting_mcp` 진행 이벤트로 안내 문구가 전달됩니다. backend는 기동 직후에도
+백그라운드로 같은 깨우기와 도구 사양 조회를 실행해(`event=mcp.warmup`) 첫 채팅
+요청이 콜드 스타트를 기다리지 않게 합니다. `main` 프로필만 기본으로 켜져 있고
+`local`과 `test`에서는 꺼져 일반 MCP 클라이언트처럼 곧바로 연결합니다.
+
+끝내 연결하지 못하면 `event=mcp.connect.error`에 실제 원인을 남기고 `McpGatewayError`로
+알립니다. MCP transport는 실패를 취소로 감싸 전달하기 때문에 원인은 자원 정리 단계에서
+꺼내며, 요청 취소나 서버 종료로 생긴 취소는 그대로 전파해 구분합니다. 덕분에
+`POST /api/chat/stream`은 응답 없이 멈추는 대신 항상 `error` 이벤트로 스트림을 닫습니다.
+
 새 연보는 관리자 화면 또는 다음 명령으로 적재합니다.
 
 ```bash
