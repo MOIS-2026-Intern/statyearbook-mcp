@@ -2,9 +2,10 @@
 
 ANALYZE_PUBLICATIONS = (
     "통계연보 자체의 구성 요소와 메타데이터를 조회·집계한다. 통계 항목·표·장·절·담당 부서·담당자·"
-    "출처·주석의 전체 목록, 개수와 분포에 사용한다. 담당자·담당 부서·출처를 기준으로 그 값에 연결된 "
-    "통계표를 찾을 때도 이 도구를 사용한다. 통계표 본문의 실제 수치에는 사용하지 않으며, 서로 다른 "
-    "발간판 사이의 차이는 compare_publications를 사용한다. 세부 집계 방식과 필드는 각 인자 설명을 따른다."
+    "출처·주석의 전체 목록, 개수와 분포에 사용한다. 질문에 이미 담당자·담당 부서·출처 값이 주어져 "
+    "그 값에 연결된 통계표를 역검색할 때도 사용한다. 통계 주제를 찾거나 그 주제의 담당 정보를 묻는 "
+    "요청에는 사용하지 않는다. 통계표 본문의 실제 수치에는 사용하지 않으며, 서로 다른 발간판 사이의 "
+    "차이는 compare_publications를 사용한다. 세부 집계 방식과 필드는 각 인자 설명을 따른다."
 )
 ANALYZE_PUBLICATIONS_FIELDS = {
     "operation": (
@@ -142,9 +143,9 @@ COMPARE_PUBLICATIONS_FIELDS = {
 
 
 SEARCH_CONTACTS = (
-    "stat_id로 특정 통계표의 담당 부서·담당자·전화번호와 출처를 조회한다. 자연어로 통계표를 "
-    "찾아야 하면 먼저 search_statistics를 사용한다. 담당자나 부서를 기준으로 통계표를 역검색하는 "
-    "요청에는 analyze_publications를 사용한다."
+    "stat_id로 특정 통계표의 담당 부서·담당자·전화번호와 출처를 조회한다. 자연어 통계 주제의 담당 "
+    "정보를 묻는 경우 먼저 search_statistics로 stat_id를 찾는다. 질문에 이미 주어진 담당자나 부서를 "
+    "기준으로 통계표를 역검색하는 요청에는 analyze_publications를 사용한다."
 )
 SEARCH_CONTACTS_FIELDS = {
     "stat_id": "search_statistics 등에서 확인한 통계표 식별자.",
@@ -153,8 +154,8 @@ SEARCH_CONTACTS_FIELDS = {
 
 SEARCH_STATISTICS = (
     "통계표의 제목 계층, 컬럼과 행 항목을 자연어로 검색해 후보와 stat_id를 반환한다. 선택한 통계표의 "
-    "담당 정보는 search_contacts로, 실제 표 수치나 원문은 search_tables로 확인한다. publication_year는 "
-    "통계연보 발간연도이며, 생략하면 통계마다 가장 최근 발간판을 검색한다."
+    "담당 정보가 필요하면 이어서 search_contacts를, 실제 표 수치나 원문이 필요하면 search_tables를 "
+    "사용한다. publication_year는 통계연보 발간연도이며, 생략하면 통계마다 가장 최근 발간판을 검색한다."
 )
 SEARCH_STATISTICS_FIELDS = {
     "query": (

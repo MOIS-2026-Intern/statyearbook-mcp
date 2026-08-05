@@ -9,6 +9,7 @@ from app.tools.repository.publication_analysis_repository import (
     AnalysisGroup,
     AnalysisOperation,
     AnalysisSubject,
+    AnalysisValueFilterField,
 )
 from app.tools.service.publication_analysis_service import analyze_publications_data
 from app.tool_descriptions import (
@@ -19,7 +20,7 @@ from app.tool_descriptions import (
 
 
 class ValueFilter(BaseModel):
-    field: AnalysisField = Field(description=VALUE_FILTER_FIELDS["field"])
+    field: AnalysisValueFilterField = Field(description=VALUE_FILTER_FIELDS["field"])
     contains: str = Field(description=VALUE_FILTER_FIELDS["contains"])
 
 

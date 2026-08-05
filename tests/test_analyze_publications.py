@@ -3,10 +3,25 @@
 import unittest
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
+from app.tools.analyze_publications import ValueFilter
 from app.tools.service.publication_analysis_service import analyze_publications_data
 
 
 class AnalyzePublicationsTests(unittest.TestCase):
+    # 통계 제목은 연락처 값 필터가 아니므로 MCP 입력 스키마 단계에서 거부해야 한다.
+    def test_value_filter_rejects_statistic_title(self) -> None:
+        with self.assertRaises(ValidationError):
+            ValueFilter.model_validate(
+                {"field": "statistic_title", "contains": "마을세무사"}
+            )
+
+        value_filter = ValueFilter.model_validate(
+            {"field": "officer", "contains": "홍길동"}
+        )
+        self.assertEqual(value_filter.field, "officer")
+
     @patch(
         "app.tools.service.publication_analysis_service._execute_plan",
         return_value=[{"matched_publications": 1, "count": 319}],

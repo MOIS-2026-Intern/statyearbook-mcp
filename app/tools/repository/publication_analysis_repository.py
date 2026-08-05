@@ -67,6 +67,15 @@ AnalysisField = Literal[
     "note_no",
     "note",
 ]
+AnalysisValueFilterField = Literal[
+    "department",
+    "officer",
+    "phone",
+    "source_system",
+    "source_url",
+    "note_no",
+    "note",
+]
 
 LATEST_PUBLICATION_YEAR_SQL = "SELECT MAX(year) AS publication_year FROM publications"
 

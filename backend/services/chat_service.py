@@ -31,6 +31,22 @@ from backend.serializers.mcp_result_serializer import (
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[ChatProgress], None]
 
+_TOOL_INPUT_ERROR_MARKERS = (
+    "validation error",
+    "input should be",
+    "invalid json",
+    "field required",
+    "required argument",
+    "tool name is missing",
+    "unsupported ",
+    "must be",
+    "must contain",
+    "can only be",
+    "cannot be",
+    "does not accept",
+    "requires ",
+)
+
 
 class ChatService:
     # 대화 설정과 선택된 모델 gateway를 서비스에 연결한다.
@@ -173,6 +189,7 @@ class ChatService:
         historical_tool_names = _historical_tool_names(request)
         visualize_result_cache: dict[str, dict[str, Any]] = {}
         tool_call_counts: dict[str, int] = {}
+        input_error_retry_used = False
 
         for round_index in range(self._settings.max_tool_rounds):
             if round_index == 0:
@@ -231,6 +248,18 @@ class ChatService:
                     pipeline_metrics["tool_calls"] += 1
 
             if tool_results and all(result.is_error for result in tool_results):
+                can_retry_input_error = (
+                    not input_error_retry_used
+                    and round_index + 1 < self._settings.max_tool_rounds
+                    and all(_is_tool_input_error(result) for result in tool_results)
+                )
+                if can_retry_input_error:
+                    input_error_retry_used = True
+                    logger.info(
+                        "event=chat.tool_results outcome=input_error_retry tools=%s",
+                        ",".join(result.name or "unknown" for result in tool_results),
+                    )
+                    continue
                 logger.warning(
                     "event=chat.tool_results outcome=failed tools=%s",
                     ",".join(result.name or "unknown" for result in tool_results),
@@ -553,6 +582,14 @@ def _tool_error_detail(result: ToolResult) -> str:
         if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
             return str(item["text"])
     return ""
+
+
+# 모델이 인자를 고치거나 도구를 다시 선택해 회복할 수 있는 입력 오류인지 판별한다.
+def _is_tool_input_error(result: ToolResult) -> bool:
+    if not result.is_error:
+        return False
+    detail = _tool_error_detail(result).casefold()
+    return any(marker in detail for marker in _TOOL_INPUT_ERROR_MARKERS)
 
 
 # 빈 검색 결과의 검색어·발간연도·식별자를 사용해 답할 수 없는 이유를 설명한다.
