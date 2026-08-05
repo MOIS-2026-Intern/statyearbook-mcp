@@ -153,7 +153,8 @@ SEARCH_CONTACTS_FIELDS = {
 
 
 SEARCH_STATISTICS = (
-    "통계표의 제목 계층, 컬럼과 행 항목을 자연어로 검색해 후보와 stat_id를 반환한다. 선택한 통계표의 "
+    "통계표의 제목 계층, 컬럼과 행 항목, 표에 달린 주석을 자연어로 검색해 후보와 stat_id를 반환한다. "
+    "선택한 통계표의 "
     "담당 정보가 필요하면 이어서 search_contacts를, 실제 표 수치나 원문이 필요하면 search_tables를 "
     "사용한다. publication_year는 통계연보 발간연도이며, 생략하면 통계마다 가장 최근 발간판을 검색한다."
 )

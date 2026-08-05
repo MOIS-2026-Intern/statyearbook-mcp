@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 
 from admin.backend.sql import sql_literal
-from admin.backend.services.table_search_chunks import build_table_search_chunks
+from admin.backend.services.table_search_chunks import (
+    build_note_search_chunks,
+    build_table_search_chunks,
+)
 
 YEARBOOK_LOAD_MODES = ("reject", "replace")
 
@@ -14,6 +17,30 @@ YEARBOOK_LOAD_MODES = ("reject", "replace")
 def _values(values: list[object], casts: dict[int, str] | None = None) -> str:
     casts = casts or {}
     return ", ".join(sql_literal(value, casts.get(index)) for index, value in enumerate(values))
+
+
+# 검색 청크 한 건을 표 범위 또는 통계 범위 INSERT 문으로 만든다.
+# 주석 청크는 표에 속하지 않으므로 table_id 자리에 NULL을 넣는다.
+def _chunk_insert(chunk: dict, table_ref: str) -> str:
+    labels = json.dumps(chunk["search_labels"], ensure_ascii=False)
+    search_text = sql_literal(chunk["search_text"])
+    values = [
+        "v_stat_id",
+        table_ref,
+        sql_literal(chunk["chunk_no"]),
+        sql_literal(chunk["chunk_kind"]),
+        sql_literal(labels, "jsonb"),
+        search_text,
+    ]
+    return (
+        "    INSERT INTO table_search_chunks "
+        "(stat_id, table_id, chunk_no, chunk_kind, search_labels, search_text, search_doc) "
+        "VALUES ("
+        + ", ".join(values)
+        + ", to_tsvector('simple', "
+        + search_text
+        + "));"
+    )
 
 
 # DML 생성에 필요한 발간물 연도·제목·통계 목록의 최소 계약을 검증한다.
@@ -93,23 +120,12 @@ def _append_statistic(lines: list[str], unit: dict, year: int) -> None:
             + ", ".join(values) + ") RETURNING table_id INTO v_table_id;"
         )
         for chunk in build_table_search_chunks(unit, table):
-            chunk_values = [
-                "v_table_id",
-                sql_literal(chunk["chunk_no"]),
-                sql_literal(chunk["chunk_kind"]),
-                sql_literal(json.dumps(chunk["search_labels"], ensure_ascii=False), "jsonb"),
-                sql_literal(chunk["search_text"]),
-                sql_literal(chunk["search_text"]),
-            ]
-            lines.append(
-                "    INSERT INTO table_search_chunks "
-                "(table_id, chunk_no, chunk_kind, search_labels, search_text, search_doc) "
-                "VALUES ("
-                + ", ".join(chunk_values[:5])
-                + ", to_tsvector('simple', "
-                + chunk_values[5]
-                + "));"
-            )
+            lines.append(_chunk_insert(chunk, "v_table_id"))
+
+    # 주석 청크는 통계당 한 벌이므로 표 반복 밖에서 만든다. 반복 안에서 만들면
+    # 표가 여러 개인 통계에서 같은 주석이 표 수만큼 중복 저장된다.
+    for chunk in build_note_search_chunks(unit):
+        lines.append(_chunk_insert(chunk, "NULL"))
 
     for note in unit.get("footnotes", []):
         values = [

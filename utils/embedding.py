@@ -21,6 +21,8 @@ SUPPORTED_EMBEDDING_PROVIDERS = frozenset(
     {LOCAL_EMBEDDING_PROVIDER, HUGGINGFACE_EMBEDDING_PROVIDER}
 )
 STATISTICS_CONTENT_VERSION = "statistics-title-v3-level4-70-context-30"
+# 주석(notes) 청크가 늘었지만 headers·labels 청크를 만드는 규칙은 그대로다. 이 값을 바꾸면
+# profile key가 바뀌어 멀쩡한 기존 벡터까지 전부 다시 만들어야 하므로 유지한다.
 TABLE_SEARCH_CONTENT_VERSION = "table-search-v1-headers-labels"
 
 

@@ -60,8 +60,7 @@ class TableSearchEmbeddingRepository:
                 f"""
                 SELECT COALESCE(MAX(c.chunk_id), 0)
                 FROM table_search_chunks c
-                JOIN stat_tables t ON t.table_id = c.table_id
-                JOIN statistics s ON s.stat_id = t.stat_id
+                JOIN statistics s ON s.stat_id = c.stat_id
                 WHERE {self._scope_sql()}
                 """,
                 self._scope_params(),
@@ -90,8 +89,7 @@ class TableSearchEmbeddingRepository:
                 f"""
                 SELECT COUNT(*)
                 FROM table_search_chunks c
-                JOIN stat_tables t ON t.table_id = c.table_id
-                JOIN statistics s ON s.stat_id = t.stat_id
+                JOIN statistics s ON s.stat_id = c.stat_id
                 WHERE {self._candidate_sql(force)}
                   AND {self._scope_sql()}
                   AND c.chunk_id <= %s
@@ -120,8 +118,8 @@ class TableSearchEmbeddingRepository:
                        t.seq AS table_seq,
                        s.year, s.ref_id, s.title_ko
                 FROM table_search_chunks c
-                JOIN stat_tables t ON t.table_id = c.table_id
-                JOIN statistics s ON s.stat_id = t.stat_id
+                JOIN statistics s ON s.stat_id = c.stat_id
+                LEFT JOIN stat_tables t ON t.table_id = c.table_id
                 WHERE {self._candidate_sql(force)}
                   AND {self._scope_sql()}
                   AND c.chunk_id > %s

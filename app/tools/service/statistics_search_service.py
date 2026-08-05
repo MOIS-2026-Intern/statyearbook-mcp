@@ -25,8 +25,17 @@ RRF_K = 60
 TITLE_WEIGHT = 1.0
 TABLE_VECTOR_WEIGHT = 1.8
 TABLE_LEXICAL_WEIGHT = 3.0
+# 주석은 표의 수치를 해석할 때 참고하는 보조 근거이므로 표 항목보다 낮게 잡는다.
+# 대신 점수 칸을 따로 써서 항목과 주석이 함께 맞은 통계가 한쪽만 맞은 통계보다 높아지게 한다.
+NOTE_VECTOR_WEIGHT = 1.0
+NOTE_LEXICAL_WEIGHT = 1.2
 EXACT_LABEL_BONUS = 0.05
 LABEL_TOKEN_BONUS = 0.04
+CHUNK_MATCH_SOURCES = {
+    "headers": "column",
+    "labels": "row_label",
+    "notes": "footnote",
+}
 # 같은 통계는 정규화한 제목으로 판을 잇고, 통계마다 그 제목이 실린 가장 최근 발간판만
 # 검색 대상으로 남긴다. 목차 번호(ref_id)는 발간판마다 다시 매겨지고 앞 판의 번호를 다른
 # 통계가 물려받으므로 판을 잇는 키로 쓸 수 없다. 번호로 묶으면 번호를 뺏긴 구판 통계가
@@ -202,10 +211,13 @@ def _merge_candidates(
 
     for rank, row in enumerate(lexical_rows, start=1):
         matched_text, exact, coverage = _best_matched_text(query, row)
-        source = "column" if row["chunk_kind"] == "headers" else "row_label"
-        contribution = TABLE_LEXICAL_WEIGHT / (RRF_K + rank)
+        source = CHUNK_MATCH_SOURCES.get(row["chunk_kind"], "row_label")
+        is_note = source == "footnote"
+        weight = NOTE_LEXICAL_WEIGHT if is_note else TABLE_LEXICAL_WEIGHT
+        contribution = weight / (RRF_K + rank)
         contribution += LABEL_TOKEN_BONUS * coverage
-        if exact:
+        # 주석은 문장이라 질의가 통째로 들어가기 쉬우므로 완전 일치 가산은 주지 않는다.
+        if exact and not is_note:
             contribution += EXACT_LABEL_BONUS
         _add_candidate(
             candidates,
@@ -213,21 +225,23 @@ def _merge_candidates(
             contribution,
             source,
             matched_text,
-            5 if exact and source == "column" else 4,
-            "lexical",
+            2 if is_note else (5 if exact and source == "column" else 4),
+            "note_lexical" if is_note else "lexical",
         )
 
     for rank, row in enumerate(vector_rows, start=1):
         matched_text, _exact, coverage = _best_matched_text(query, row)
-        source = "column" if row["chunk_kind"] == "headers" else "row_label"
+        source = CHUNK_MATCH_SOURCES.get(row["chunk_kind"], "row_label")
+        is_note = source == "footnote"
+        weight = NOTE_VECTOR_WEIGHT if is_note else TABLE_VECTOR_WEIGHT
         _add_candidate(
             candidates,
             row,
-            TABLE_VECTOR_WEIGHT / (RRF_K + rank) + LABEL_TOKEN_BONUS * coverage,
+            weight / (RRF_K + rank) + LABEL_TOKEN_BONUS * coverage,
             source,
             matched_text,
-            3 if source == "column" else 2,
-            "table_vector",
+            2 if is_note else (3 if source == "column" else 2),
+            "note_vector" if is_note else "table_vector",
         )
 
     ranked_results = sorted(

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""표 머리글과 비수치 분류값을 검색 가능한 작은 문서로 정규화한다."""
+"""표 머리글·비수치 분류값과 통계 주석을 검색 가능한 작은 문서로 정규화한다."""
 from __future__ import annotations
 
 import re
@@ -119,5 +119,39 @@ def build_table_search_chunks(
             "chunk_kind": "labels",
             "search_labels": labels,
             "search_text": f"{context} {label_text}".strip(),
+        })
+    return chunks
+
+
+# 한 통계의 주석을 표 항목과 섞이지 않는 통계 단위 검색 청크로 만든다.
+def build_note_search_chunks(
+    statistic: dict,
+    max_chars: int = DEFAULT_CHUNK_MAX_CHARS,
+) -> list[dict]:
+    """한 통계의 주석을 길이가 제한된 검색 청크로 만든다.
+
+    주석은 짧고 성격이 달라 표 항목 청크에 이어 붙이면 양쪽 모두 검색 품질이 떨어진다.
+    표 항목과 같은 문맥을 앞에 두되 벡터는 따로 갖도록 별도 청크로 만든다.
+    주석은 표가 아니라 통계에 달리므로 표가 여러 개여도 통계당 한 벌만 만든다.
+    """
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+    notes = _unique_labels([
+        note.get("content")
+        for note in statistic.get("footnotes") or []
+        if isinstance(note, dict)
+    ])
+    if not notes:
+        return []
+
+    context = _context_text(statistic)
+    chunks: list[dict] = []
+    for index, contents in enumerate(_chunk_labels(notes, max_chars), start=1):
+        note_text = "주석: " + " | ".join(contents)
+        chunks.append({
+            "chunk_no": index,
+            "chunk_kind": "notes",
+            "search_labels": contents,
+            "search_text": f"{context} {note_text}".strip(),
         })
     return chunks

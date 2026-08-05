@@ -118,6 +118,7 @@ class TableSearchEmbeddingDmlWriter(TitleEmbeddingDmlWriter):
     """DB별 ID 대신 발간연도·ref_id·표 순번·청크 키로 표 벡터를 기록한다."""
 
     # 발간물·표·청크 자연키를 사용해 표 검색 벡터 UPDATE 문을 기록한다.
+    # 주석 청크는 표에 속하지 않으므로 표 순번 대신 통계 자연키만으로 대상을 찾는다.
     def write_batch(
         self,
         rows: list[dict],
@@ -129,17 +130,23 @@ class TableSearchEmbeddingDmlWriter(TitleEmbeddingDmlWriter):
                 f"s.year = {sql_literal(row['year'])}",
                 f"s.ref_id IS NOT DISTINCT FROM {sql_literal(row.get('ref_id'))}",
                 f"s.title_ko = {sql_literal(row['title_ko'])}",
-                f"t.seq = {sql_literal(row['table_seq'])}",
                 f"c.chunk_kind = {sql_literal(row['chunk_kind'])}",
                 f"c.chunk_no = {sql_literal(row['chunk_no'])}",
             ]
+            if row.get("table_seq") is None:
+                source = " FROM statistics s"
+                conditions.insert(0, "c.table_id IS NULL")
+            else:
+                source = " FROM stat_tables t JOIN statistics s ON s.stat_id = t.stat_id"
+                conditions.insert(0, "c.table_id = t.table_id")
+                conditions.append(f"t.seq = {sql_literal(row['table_seq'])}")
             self._file.write(
                 "UPDATE table_search_chunks c SET embedding = "
                 + sql_literal(vector_literal(vector))
                 + "::vector, embedding_profile_key = "
                 + sql_literal(self.profile.profile_key)
-                + " FROM stat_tables t JOIN statistics s ON s.stat_id = t.stat_id"
-                + " WHERE c.table_id = t.table_id AND "
+                + source
+                + " WHERE c.stat_id = s.stat_id AND "
                 + " AND ".join(conditions)
                 + ";\n"
             )
