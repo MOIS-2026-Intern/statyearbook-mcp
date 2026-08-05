@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import patch
 
-from app.tools.compare_publications import compare_publications_data
+from app.tools.service.publication_comparison_service import compare_publications_data
 
 
 SUMMARY_ROW = {
@@ -37,10 +37,10 @@ ONLY_IN_BASE_ROWS = [
 def _patched(rows):
     return (
         patch(
-            "app.tools.compare_publications._publication_years",
+            "app.tools.service.publication_comparison_service._publication_years",
             return_value=[2026, 2025],
         ),
-        patch("app.tools.compare_publications._execute_plan", return_value=rows),
+        patch("app.tools.service.publication_comparison_service._execute_plan", return_value=rows),
     )
 
 

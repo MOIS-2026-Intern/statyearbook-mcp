@@ -1,3 +1,4 @@
+"""시각화 명세를 Vega-Lite 형식으로 변환한다."""
 from math import tau
 from typing import Any
 

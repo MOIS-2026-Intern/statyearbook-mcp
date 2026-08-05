@@ -31,6 +31,22 @@ from backend.serializers.mcp_result_serializer import (
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[ChatProgress], None]
 
+_TOOL_INPUT_ERROR_MARKERS = (
+    "validation error",
+    "input should be",
+    "invalid json",
+    "field required",
+    "required argument",
+    "tool name is missing",
+    "unsupported ",
+    "must be",
+    "must contain",
+    "can only be",
+    "cannot be",
+    "does not accept",
+    "requires ",
+)
+
 
 class ChatService:
     # 대화 설정과 선택된 모델 gateway를 서비스에 연결한다.
@@ -173,6 +189,7 @@ class ChatService:
         historical_tool_names = _historical_tool_names(request)
         visualize_result_cache: dict[str, dict[str, Any]] = {}
         tool_call_counts: dict[str, int] = {}
+        input_error_retry_used = False
 
         for round_index in range(self._settings.max_tool_rounds):
             if round_index == 0:
@@ -231,6 +248,18 @@ class ChatService:
                     pipeline_metrics["tool_calls"] += 1
 
             if tool_results and all(result.is_error for result in tool_results):
+                can_retry_input_error = (
+                    not input_error_retry_used
+                    and round_index + 1 < self._settings.max_tool_rounds
+                    and all(_is_tool_input_error(result) for result in tool_results)
+                )
+                if can_retry_input_error:
+                    input_error_retry_used = True
+                    logger.info(
+                        "event=chat.tool_results outcome=input_error_retry tools=%s",
+                        ",".join(result.name or "unknown" for result in tool_results),
+                    )
+                    continue
                 logger.warning(
                     "event=chat.tool_results outcome=failed tools=%s",
                     ",".join(result.name or "unknown" for result in tool_results),
@@ -555,6 +584,14 @@ def _tool_error_detail(result: ToolResult) -> str:
     return ""
 
 
+# 모델이 인자를 고치거나 도구를 다시 선택해 회복할 수 있는 입력 오류인지 판별한다.
+def _is_tool_input_error(result: ToolResult) -> bool:
+    if not result.is_error:
+        return False
+    detail = _tool_error_detail(result).casefold()
+    return any(marker in detail for marker in _TOOL_INPUT_ERROR_MARKERS)
+
+
 # 빈 검색 결과의 검색어·발간연도·식별자를 사용해 답할 수 없는 이유를 설명한다.
 def _tool_no_results_message(results: list[ToolResult]) -> str:
     for result in results:
@@ -574,6 +611,14 @@ def _tool_no_results_message(results: list[ToolResult]) -> str:
                 "확인하지 못했습니다. 확인되지 않은 내용은 추측해 답하지 않겠습니다."
             )
 
+        if result.name == "search_contacts":
+            stat_id = structured.get("stat_id")
+            identifier = f"stat_id {stat_id}에 해당하는 " if stat_id is not None else ""
+            return (
+                f"{identifier}통계표가 없어 담당 정보를 확인하지 못했습니다. "
+                "확인되지 않은 내용은 추측해 답하지 않겠습니다."
+            )
+
         if result.name == "search_tables":
             stat_id = structured.get("stat_id")
             identifier = f"stat_id {stat_id}에 해당하는 " if stat_id is not None else ""
@@ -591,6 +636,7 @@ def _tool_no_results_message(results: list[ToolResult]) -> str:
 # 내부 도구 이름을 사용자에게 읽기 쉬운 명칭으로 바꾼다.
 def _tool_display_name(tool_name: str) -> str:
     return {
+        "search_contacts": "담당 정보 조회 도구",
         "search_statistics": "통계표 검색 도구",
         "search_tables": "통계표 원문 조회 도구",
         "visualize": "시각화 도구",
@@ -599,7 +645,11 @@ def _tool_display_name(tool_name: str) -> str:
 
 # 검색 도구가 명시적으로 빈 결과를 반환했는지 판별한다.
 def _tool_result_has_no_data(result: ToolResult) -> bool:
-    if result.is_error or result.name not in {"search_statistics", "search_tables"}:
+    if result.is_error or result.name not in {
+        "search_contacts",
+        "search_statistics",
+        "search_tables",
+    }:
         return False
     if not isinstance(result.result, dict):
         return False
@@ -642,6 +692,8 @@ def _tool_progress_message(tool_name: str, *, repeated: bool) -> str:
     display_name = tool_name or "MCP"
     if repeated:
         return f"{display_name} MCP 도구로 더 정확한 답변을 위해 추가 자료를 탐색하는 중입니다."
+    if tool_name == "search_contacts":
+        return "search_contacts MCP 도구로 통계표 담당 정보를 확인하는 중입니다."
     if tool_name == "search_statistics":
         return "search_statistics MCP 도구로 관련 통계자료를 찾는 중입니다."
     if tool_name == "search_tables":
