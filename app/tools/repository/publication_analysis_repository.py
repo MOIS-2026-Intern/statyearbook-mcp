@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -11,8 +12,9 @@ from app.tools.repository.publication_repository import (
     PHONE_SQL,
     SOURCE_SYSTEM_SQL,
     SOURCE_URL_SQL,
-    contains_match_key_sql,
+    contains_any_match_key_sql,
     normalize_match_key,
+    officer_match_keys,
 )
 
 
@@ -130,7 +132,22 @@ class QueryPlan:
 class AppliedValueFilter:
     field: str
     contains: str
-    match_key: str
+    match_keys: tuple[str, ...]
+
+
+# 필드마다 검색어를 비교 키로 푸는 방법이 다르다. 지정하지 않은 필드는 공백·기호만 지운다.
+VALUE_FILTER_MATCH_KEYS: dict[str, Callable[[str], tuple[str, ...]]] = {
+    "officer": officer_match_keys,
+}
+
+
+# 필드에 맞는 비교 키 목록을 만든다.
+def _value_filter_match_keys(field_name: str, contains: str) -> tuple[str, ...]:
+    resolver = VALUE_FILTER_MATCH_KEYS.get(field_name)
+    if resolver is not None:
+        return resolver(contains)
+    key = normalize_match_key(contains)
+    return (key,) if key else ()
 
 
 METRICS: dict[str, MetricSpec] = {
@@ -650,17 +667,17 @@ def _resolve_value_filters(
                 f"unsupported value_filters field for subject={subject}: "
                 f"{field_name}; supported fields: {supported}"
             )
-        match_key = normalize_match_key(contains)
-        if not match_key:
+        match_keys = _value_filter_match_keys(field_name, contains)
+        if not match_keys:
             raise ValueError(
                 f"value_filters contains must not be empty: field={field_name}"
             )
         resolved.setdefault(
-            (field_name, match_key),
+            (field_name, match_keys),
             AppliedValueFilter(
                 field=field_name,
                 contains=contains,
-                match_key=match_key,
+                match_keys=match_keys,
             ),
         )
     return tuple(resolved.values())
@@ -699,11 +716,15 @@ def _where_parts(
         clauses.append("s.section_no = %s")
         params.append(section_no)
     # 공백·가운뎃점·대소문자를 지운 비교 키로 부분 일치를 판정한다.
+    # 담당자처럼 검색어를 여러 형태로 푸는 필드는 그중 하나만 맞아도 일치로 본다.
     for value_filter in value_filters:
         clauses.append(
-            contains_match_key_sql(FIELDS[value_filter.field].expression)
+            contains_any_match_key_sql(
+                FIELDS[value_filter.field].expression,
+                len(value_filter.match_keys),
+            )
         )
-        params.append(value_filter.match_key)
+        params.extend(value_filter.match_keys)
     if group is not None and group.nonempty_sql:
         clauses.append(group.nonempty_sql)
     return clauses, params

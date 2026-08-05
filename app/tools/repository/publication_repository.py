@@ -35,9 +35,52 @@ def contains_match_key_sql(expression: str) -> str:
     return f"strpos({match_key_sql(expression)}, %s) > 0"
 
 
+# 검색어 후보 중 하나라도 포함되면 일치로 본다. 같은 검색어를 여러 형태로 풀어 쓸 때 사용한다.
+def contains_any_match_key_sql(expression: str, key_count: int) -> str:
+    if key_count < 1:
+        raise ValueError("key_count must be at least 1")
+    condition = " OR ".join([contains_match_key_sql(expression)] * key_count)
+    return condition if key_count == 1 else f"({condition})"
+
+
 # match_key_sql이 지우는 문자를 파이썬에서도 같은 규칙으로 지운다.
 def normalize_match_key(value: str) -> str:
     return MATCH_KEY_STRIP_PATTERN.sub("", value).lower()
+
+
+# 담당자 값은 '주무관 홍길동'처럼 직급이 이름 앞에 붙는다. 사용자는 '홍길동 주무관',
+# '홍길동주무관', '홍길동 주무관님', '홍길동씨'처럼 순서를 바꾸거나 경칭을 붙여 부르므로,
+# 검색어에서 직급과 경칭을 떼어 이름만으로도 맞춰 본다. 저장값은 그대로 두므로 '주무관'처럼
+# 직급 자체로 찾는 질의는 영향을 받지 않는다.
+# 부서 이름에도 들어가는 '담당관'은 떼지 않는다. 부서까지 넣어 부른 검색어가 깨진다.
+OFFICER_RANK_WORDS = (
+    "행정실무원",
+    "주무관",
+    "사무관",
+    "서기관",
+    "전문관",
+    "연구관",
+    "연구사",
+    "담당자",
+)
+OFFICER_HONORIFICS = ("님", "씨")
+OFFICER_RANK_PATTERN = re.compile(
+    "(?:" + "|".join(OFFICER_RANK_WORDS) + ")(?:" + "|".join(OFFICER_HONORIFICS) + ")?"
+)
+OFFICER_HONORIFIC_PATTERN = re.compile(
+    "(?:" + "|".join(OFFICER_HONORIFICS) + r")\s*$"
+)
+
+
+# 담당자 검색어를 원본 키와 직급·경칭을 뗀 키로 모두 만든다.
+# 원본 키를 남겨야 '행정기획과주무관 안지현'처럼 저장값을 그대로 넣은 질의도 계속 맞는다.
+def officer_match_keys(value: str) -> tuple[str, ...]:
+    keys = [normalize_match_key(value)]
+    stripped = OFFICER_HONORIFIC_PATTERN.sub("", OFFICER_RANK_PATTERN.sub(" ", value))
+    stripped_key = normalize_match_key(stripped)
+    if stripped_key and stripped_key not in keys:
+        keys.append(stripped_key)
+    return tuple(key for key in keys if key)
 
 
 ORGANIZATION_SQL = collapsed_text_sql("c.dept")
