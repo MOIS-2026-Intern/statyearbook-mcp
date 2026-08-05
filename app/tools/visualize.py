@@ -1,37 +1,20 @@
-import json
 from typing import Annotated, Literal
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, Field
 
-from app.db import connect
-from app.table_cache import get_cached_table
+from app.tools.service.visualization.chart_spec_builder import ChartType, SortOrder
+from app.tools.service.visualization.table_interpreter import TotalMode
+from app.tools.service.visualization.visualization_service import VisualizationService
 from app.tool_descriptions import (
     METRIC_SELECTION_FIELDS,
     SELECTION_FILTER_FIELDS,
     VISUALIZE,
     VISUALIZE_FIELDS,
 )
-from app.tools.search_tables import merge_bodies
-from app.tools.visualize_service.chart_spec_builder import ChartType, SortOrder, build_plot_spec
-from app.tools.visualize_service.table_interpreter import TotalMode
-from app.tools.visualize_service.vega_lite_renderer import build_vega_lite_spec, summary_text
 
 
-TABLE_SQL = """
-    SELECT s.stat_id, s.ref_id,
-           s.chapter_no, s.section_no, s.level3_no, s.level4_no,
-           s.chapter, s.section, s.level3_title, s.level4_title,
-           s.title_ko, s.title_en, s.unit, s.base_date, s.page_start,
-           s.year AS publication_year,
-           t.seq AS table_seq, t.caption, t.n_rows, t.n_cols,
-           t.body, t.table_md
-    FROM statistics s
-    JOIN stat_tables t ON t.stat_id = s.stat_id
-    WHERE s.stat_id = %s
-    ORDER BY t.seq
-"""
+VISUALIZATION_SERVICE = VisualizationService()
 
 
 class SelectionFilter(BaseModel):
@@ -43,34 +26,6 @@ class MetricSelection(BaseModel):
     column: str = Field(description=METRIC_SELECTION_FIELDS["column"])
     label: str | None = Field(default=None, description=METRIC_SELECTION_FIELDS["label"])
     unit: str | None = Field(default=None, description=METRIC_SELECTION_FIELDS["unit"])
-
-
-# 시각화 대상 통계표를 DB에서 가져오되 같은 stat_id의 모든 seq를 하나로 합친다.
-def _fetch_table(stat_id: int) -> dict | None:
-    with connect() as conn, conn.cursor() as cur:
-        cur.execute(TABLE_SQL, (stat_id,))
-        rows = cur.fetchall()
-
-    if not rows:
-        return None
-    bodies = [json.loads(r["body"]) if isinstance(r["body"], str) else r["body"] for r in rows]
-    table = rows[0]
-    table["body"] = bodies[0] if len(bodies) == 1 else merge_bodies(bodies)
-    return table
-
-
-# MCP 오류 응답 객체를 만든다.
-def _error_result(message: str, stat_id: int, table_seq: int) -> CallToolResult:
-    return CallToolResult(
-        isError=True,
-        content=[TextContent(type="text", text=message)],
-        structuredContent={
-            "ok": False,
-            "stat_id": stat_id,
-            "table_seq": table_seq,
-            "error": message,
-        },
-    )
 
 
 # visualize MCP 도구를 등록한다.
@@ -126,37 +81,24 @@ def register(mcp: FastMCP) -> None:
             SortOrder,
             Field(description=VISUALIZE_FIELDS["sort_order"]),
         ] = "auto",
-    ) -> CallToolResult:
-        if table_handle:
-            table = get_cached_table(table_handle)
-            if table is None:
-                return _error_result(
-                    "table_handle이 만료되었거나 현재 MCP 세션에 없습니다. search_tables를 다시 호출해 주세요.",
-                    stat_id, table_seq,
-                )
-            if table["stat_id"] != stat_id:
-                return _error_result(
-                    "table_handle의 stat_id가 요청값과 일치하지 않습니다.", stat_id, table_seq,
-                )
-        else:
-            table = _fetch_table(stat_id)
-            if table is None:
-                return _error_result("해당 stat_id 통계표를 찾지 못했습니다.", stat_id, table_seq)
-
-        spec = build_plot_spec(
-            table, query, chart_type, x, y, group, top_n, total_mode,
-            year=year, city=city, column_family_name=column_family,
+    ):
+        return VISUALIZATION_SERVICE.visualize(
+            stat_id=stat_id,
+            table_seq=table_seq,
+            table_handle=table_handle,
+            query=query,
+            title=title,
+            chart_type=chart_type,
+            x=x,
+            y=y,
+            group=group,
+            top_n=top_n,
+            total_mode=total_mode,
+            year=year,
+            city=city,
+            column_family=column_family,
             filters=[item.model_dump() for item in filters] if filters is not None else None,
             metrics=[item.model_dump() for item in metrics] if metrics is not None else None,
-            title=title, sort_order=sort_order,
-        )
-        spec["request"]["table_handle"] = table_handle
-        spec["request"]["table_source"] = "search_tables_cache" if table_handle else "database"
-        spec["request"]["orientation"] = orientation
-        spec["chart"]["orientation"] = orientation
-        spec["vega_lite"] = build_vega_lite_spec(spec)
-
-        return CallToolResult(
-            content=[TextContent(type="text", text=summary_text(spec))],
-            structuredContent=spec,
+            orientation=orientation,
+            sort_order=sort_order,
         )

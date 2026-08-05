@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""발간판을 다루는 도구들이 공유하는 SQL 정규화 조각."""
+"""발간판 도구들이 공유하는 SQL 정규화와 조회 표현을 담당한다."""
 from __future__ import annotations
 
 import re

@@ -3,7 +3,7 @@
 import unittest
 
 from app.table_cache import clear_table_cache, get_cached_table
-from app.tools.search_tables import build_response
+from app.tools.service.table_service import build_response
 
 
 STAT = {
@@ -36,6 +36,13 @@ TABLE = {
     },
     "table_md": "| 연도 | 건수 |",
 }
+SOURCE = {
+    "department": "디지털안전정책과",
+    "officer": "홍길동",
+    "phone": "044-205-0000",
+    "source_system": None,
+    "source_url": None,
+}
 
 
 class SearchTablesTests(unittest.TestCase):
@@ -44,7 +51,7 @@ class SearchTablesTests(unittest.TestCase):
 
     # 응답은 표 메타데이터를 담고, 발급한 handle로 원본 본문을 다시 꺼낼 수 있어야 한다.
     def test_returns_table_metadata_and_cached_body(self) -> None:
-        response = build_response(STAT, [TABLE], [], [])
+        response = build_response(STAT, [TABLE], [], [SOURCE])
 
         self.assertTrue(response["found"])
         self.assertEqual(response["stat_id"], 32)
@@ -55,6 +62,8 @@ class SearchTablesTests(unittest.TestCase):
         self.assertEqual(response["unit"], "건")
         self.assertEqual(len(response["tables"]), 1)
         self.assertEqual(response["tables"][0]["table_md"], "| 연도 | 건수 |")
+        self.assertEqual(response["source"][0]["dept"], "디지털안전정책과")
+        self.assertEqual(response["source"][0]["officer"], "홍길동")
 
         cached = get_cached_table(response["tables"][0]["table_handle"])
         self.assertEqual(cached["stat_id"], 32)

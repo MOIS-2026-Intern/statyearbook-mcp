@@ -1,3 +1,4 @@
+"""통계표 구조와 사용자 선택 조건을 해석한다."""
 import re
 from typing import Any, Literal
 
