@@ -574,6 +574,14 @@ def _tool_no_results_message(results: list[ToolResult]) -> str:
                 "확인하지 못했습니다. 확인되지 않은 내용은 추측해 답하지 않겠습니다."
             )
 
+        if result.name == "search_contacts":
+            stat_id = structured.get("stat_id")
+            identifier = f"stat_id {stat_id}에 해당하는 " if stat_id is not None else ""
+            return (
+                f"{identifier}통계표가 없어 담당 정보를 확인하지 못했습니다. "
+                "확인되지 않은 내용은 추측해 답하지 않겠습니다."
+            )
+
         if result.name == "search_tables":
             stat_id = structured.get("stat_id")
             identifier = f"stat_id {stat_id}에 해당하는 " if stat_id is not None else ""
@@ -591,6 +599,7 @@ def _tool_no_results_message(results: list[ToolResult]) -> str:
 # 내부 도구 이름을 사용자에게 읽기 쉬운 명칭으로 바꾼다.
 def _tool_display_name(tool_name: str) -> str:
     return {
+        "search_contacts": "담당 정보 조회 도구",
         "search_statistics": "통계표 검색 도구",
         "search_tables": "통계표 원문 조회 도구",
         "visualize": "시각화 도구",
@@ -599,7 +608,11 @@ def _tool_display_name(tool_name: str) -> str:
 
 # 검색 도구가 명시적으로 빈 결과를 반환했는지 판별한다.
 def _tool_result_has_no_data(result: ToolResult) -> bool:
-    if result.is_error or result.name not in {"search_statistics", "search_tables"}:
+    if result.is_error or result.name not in {
+        "search_contacts",
+        "search_statistics",
+        "search_tables",
+    }:
         return False
     if not isinstance(result.result, dict):
         return False
@@ -642,6 +655,8 @@ def _tool_progress_message(tool_name: str, *, repeated: bool) -> str:
     display_name = tool_name or "MCP"
     if repeated:
         return f"{display_name} MCP 도구로 더 정확한 답변을 위해 추가 자료를 탐색하는 중입니다."
+    if tool_name == "search_contacts":
+        return "search_contacts MCP 도구로 통계표 담당 정보를 확인하는 중입니다."
     if tool_name == "search_statistics":
         return "search_statistics MCP 도구로 관련 통계자료를 찾는 중입니다."
     if tool_name == "search_tables":

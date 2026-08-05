@@ -2,8 +2,8 @@
 """visualize 도구가 통계표 값을 차트 spec으로 옮기는지 검증한다."""
 import unittest
 
-from app.tools.visualize_service.chart_spec_builder import build_plot_spec
-from app.tools.visualize_service.vega_lite_renderer import build_vega_lite_spec
+from app.tools.service.visualization.chart_spec_builder import build_plot_spec
+from app.tools.service.visualization.vega_lite_renderer import build_vega_lite_spec
 
 
 COLUMNS = ["등급 Grade", "정원 Personnel"]

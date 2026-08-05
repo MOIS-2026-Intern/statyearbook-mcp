@@ -1,52 +1,10 @@
 # -*- coding: utf-8 -*-
 
 ANALYZE_PUBLICATIONS = (
-    "통계연보 한 발간판 또는 여러 발간판의 모든 통계 항목을 대상으로 기초통계를 집계하거나 "
-    "공통 메타데이터·연락처·출처·주석 목록을 조회한다. 세는 대상은 연보라는 문서 자체의 구성 요소, "
-    "즉 수록된 통계 항목·표·장·절과 이를 작성한 담당 부서·담당자·출처·주석뿐이다. "
-    "연보 전체 건수, 계층 수, 담당 부서·출처 수, 그룹별 분포 또는 전체 통계표에 걸친 정보 목록 요청에 "
-    "사용한다. "
-    "반대로 통계표가 조사해 실어 둔 현실 세계 대상의 수는 이 도구로 세지 않는다. "
-    "'중앙행정기관은 총 몇 개', '지방자치단체 수', '공무원은 몇 명', '위원회가 몇 개'처럼 답이 "
-    "통계표 본문 수치에 있는 질문은 search_statistics로 표를 찾고 search_tables로 값을 읽는다. "
-    "이 도구의 count는 그 대상이 연보에 몇 건 수록됐는지를 셀 뿐 실제 기관 수가 아니므로, "
-    "'몇 개'라는 표현만 보고 이 도구를 고르지 않는다. "
-    "operation은 다음 SQL 템플릿을 고른다: "
-    "overview는 한 번에 발간판 메타데이터와 주요 개수를 반환하고, count는 subject 하나의 "
-    "정확한 개수를 반환하며, breakdown은 subject를 group_by 기준으로 묶고, list는 subject의 "
-    "요청 필드 목록을 지정된 중복 처리 방식으로 반환한다. "
-    "위 대상을 두고 '몇 개', '몇 곳', '몇 명', '몇 종류'처럼 개수를 묻는 질문은 목록이 아니라 "
-    "count로 답한다. "
-    "이때 세어야 할 대상이 레코드가 아니라 특정 필드의 값이면 distinct_field에 그 필드를 넣어 "
-    "중복 없는 값의 가짓수를 센다. 예를 들어 전화번호가 몇 개인지 묻는 질문은 "
-    "subject=contacts, distinct_field=phone이며, 담당자 수는 distinct_field=officer다. "
-    "distinct_field 없이 subject=contacts로 세면 연락처 레코드 수가 나와 값의 가짓수보다 커진다. "
-    "'부서별 전화번호가 몇 개'처럼 그룹마다 값의 가짓수를 물으면 breakdown에 group_by와 "
-    "distinct_field를 함께 지정한다. "
-    "subject=statistics는 statistics.stat_id 기준 논리 통계 항목, tables는 stat_tables.table_id "
-    "기준 물리 표 레코드, chapters/sections는 번호 계층, organizations는 contacts.dept에 파싱된 "
-    "담당 부서, source_systems는 contacts.source_system, publications는 publications.pub_id, "
-    "contacts는 모든 통계 항목의 담당 부서·담당자·전화번호·출처, footnotes는 주석을 뜻한다. "
-    "list에서는 사용자가 요구한 값과 이를 설명할 문맥만 fields에 넣고, 반드시 값이 있어야 하는 "
-    "핵심 필드는 required_fields에 넣는다. contacts와 footnotes의 list는 통계 항목마다 연결된 "
-    "레코드를 모두 유지하므로, 값 자체를 겹치지 않게 나열해 달라는 요청에는 deduplicate=true를 "
-    "함께 지정한다. 개수만 필요하면 list 대신 count와 distinct_field를 쓴다. "
-    "전체 통계표별 연락처를 구분해야 하면 statistic_title 또는 stat_id를 fields에 포함한다. "
-    "특정 담당자·담당 부서·출처가 맡은 통계표만 필요하면 value_filters에 필드와 검색어를 넣어 "
-    "그 값을 가진 레코드만 남긴다. '홍길동 주무관이 담당한 통계표', '데이터정보화담당관이 제출한 표'처럼 "
-    "사람 이름이나 부서명으로 표를 찾는 질문이 여기에 해당한다. 담당자 이름은 통계표 제목이나 "
-    "본문에 없어 search_statistics로는 찾을 수 없으므로 subject=contacts와 value_filters를 사용한다. "
-    "담당자가 맡은 표의 제목이 필요하면 fields에 statistic_title을 포함하고, 표가 몇 개인지만 "
-    "필요하면 count와 distinct_field=stat_id를 함께 쓴다. "
-    "발간연도를 생략하면 최신 발간판을 적용한다. 담당자와 담당 부서는 발간판마다 바뀌지만, "
-    "적용한 발간판에 결과가 없으면 도구가 전체 발간판으로 넓혀 한 번 더 조회하므로 발간연도를 "
-    "바꿔 가며 다시 호출하지 않는다. 이때 publication_year_filter_relaxed가 true가 되고 결과의 "
-    "publication_year가 실제 발간판이다. 처음부터 여러 연도 전체가 필요할 때만 "
-    "all_publication_years=true를 사용한다. 임의 SQL은 받지 않으며 허용된 SELECT·JOIN·WHERE·GROUP BY "
-    "조각과 필드만 조합한다. organizations는 공식 제출기관 테이블이 아니라 출처 문단의 담당 부서 기준이다. "
-    "이 도구는 발간판마다 따로 집계할 뿐 판 사이에서 같은 항목을 잇지 못하므로, "
-    "'A년판에만 있고 B년판에는 없는', '새로 생긴', '빠진', '바뀐'처럼 두 발간판을 맞대어 봐야 하는 "
-    "질문에는 compare_publications를 사용한다."
+    "통계연보 자체의 구성 요소와 메타데이터를 조회·집계한다. 통계 항목·표·장·절·담당 부서·담당자·"
+    "출처·주석의 전체 목록, 개수와 분포에 사용한다. 담당자·담당 부서·출처를 기준으로 그 값에 연결된 "
+    "통계표를 찾을 때도 이 도구를 사용한다. 통계표 본문의 실제 수치에는 사용하지 않으며, 서로 다른 "
+    "발간판 사이의 차이는 compare_publications를 사용한다. 세부 집계 방식과 필드는 각 인자 설명을 따른다."
 )
 ANALYZE_PUBLICATIONS_FIELDS = {
     "operation": (
@@ -183,27 +141,25 @@ COMPARE_PUBLICATIONS_FIELDS = {
 }
 
 
+SEARCH_CONTACTS = (
+    "stat_id로 특정 통계표의 담당 부서·담당자·전화번호와 출처를 조회한다. 자연어로 통계표를 "
+    "찾아야 하면 먼저 search_statistics를 사용한다. 담당자나 부서를 기준으로 통계표를 역검색하는 "
+    "요청에는 analyze_publications를 사용한다."
+)
+SEARCH_CONTACTS_FIELDS = {
+    "stat_id": "search_statistics 등에서 확인한 통계표 식별자.",
+}
+
+
 SEARCH_STATISTICS = (
-    "제목 계층, 표 컬럼명과 숫자가 아닌 행·분류 항목을 함께 사용해 통계표 후보와 stat_id를 검색한다. "
-    "level3_title은 상위 통계 주제이고 level4_title/title_ko는 실제 표 제목이다. "
-    "table_seq는 검색어가 발견된 원자료 표 순번이고 matched_source/matched_text는 "
-    "제목·컬럼·행 항목 중 실제 검색 근거를 나타낸다. "
-    "이 도구의 결과는 후보 메타데이터이므로 "
-    "통계 수치를 답할 때는 선택한 stat_id로 search_tables를 호출해 표 본문을 확인한다. "
-    "'중앙행정기관은 총 몇 개', '공무원은 몇 명'처럼 개수를 묻더라도 그 대상이 연보의 수록 항목이나 "
-    "담당 부서가 아니라 통계표가 조사한 현실 대상(행정기관, 지방자치단체, 위원회, 공무원, 인구 등)이면 "
-    "analyze_publications가 아니라 이 도구로 표를 찾은 뒤 search_tables로 수치를 읽는다. "
-    "publication_year는 통계연보의 발간판 연도이며 표 안의 데이터 연도나 기준연도가 아니다. "
-    "publication_year를 생략하면 통계마다 가장 최근 발간판을 적용하므로 최신판에서 빠진 통계도 "
-    "직전 발간판에서 찾는다. 이때 후보마다 발간판이 다를 수 있으므로 발간연도는 각 결과의 "
-    "publication_year를 그대로 인용한다. "
-    "일반적인 '2024년 통계' 질문의 2024년은 데이터 연도이므로 publication_year로 전달하지 않는다. "
-    "지정한 발간연도에 결과가 없으면 도구가 통계별 최신 발간판으로 자동 재검색한다."
+    "통계표의 제목 계층, 컬럼과 행 항목을 자연어로 검색해 후보와 stat_id를 반환한다. 선택한 통계표의 "
+    "담당 정보는 search_contacts로, 실제 표 수치나 원문은 search_tables로 확인한다. publication_year는 "
+    "통계연보 발간연도이며, 생략하면 통계마다 가장 최근 발간판을 검색한다."
 )
 SEARCH_STATISTICS_FIELDS = {
     "query": (
-        "찾을 통계표의 제목, 컬럼명 또는 행·분류 항목 핵심어. 데이터 연도와 '시각화', "
-        "'그래프', '보여줘' 같은 작업 표현은 가능하면 제외한다. "
+        "찾을 통계표의 제목, 컬럼명 또는 행·분류 항목 핵심어. 요청할 정보, 데이터 연도와 "
+        "작업 표현은 제외하고 표를 식별하는 말만 전달한다. "
         "예: '행정기관 위원회', '사망신고 건수'"
     ),
     "publication_year": (
@@ -214,7 +170,7 @@ SEARCH_STATISTICS_FIELDS = {
     "limit": "반환할 통계표 후보의 최대 개수.",
 }
 SEARCH_TABLES = (
-    "stat_id에 해당하는 통계표 원문(table_md), 전체 제목 계층, 주석과 출처를 가져온다. "
+    "stat_id에 해당하는 통계표 원문(table_md), 제목 계층, 주석, 담당 부서·담당자·전화번호와 출처를 가져온다. "
     "한 제목의 표가 여러 페이지(seq)로 나뉘어 있으면 모두 합쳐 하나의 표로 제공하며, "
     "table_handle은 그 합쳐진 전체 표를 가리킨다. "
     "수치 단위는 반환된 unit을 기준으로 해석한다. 각 표의 table_handle은 같은 사용자 요청에서 "

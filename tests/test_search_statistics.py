@@ -4,9 +4,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.tools.search_statistics import (
+from app.tools.repository.statistics_search_repository import (
     LATEST_EDITIONS_CTE,
     LATEST_EDITIONS_KEY_SQL,
+)
+from app.tools.service.statistics_search_service import (
     search_statistics_data,
 )
 
@@ -33,14 +35,14 @@ RESULT_ROW = {
 
 
 class SearchStatisticsTests(unittest.TestCase):
-    @patch("app.tools.search_statistics._fetch_rows")
-    @patch("app.tools.search_statistics.embed_query", return_value="[0.1,0.2]")
+    @patch("app.tools.service.statistics_search_service.SEARCH_REPOSITORY.fetch_rows")
+    @patch("app.tools.service.statistics_search_service.embed_query", return_value="[0.1,0.2]")
     @patch(
-        "app.tools.search_statistics.table_search_embedding_profile",
+        "app.tools.service.statistics_search_service.table_search_embedding_profile",
         return_value=SimpleNamespace(profile_key="table-profile-key"),
     )
     @patch(
-        "app.tools.search_statistics.embedding_profile",
+        "app.tools.service.statistics_search_service.embedding_profile",
         return_value=SimpleNamespace(profile_key="profile-key"),
     )
     # 조회된 행의 식별자, 제목 계층과 발간연도가 응답에 그대로 담겨야 한다.

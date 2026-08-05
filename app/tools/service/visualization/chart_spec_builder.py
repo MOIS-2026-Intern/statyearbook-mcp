@@ -1,3 +1,4 @@
+"""통계표 해석 결과로 시각화 명세를 구성한다."""
 import re
 from typing import Any, Literal
 
