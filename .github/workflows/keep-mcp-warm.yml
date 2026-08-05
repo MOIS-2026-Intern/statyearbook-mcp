@@ -37,13 +37,12 @@ jobs:
           fi
 
           health_url="${MCP_BASE_URL%/}/health"
-          succeeded=0
 
-          # GitHub 스케줄러가 회차를 건너뛰거나 지연시켜도 15분 안에 핑이 닿도록
-          # 한 번의 실행에서 2분 간격으로 세 번 시도한다.
+          # 스케줄 간격(5분)이 spin-down 시간(15분)보다 훨씬 짧아 한 번만 깨워도 충분하다.
+          # 재시도는 일시적인 네트워크 오류를 흡수하는 용도이므로 짧게만 기다린다.
           for attempt in 1 2 3; do
             if [ "${attempt}" -gt 1 ]; then
-              sleep 120
+              sleep 10
             fi
 
             # 정지 상태에서 깨어나는 데 약 1분이 걸리므로 넉넉한 타임아웃을 준다.
@@ -56,11 +55,9 @@ jobs:
             echo "attempt=${attempt} status=${status}"
 
             if [ "${status}" = "200" ]; then
-              succeeded=1
+              exit 0
             fi
           done
 
-          if [ "${succeeded}" -eq 0 ]; then
-            echo "::error::MCP did not respond with 200 on any attempt"
-            exit 1
-          fi
+          echo "::error::MCP did not respond with 200 after 3 attempts"
+          exit 1
