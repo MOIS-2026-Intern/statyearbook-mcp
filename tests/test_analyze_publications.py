@@ -6,7 +6,56 @@ from unittest.mock import patch
 from pydantic import ValidationError
 
 from app.tools.analyze_publications import ValueFilter
+from app.tools.repository.publication_repository import officer_match_keys
 from app.tools.service.publication_analysis_service import analyze_publications_data
+
+
+class OfficerMatchKeyTests(unittest.TestCase):
+    """담당자 검색어의 직급·경칭 표기가 달라도 같은 담당자를 찾아야 한다.
+
+    저장값은 '주무관 위운비'처럼 직급이 이름 앞에 오지만, 사용자는 '위운비 주무관님'처럼
+    순서를 바꿔 부른다. 검색어에서 직급·경칭을 뗀 키를 함께 만들어 어느 표기로 물어도
+    같은 결과가 되게 한다.
+    """
+
+    # 직급 위치와 경칭이 달라도 이름만 남긴 키가 함께 만들어져야 한다.
+    def test_rank_and_honorific_forms_share_the_name_key(self) -> None:
+        for query in (
+            "위운비",
+            "위운비 주무관",
+            "위운비주무관",
+            "위운비 주무관님",
+            "주무관 위운비",
+            "위운비님",
+            "위운비씨",
+            "위운비 씨",
+            "위운비 담당자",
+        ):
+            with self.subTest(query=query):
+                self.assertIn("위운비", officer_match_keys(query))
+
+    # 저장값을 그대로 넣은 질의는 원본 키가 남아 계속 맞아야 한다.
+    def test_original_key_is_kept_for_stored_value_queries(self) -> None:
+        keys = officer_match_keys("행정기획과주무관 안지현")
+
+        self.assertIn("행정기획과주무관안지현", keys)
+        self.assertIn("행정기획과안지현", keys)
+
+    # 직급 자체로 찾는 질의는 지우고 나면 남는 게 없으므로 원본 키만 써야 한다.
+    def test_rank_only_query_keeps_the_rank(self) -> None:
+        self.assertEqual(officer_match_keys("주무관"), ("주무관",))
+        self.assertEqual(officer_match_keys("사무관님"), ("사무관님",))
+
+    # 부서 이름에 들어가는 '담당관'까지 떼면 부서를 함께 부른 검색어가 깨진다.
+    def test_department_word_is_not_stripped(self) -> None:
+        self.assertIn(
+            "데이터정보화담당관실이동주",
+            officer_match_keys("데이터정보화담당관실 이동주"),
+        )
+
+    # 뗄 직급이 없는 이름은 키가 하나뿐이어야 조건이 불필요하게 늘지 않는다.
+    def test_plain_name_produces_a_single_key(self) -> None:
+        self.assertEqual(officer_match_keys("위운비"), ("위운비",))
 
 
 class AnalyzePublicationsTests(unittest.TestCase):
@@ -211,6 +260,54 @@ class AnalyzePublicationsTests(unittest.TestCase):
 
         self.assertEqual(result["count"], 2)
         self.assertEqual(execute_plan_mock.call_args.args[0].params, (2026, "재난정보통신과"))
+
+    @patch(
+        "app.tools.service.publication_analysis_service._execute_plan",
+        return_value=[{"matched_publications": 1, "count": 1}],
+    )
+    @patch(
+        "app.tools.repository.publication_analysis_repository._latest_publication_year",
+        return_value=2026,
+    )
+    # 담당자는 직급·경칭을 뗀 키까지 조건에 넣어 어느 표기로 물어도 같은 결과가 되어야 한다.
+    def test_officer_filter_matches_any_rank_notation(
+        self,
+        latest_publication_year_mock,
+        execute_plan_mock,
+    ) -> None:
+        analyze_publications_data(
+            operation="count",
+            subject="contacts",
+            value_filters=[{"field": "officer", "contains": "위운비 주무관님"}],
+        )
+
+        plan = execute_plan_mock.call_args.args[0]
+        self.assertEqual(plan.params, (2026, "위운비주무관님", "위운비"))
+        self.assertEqual(plan.sql.count("strpos("), 2)
+
+    @patch(
+        "app.tools.service.publication_analysis_service._execute_plan",
+        return_value=[{"matched_publications": 1, "count": 282}],
+    )
+    @patch(
+        "app.tools.repository.publication_analysis_repository._latest_publication_year",
+        return_value=2026,
+    )
+    # 직급으로 목록을 뽑는 질의는 조건이 늘지 않고 그대로 유지되어야 한다.
+    def test_rank_only_officer_filter_keeps_one_condition(
+        self,
+        latest_publication_year_mock,
+        execute_plan_mock,
+    ) -> None:
+        analyze_publications_data(
+            operation="count",
+            subject="contacts",
+            value_filters=[{"field": "officer", "contains": "주무관"}],
+        )
+
+        plan = execute_plan_mock.call_args.args[0]
+        self.assertEqual(plan.params, (2026, "주무관"))
+        self.assertEqual(plan.sql.count("strpos("), 1)
 
     # subject가 조인하지 않는 필드는 조건으로 받을 수 없어야 한다.
     def test_rejects_filter_field_outside_subject(self) -> None:

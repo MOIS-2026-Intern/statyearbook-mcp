@@ -50,8 +50,7 @@ class YearbookVerificationService:
                 """
                 SELECT COUNT(*)
                 FROM table_search_chunks c
-                JOIN stat_tables t ON t.table_id = c.table_id
-                JOIN statistics s ON s.stat_id = t.stat_id
+                JOIN statistics s ON s.stat_id = c.stat_id
                 WHERE s.year = %s
                 """,
                 (year,),
@@ -62,8 +61,7 @@ class YearbookVerificationService:
                     """
                     SELECT COUNT(*)
                     FROM table_search_chunks c
-                    JOIN stat_tables t ON t.table_id = c.table_id
-                    JOIN statistics s ON s.stat_id = t.stat_id
+                    JOIN statistics s ON s.stat_id = c.stat_id
                     WHERE s.year = %s AND c.embedding IS NOT NULL
                       AND c.embedding_profile_key = %s
                     """,

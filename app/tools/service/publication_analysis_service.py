@@ -251,9 +251,12 @@ def analyze_publications_data(
         limitations = metric.limitations
 
     # 값 조건은 어떤 operation이든 산출 근거에 함께 드러낸다.
+    # 담당자처럼 검색어를 여러 형태로 푼 조건은 저장값이 검색어를 그대로 담고 있지 않으므로,
+    # 무엇을 무시하고 맞췄는지까지 밝혀야 모델이 근거를 정확히 인용한다.
     if applied_value_filters:
         conditions = ", ".join(
             f"{FIELDS[item.field].alias}에 '{item.contains}' 포함"
+            + ("(직급·경칭 표기는 무시)" if len(item.match_keys) > 1 else "")
             for item in applied_value_filters
         )
         basis = f"{basis}; {conditions} 조건을 만족하는 행만 대상으로 한다"

@@ -62,16 +62,22 @@ CREATE TABLE IF NOT EXISTS stat_tables (
     table_md  TEXT
 );
 
+-- 표 단위 청크(headers·labels)와 통계 단위 청크(notes)를 한 테이블에 함께 담는다.
+-- 주석은 표가 아니라 통계에 달리므로 stat_id만 채우고 table_id는 비운다. 같은 테이블에
+-- 두면 검색이 이미 실행하는 전문·벡터 조회에 주석이 그대로 후보로 들어와 SQL이 늘지 않는다.
 CREATE TABLE IF NOT EXISTS table_search_chunks (
     chunk_id              BIGSERIAL PRIMARY KEY,
-    table_id              BIGINT NOT NULL REFERENCES stat_tables(table_id) ON DELETE CASCADE,
+    stat_id               BIGINT NOT NULL REFERENCES statistics(stat_id) ON DELETE CASCADE,
+    table_id              BIGINT REFERENCES stat_tables(table_id) ON DELETE CASCADE,
     chunk_no              INT NOT NULL CHECK (chunk_no > 0),
-    chunk_kind            TEXT NOT NULL CHECK (chunk_kind IN ('headers', 'labels')),
+    chunk_kind            TEXT NOT NULL CHECK (chunk_kind IN ('headers', 'labels', 'notes')),
     search_labels         JSONB NOT NULL DEFAULT '[]'::jsonb,
     search_text           TEXT NOT NULL,
     search_doc            TSVECTOR NOT NULL,
     embedding             vector(1024),
     embedding_profile_key TEXT REFERENCES embedding_profiles(profile_key),
+    CONSTRAINT table_search_chunks_scope_check
+        CHECK ((chunk_kind = 'notes') = (table_id IS NULL)),
     UNIQUE (table_id, chunk_kind, chunk_no)
 );
 
@@ -110,6 +116,43 @@ CREATE TABLE IF NOT EXISTS embedding_jobs (
 -- 이미 만들어진 DB에도 statistics.ordinal을 더한다. CREATE TABLE IF NOT EXISTS만으로는
 -- 기존 테이블에 컬럼이 생기지 않는다.
 ALTER TABLE statistics ADD COLUMN IF NOT EXISTS ordinal INT;
+
+-- 이미 만들어진 DB의 table_search_chunks를 통계 단위 주석 청크까지 담도록 넓힌다.
+-- 기존 headers·labels 행의 search_text는 건드리지 않으므로 이미 만든 벡터는 그대로 쓴다.
+ALTER TABLE table_search_chunks ADD COLUMN IF NOT EXISTS stat_id BIGINT;
+UPDATE table_search_chunks c
+   SET stat_id = t.stat_id
+  FROM stat_tables t
+ WHERE t.table_id = c.table_id
+   AND c.stat_id IS NULL;
+ALTER TABLE table_search_chunks ALTER COLUMN stat_id SET NOT NULL;
+ALTER TABLE table_search_chunks ALTER COLUMN table_id DROP NOT NULL;
+
+DO $statyearbook_chunk_scope$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = 'table_search_chunks'::regclass
+           AND conname = 'table_search_chunks_stat_id_fkey'
+    ) THEN
+        ALTER TABLE table_search_chunks
+            ADD CONSTRAINT table_search_chunks_stat_id_fkey
+            FOREIGN KEY (stat_id) REFERENCES statistics(stat_id) ON DELETE CASCADE;
+    END IF;
+END
+$statyearbook_chunk_scope$;
+
+-- CHECK 제약은 IF NOT EXISTS를 지원하지 않으므로 지우고 다시 만들어 재실행을 견딘다.
+ALTER TABLE table_search_chunks
+    DROP CONSTRAINT IF EXISTS table_search_chunks_chunk_kind_check;
+ALTER TABLE table_search_chunks
+    ADD CONSTRAINT table_search_chunks_chunk_kind_check
+    CHECK (chunk_kind IN ('headers', 'labels', 'notes'));
+ALTER TABLE table_search_chunks
+    DROP CONSTRAINT IF EXISTS table_search_chunks_scope_check;
+ALTER TABLE table_search_chunks
+    ADD CONSTRAINT table_search_chunks_scope_check
+    CHECK ((chunk_kind = 'notes') = (table_id IS NULL));
 
 -- pub_id+ref_id 유일 색인을 만들기 전에 남아 있는 중복을 사람이 알아볼 수 있게 알린다.
 -- 중복이 있으면 해당 연도를 replace 모드로 다시 적재해야 한다.
@@ -161,6 +204,13 @@ CREATE INDEX IF NOT EXISTS idx_tables_stat
     ON stat_tables(stat_id);
 CREATE INDEX IF NOT EXISTS idx_table_search_chunks_table
     ON table_search_chunks(table_id);
+CREATE INDEX IF NOT EXISTS idx_table_search_chunks_stat
+    ON table_search_chunks(stat_id);
+-- 주석 청크는 table_id가 비어 있어 UNIQUE (table_id, chunk_kind, chunk_no)로는 중복이 막히지
+-- 않는다. NULL은 서로 다른 값으로 취급되기 때문이다. 통계 단위로 따로 유일성을 건다.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_table_search_chunks_notes_unique
+    ON table_search_chunks(stat_id, chunk_no)
+    WHERE chunk_kind = 'notes';
 CREATE INDEX IF NOT EXISTS idx_table_search_chunks_doc
     ON table_search_chunks USING gin(search_doc);
 CREATE INDEX IF NOT EXISTS idx_table_search_chunks_profile
