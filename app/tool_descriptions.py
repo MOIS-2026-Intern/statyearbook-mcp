@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 
 ANALYZE_PUBLICATIONS = (
-    "통계연보 자체의 구성 요소와 메타데이터를 조회·집계한다. 통계 항목·표·장·절·담당 부서·담당자·"
-    "출처·주석의 전체 목록, 개수와 분포에 사용한다. 질문에 이미 담당자·담당 부서·출처 값이 주어져 "
-    "그 값에 연결된 통계표를 역검색할 때도 사용한다. 통계 주제를 찾거나 그 주제의 담당 정보를 묻는 "
-    "요청에는 사용하지 않는다. 통계표 본문의 실제 수치에는 사용하지 않으며, 서로 다른 발간판 사이의 "
-    "차이는 compare_publications를 사용한다. 세부 집계 방식과 필드는 각 인자 설명을 따른다."
+    "한 통계표가 아니라 연보 전체를 훑어야 답할 수 있는 목록·개수·분포를 조회한다. 통계 항목·표·"
+    "장·절·담당 부서·담당자·출처·주석이 그 대상이다. "
+    "질문에 담당자 이름이나 담당 부서명이 주어져 그 담당자가 맡은 통계를 역검색할 때도 사용한다. "
+    "이때는 subject=contacts에 value_filters로 officer 또는 department 조건을 걸고, 담당 통계 "
+    "목록을 답하려면 fields에 ref_id와 statistic_title을 함께 넣는다. 담당자 이름은 표 제목이나 "
+    "본문에 없어 search_statistics로는 찾지 못한다. "
+    "반대로 통계 주제를 찾는 요청은 search_statistics, 특정 통계의 담당 정보는 search_contacts, "
+    "표 본문의 수치는 search_tables, 발간판 사이의 차이는 compare_publications를 사용한다. "
+    "세부 집계 방식과 필드는 각 인자 설명을 따른다."
 )
 ANALYZE_PUBLICATIONS_FIELDS = {
     "operation": (
@@ -35,9 +39,11 @@ ANALYZE_PUBLICATIONS_FIELDS = {
     "fields": (
         "list 전용 반환 필드. subject에 맞는 필드 중 사용자가 요구한 것만 선택한다. "
         "발간판은 publication_year/publication_title/publication_page_count, 통계 항목은 "
-        "stat_id/ref_id/장·절·제목·단위·기준일·시작 페이지, 물리 표는 table_id/table_seq/"
+        "ref_id/장·절·제목·단위·기준일·시작 페이지, 물리 표는 table_id/table_seq/"
         "table_caption/row_count/column_count, 연락처·출처는 department/officer/phone/"
         "source_system/source_url, 주석은 note_seq/note_no/note를 사용할 수 있다. "
+        "연락처·주석 목록에서 어느 통계의 것인지 밝혀야 하면 ref_id와 statistic_title을 함께 넣는다. "
+        "stat_id는 이어서 search_tables를 호출할 때만 넣고 답변에는 쓰지 않는다. "
         "생략하면 subject별 기본 상세 필드를 반환한다."
     ),
     "required_fields": (
@@ -51,7 +57,8 @@ ANALYZE_PUBLICATIONS_FIELDS = {
         "담당자 이름은 officer, 담당 부서는 department, 출처 시스템은 source_system, "
         "전화번호는 phone, 주석 내용은 note로 지정한다. subject=contacts는 department·officer·"
         "phone·source_system·source_url, footnotes는 note_no·note, organizations는 department, "
-        "source_systems는 source_system만 조건으로 받는다. "
+        "source_systems는 source_system만 조건으로 받고 나머지 subject는 조건을 받지 않는다. "
+        "담당자·담당 부서로 통계를 좁히려면 subject=contacts를 쓴다. "
         "비교는 공백·가운뎃점·대소문자를 무시한 부분 일치이므로 '홍길동'으로 '주무관 홍길동'을 찾는다. "
         "여러 조건을 함께 주면 모두 만족하는 레코드만 남는다."
     ),
@@ -143,9 +150,9 @@ COMPARE_PUBLICATIONS_FIELDS = {
 
 
 SEARCH_CONTACTS = (
-    "stat_id로 특정 통계표의 담당 부서·담당자·전화번호와 출처를 조회한다. 자연어 통계 주제의 담당 "
-    "정보를 묻는 경우 먼저 search_statistics로 stat_id를 찾는다. 질문에 이미 주어진 담당자나 부서를 "
-    "기준으로 통계표를 역검색하는 요청에는 analyze_publications를 사용한다."
+    "stat_id로 특정 통계표 하나의 담당 부서·담당자·전화번호와 출처를 조회한다. 통계 주제만 아는 "
+    "경우 먼저 search_statistics로 stat_id를 찾는다. 반대로 담당자 이름이나 부서명이 주어져 그 "
+    "담당자가 맡은 통계를 역검색하는 요청에는 analyze_publications를 사용한다."
 )
 SEARCH_CONTACTS_FIELDS = {
     "stat_id": "search_statistics 등에서 확인한 통계표 식별자.",
@@ -154,9 +161,10 @@ SEARCH_CONTACTS_FIELDS = {
 
 SEARCH_STATISTICS = (
     "통계표의 제목 계층, 컬럼과 행 항목, 표에 달린 주석을 자연어로 검색해 후보와 stat_id를 반환한다. "
-    "선택한 통계표의 "
-    "담당 정보가 필요하면 이어서 search_contacts를, 실제 표 수치나 원문이 필요하면 search_tables를 "
-    "사용한다. publication_year는 통계연보 발간연도이며, 생략하면 통계마다 가장 최근 발간판을 검색한다."
+    "통계 주제로 표를 찾는 첫 단계이며, 선택한 통계표의 담당 정보가 필요하면 이어서 search_contacts를, "
+    "실제 표 수치나 원문이 필요하면 search_tables를 사용한다. "
+    "사람 이름과 부서명은 표 제목이나 본문에 없으므로 query에 넣지 않고 analyze_publications를 쓴다. "
+    "publication_year는 통계연보 발간연도이며, 생략하면 통계마다 가장 최근 발간판을 검색한다."
 )
 SEARCH_STATISTICS_FIELDS = {
     "query": (
@@ -173,6 +181,7 @@ SEARCH_STATISTICS_FIELDS = {
 }
 SEARCH_TABLES = (
     "stat_id에 해당하는 통계표 원문(table_md), 제목 계층, 주석, 담당 부서·담당자·전화번호와 출처를 가져온다. "
+    "표 안의 실제 수치를 확인하는 도구이며, stat_id를 모르면 먼저 search_statistics로 찾는다. "
     "한 제목의 표가 여러 페이지(seq)로 나뉘어 있으면 모두 합쳐 하나의 표로 제공하며, "
     "table_handle은 그 합쳐진 전체 표를 가리킨다. "
     "수치 단위는 반환된 unit을 기준으로 해석한다. 각 표의 table_handle은 같은 사용자 요청에서 "

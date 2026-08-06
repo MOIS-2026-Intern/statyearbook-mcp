@@ -644,6 +644,22 @@ def _validate_request(
         )
 
 
+# 거절한 조건 필드를 어느 subject에서 쓸 수 있는지 알려 준다.
+def _value_filter_hint(
+    field_name: str | None,
+    supported_fields: frozenset[str],
+) -> str:
+    usable_subjects = sorted(
+        name for name, spec in LISTS.items() if field_name in spec.filter_fields
+    )
+    if usable_subjects:
+        return f"use subject={' or subject='.join(usable_subjects)} for this field"
+    supported = ", ".join(sorted(supported_fields))
+    if supported:
+        return f"supported fields: {supported}"
+    return "this subject accepts no value_filters"
+
+
 # 값 조건을 검증하고 SQL에서 쓸 비교 키까지 붙인 형태로 바꾼다.
 def _resolve_value_filters(
     operation: str,
@@ -662,10 +678,10 @@ def _resolve_value_filters(
         field_name = value_filter.get("field")
         contains = value_filter.get("contains") or ""
         if field_name not in supported_fields:
-            supported = ", ".join(sorted(supported_fields)) or "없음"
+            hint = _value_filter_hint(field_name, supported_fields)
             raise ValueError(
                 f"unsupported value_filters field for subject={subject}: "
-                f"{field_name}; supported fields: {supported}"
+                f"{field_name}; {hint}"
             )
         match_keys = _value_filter_match_keys(field_name, contains)
         if not match_keys:
