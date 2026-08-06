@@ -273,6 +273,70 @@ class ChatToolRecoveryTests(unittest.TestCase):
         self.assertEqual(len(model.calls), 2)
         self.assertEqual(len(mcp.calls), 2)
 
+    # 검색 결과가 0건이면 종료 문구로 끝내지 말고 모델이 검색어를 다시 잡을 기회를 한 번 줘야 한다.
+    def test_retries_once_when_search_returns_no_results(self) -> None:
+        empty = {
+            "content": [{"type": "text", "text": "결과 없음"}],
+            "structuredContent": {"query": "중앙행정기관 현황", "count": 0, "results": []},
+            "isError": False,
+        }
+        model = StubModelGateway(
+            [
+                ModelTurn(text="", tool_calls=[ToolCall(
+                    id="call-1", name="search_statistics",
+                    arguments={"query": "중앙행정기관 현황"})]),
+                ModelTurn(text="", tool_calls=[ToolCall(
+                    id="call-2", name="search_statistics",
+                    arguments={"query": "정부조직"})]),
+                ModelTurn(text="정부조직 변천 표로 확인했습니다."),
+            ]
+        )
+        mcp = StubMcpGateway(
+            [
+                empty,
+                {
+                    "content": [{"type": "text", "text": "후보 1건"}],
+                    "structuredContent": {
+                        "count": 1,
+                        "results": [{"stat_id": 330, "title_ko": "정부조직 변천"}],
+                    },
+                    "isError": False,
+                },
+            ]
+        )
+        service = ChatService(Settings(max_tool_rounds=5), model_gateway=model)
+
+        result = asyncio.run(service._run_model_loop(
+            request=_request(), mcp=mcp, traces=[], messages=_messages(), tools=[]))
+
+        self.assertEqual(result, "정부조직 변천 표로 확인했습니다.")
+        self.assertEqual([q["query"] for _n, q in mcp.calls],
+                         ["중앙행정기관 현황", "정부조직"])
+
+    # 재검색도 0건이면 반복하지 않고 못 찾았다고 답해야 한다.
+    def test_stops_after_one_no_results_retry(self) -> None:
+        empty = {
+            "content": [{"type": "text", "text": "결과 없음"}],
+            "structuredContent": {"query": "없는통계", "count": 0, "results": []},
+            "isError": False,
+        }
+        model = StubModelGateway(
+            [
+                ModelTurn(text="", tool_calls=[ToolCall(
+                    id="call-1", name="search_statistics", arguments={"query": "없는통계"})]),
+                ModelTurn(text="", tool_calls=[ToolCall(
+                    id="call-2", name="search_statistics", arguments={"query": "없는통계2"})]),
+            ]
+        )
+        mcp = StubMcpGateway([empty, empty])
+        service = ChatService(Settings(max_tool_rounds=5), model_gateway=model)
+
+        result = asyncio.run(service._run_model_loop(
+            request=_request(), mcp=mcp, traces=[], messages=_messages(), tools=[]))
+
+        self.assertIn("확인하지 못했습니다", result)
+        self.assertEqual(len(mcp.calls), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
