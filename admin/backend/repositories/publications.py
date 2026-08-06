@@ -56,8 +56,7 @@ class PublicationRepository:
                     (SELECT COUNT(*) FROM stat_tables t
                      JOIN selected_statistics s ON s.stat_id = t.stat_id) AS stat_tables,
                     (SELECT COUNT(*) FROM table_search_chunks c
-                     JOIN stat_tables t ON t.table_id = c.table_id
-                     JOIN selected_statistics s ON s.stat_id = t.stat_id) AS table_search_chunks,
+                     JOIN selected_statistics s ON s.stat_id = c.stat_id) AS table_search_chunks,
                     (SELECT COUNT(*) FROM footnotes f
                      JOIN selected_statistics s ON s.stat_id = f.stat_id) AS footnotes,
                     (SELECT COUNT(*) FROM contacts c
@@ -86,8 +85,7 @@ class PublicationRepository:
                 UNION
                 SELECT DISTINCT c.embedding_profile_key
                 FROM table_search_chunks c
-                JOIN stat_tables t ON t.table_id = c.table_id
-                JOIN statistics s ON s.stat_id = t.stat_id
+                JOIN statistics s ON s.stat_id = c.stat_id
                 WHERE s.pub_id = ANY(%s) AND c.embedding_profile_key IS NOT NULL
                 """,
                 (source_names, selected_ids, selected_ids),

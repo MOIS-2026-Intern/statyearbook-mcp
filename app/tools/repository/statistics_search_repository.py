@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""통계표 제목·본문 청크 검색 SQL과 PostgreSQL 실행을 담당한다."""
+"""통계표 제목·본문 청크·주석 검색 SQL과 PostgreSQL 실행을 담당한다."""
 from collections.abc import Callable
 from typing import Any
 
@@ -107,8 +107,8 @@ def _table_lexical_sql(publication_year: int | None, latest_editions: bool) -> s
         SELECT {_table_metadata_sql()},
                ts_rank_cd(c.search_doc, plainto_tsquery('simple', %s)) AS lexical_rank
         FROM table_search_chunks c
-        JOIN stat_tables t ON t.table_id = c.table_id
-        JOIN statistics s ON s.stat_id = t.stat_id
+        JOIN statistics s ON s.stat_id = c.stat_id
+        LEFT JOIN stat_tables t ON t.table_id = c.table_id
         WHERE c.search_doc @@ plainto_tsquery('simple', %s)
               {edition_filter}
         ORDER BY lexical_rank DESC, s.year DESC, s.stat_id, t.seq
@@ -123,8 +123,8 @@ def _table_vector_sql(publication_year: int | None, latest_editions: bool) -> st
         SELECT {_table_metadata_sql()},
                (c.embedding <=> %s::vector) AS distance
         FROM table_search_chunks c
-        JOIN stat_tables t ON t.table_id = c.table_id
-        JOIN statistics s ON s.stat_id = t.stat_id
+        JOIN statistics s ON s.stat_id = c.stat_id
+        LEFT JOIN stat_tables t ON t.table_id = c.table_id
         WHERE c.embedding IS NOT NULL
           AND c.embedding_profile_key = %s
           {edition_filter}
