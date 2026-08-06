@@ -202,6 +202,8 @@ METRICS: dict[str, MetricSpec] = {
         source_tables=("publications", "statistics", "contacts"),
         limitations=(
             "공식 제출기관 명부가 아니라 각 통계표 출처 문단에서 파싱한 담당 부서 기준",
+            "중앙행정기관·지방자치단체·위원회 등 실제 기관의 수가 아니므로 기관 수를 묻는 "
+            "질문의 답으로 쓰지 말고 search_statistics로 해당 통계표를 찾아 답해야 한다",
         ),
         requires_contacts=True,
     ),

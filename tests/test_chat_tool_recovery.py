@@ -150,6 +150,86 @@ class ChatToolRecoveryTests(unittest.TestCase):
         self.assertFalse(model.calls[2]["tool_results"][0].is_error)
         self.assertFalse(model.calls[3]["tool_results"][0].is_error)
 
+    # 성공했지만 질문과 대상이 다른 결과를 받아도 루프가 끝나지 않고 다른 도구로 이어갈 수 있어야 한다.
+    def test_allows_tool_switch_after_off_target_success(self) -> None:
+        model = StubModelGateway(
+            [
+                ModelTurn(
+                    text="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="analyze_publications",
+                            arguments={"operation": "count", "subject": "organizations"},
+                        )
+                    ],
+                ),
+                ModelTurn(
+                    text="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-2",
+                            name="search_statistics",
+                            arguments={"query": "중앙행정기관"},
+                        )
+                    ],
+                ),
+                ModelTurn(
+                    text="",
+                    tool_calls=[
+                        ToolCall(id="call-3", name="search_tables", arguments={"stat_id": 7}),
+                    ],
+                ),
+                ModelTurn(text="중앙행정기관은 통계표 기준으로 확인했습니다."),
+            ]
+        )
+        mcp = StubMcpGateway(
+            [
+                {
+                    "content": [{"type": "text", "text": "담당 부서 집계"}],
+                    "structuredContent": {
+                        "ok": True,
+                        "operation": "count",
+                        "subject": "organizations",
+                        "basis": "contacts.dept를 공백 정규화한 DISTINCT 값",
+                        "count": 87,
+                        "matched_publications": 1,
+                    },
+                    "isError": False,
+                },
+                {
+                    "content": [{"type": "text", "text": "통계표 후보 1건"}],
+                    "structuredContent": {
+                        "count": 1,
+                        "results": [{"stat_id": 7, "title_ko": "정부조직 변천"}],
+                    },
+                    "isError": False,
+                },
+                {
+                    "content": [{"type": "text", "text": "통계표 원문"}],
+                    "structuredContent": {"found": True, "stat_id": 7, "table_md": "| 부 | 처 |"},
+                    "isError": False,
+                },
+            ]
+        )
+        service = ChatService(Settings(max_tool_rounds=5), model_gateway=model)
+
+        result = asyncio.run(
+            service._run_model_loop(
+                request=_request(),
+                mcp=mcp,
+                traces=[],
+                messages=_messages(),
+                tools=[],
+            )
+        )
+
+        self.assertEqual(result, "중앙행정기관은 통계표 기준으로 확인했습니다.")
+        self.assertEqual(
+            [name for name, _arguments in mcp.calls],
+            ["analyze_publications", "search_statistics", "search_tables"],
+        )
+
     # 교정 호출도 입력 오류면 반복하지 않고 기존 실패 응답으로 종료해야 한다.
     def test_stops_after_one_input_error_retry(self) -> None:
         model = StubModelGateway(
