@@ -6,7 +6,14 @@ from unittest.mock import patch
 from pydantic import ValidationError
 
 from app.tools.analyze_publications import ValueFilter
-from app.tools.repository.publication_repository import officer_match_keys
+from app.tools.repository.department_mapping import (
+    DEPARTMENT_ALIASES,
+    department_match_keys,
+)
+from app.tools.repository.publication_repository import (
+    normalize_match_key,
+    officer_match_keys,
+)
 from app.tools.service.publication_analysis_service import analyze_publications_data
 
 
@@ -56,6 +63,58 @@ class OfficerMatchKeyTests(unittest.TestCase):
     # 뗄 직급이 없는 이름은 키가 하나뿐이어야 조건이 불필요하게 늘지 않는다.
     def test_plain_name_produces_a_single_key(self) -> None:
         self.assertEqual(officer_match_keys("위운비"), ("위운비",))
+
+
+class DepartmentAliasTests(unittest.TestCase):
+    """부서를 약칭이나 옛 이름으로 불러도 그 부서를 찾아야 한다.
+
+    저장값은 '국가정보자원관리원'이지만 사용자는 '국정자원'처럼 줄여 부르거나 개편 전
+    이름인 '정부통합전산센터'로 부른다. 둘 다 저장값의 부분 문자열이 아니라서 부분 일치로는
+    한 건도 찾지 못하므로, 적어 둔 현재 이름을 비교 키로 함께 만들어 준다.
+    """
+
+    # 약칭은 그 기관의 현재 이름 키를 함께 가져야 한다.
+    def test_abbreviation_carries_the_current_name(self) -> None:
+        keys = department_match_keys("국정자원")
+
+        self.assertIn("국정자원", keys)
+        self.assertIn("국가정보자원관리원", keys)
+
+    # 개편 전 이름으로 물어도 현재 이름으로 이어져야 한다.
+    def test_former_name_carries_the_current_name(self) -> None:
+        self.assertIn("국가정보자원관리원", department_match_keys("정부통합전산센터"))
+        self.assertIn("지방자치인재개발원", department_match_keys("지방행정연수원"))
+        self.assertIn("국립과학수사연구원", department_match_keys("국립과학수사연구소"))
+        self.assertIn("국가재난안전교육원", department_match_keys("재난교육원"))
+        self.assertIn("국립재난안전연구원", department_match_keys("재난안전연구원"))
+        self.assertIn("국립재난안전연구원", department_match_keys("재난연구원"))
+
+    # 적어 두지 않은 이름은 키가 늘지 않아야 조건이 불필요하게 넓어지지 않는다.
+    def test_unlisted_query_keeps_a_single_key(self) -> None:
+        self.assertEqual(department_match_keys("재난정보통신과"), ("재난정보통신과",))
+        self.assertEqual(department_match_keys("국가기록원"), ("국가기록원",))
+
+    # 검색어의 공백 표기는 부서 이름과 마찬가지로 비교 전에 지워야 한다.
+    def test_spacing_is_normalized_before_lookup(self) -> None:
+        self.assertIn("국가정보자원관리원", department_match_keys("국 정 자원"))
+
+    # 현재 이름에 그대로 들어 있는 표현은 부분 일치로 이미 찾히므로 적을 이유가 없다.
+    # 적어 두면 같은 뜻의 조건이 두 번 걸린다.
+    def test_aliases_are_not_substrings_of_the_current_name(self) -> None:
+        for name, aliases in DEPARTMENT_ALIASES.items():
+            name_key = normalize_match_key(name)
+            for alias in aliases:
+                with self.subTest(name=name, alias=alias):
+                    self.assertNotIn(normalize_match_key(alias), name_key)
+
+    # 같은 약칭을 두 기관에 적으면 한쪽이 조용히 덮여 엉뚱한 기관으로 이어진다.
+    def test_no_alias_points_at_two_departments(self) -> None:
+        seen: dict[str, str] = {}
+        for name, aliases in DEPARTMENT_ALIASES.items():
+            for alias in aliases:
+                key = normalize_match_key(alias)
+                self.assertNotIn(key, seen, f"{alias}가 {seen.get(key)}와 {name}에 겹칩니다")
+                seen[key] = name
 
 
 class AnalyzePublicationsTests(unittest.TestCase):
@@ -284,6 +343,62 @@ class AnalyzePublicationsTests(unittest.TestCase):
         plan = execute_plan_mock.call_args.args[0]
         self.assertEqual(plan.params, (2026, "위운비주무관님", "위운비"))
         self.assertEqual(plan.sql.count("strpos("), 2)
+
+    @patch(
+        "app.tools.service.publication_analysis_service._execute_plan",
+        return_value=[{"matched_publications": 1, "count": 3}],
+    )
+    @patch(
+        "app.tools.repository.publication_analysis_repository._latest_publication_year",
+        return_value=2026,
+    )
+    # 약칭으로 물어도 그 기관의 현재 이름을 조건에 함께 넣어 찾아야 한다.
+    def test_department_filter_matches_an_alias(
+        self,
+        latest_publication_year_mock,
+        execute_plan_mock,
+    ) -> None:
+        result = analyze_publications_data(
+            operation="count",
+            subject="contacts",
+            value_filters=[{"field": "department", "contains": "국정자원"}],
+        )
+
+        plan = execute_plan_mock.call_args.args[0]
+        self.assertEqual(plan.params, (2026, "국정자원", "국가정보자원관리원"))
+        self.assertEqual(plan.sql.count("strpos("), 2)
+        # 응답의 value_filters는 사용자가 넣은 검색어를 그대로 유지해야 한다.
+        self.assertEqual(
+            result["value_filters"],
+            [{"field": "department", "contains": "국정자원"}],
+        )
+        # 무엇을 바꿔 맞췄는지 밝혀야 모델이 근거를 정확히 인용한다.
+        self.assertIn("'국정자원' 포함(약칭·옛 이름으로 보고", result["basis"])
+
+    @patch(
+        "app.tools.service.publication_analysis_service._execute_plan",
+        return_value=[{"matched_publications": 1, "count": 1}],
+    )
+    @patch(
+        "app.tools.repository.publication_analysis_repository._latest_publication_year",
+        return_value=2026,
+    )
+    # 현재 이름으로 찾던 질의는 조건이 늘지 않아야 결과가 넓어지지 않는다.
+    def test_current_department_name_keeps_one_condition(
+        self,
+        latest_publication_year_mock,
+        execute_plan_mock,
+    ) -> None:
+        result = analyze_publications_data(
+            operation="count",
+            subject="contacts",
+            value_filters=[{"field": "department", "contains": "국가정보자원관리원"}],
+        )
+
+        plan = execute_plan_mock.call_args.args[0]
+        self.assertEqual(plan.params, (2026, "국가정보자원관리원"))
+        self.assertEqual(plan.sql.count("strpos("), 1)
+        self.assertNotIn("약칭", result["basis"])
 
     @patch(
         "app.tools.service.publication_analysis_service._execute_plan",

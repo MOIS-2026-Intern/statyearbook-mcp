@@ -7,15 +7,26 @@ from app.tools.repository.publication_analysis_repository import (
     AnalysisGroup,
     AnalysisOperation,
     AnalysisSubject,
+    AppliedValueFilter,
     FIELDS,
     LISTS,
     METRICS,
+    VALUE_FILTER_MATCH_NOTES,
     _execute_plan,
     _resolve_publication_scope,
     _resolve_value_filters,
     _validate_request,
     build_query_plan,
 )
+
+# 검색어를 여러 형태로 푼 조건은 저장값이 검색어를 그대로 담고 있지 않으므로,
+# 무엇을 무시하거나 바꿔 맞췄는지 필드에 맞는 말로 밝힌다.
+def _match_note(value_filter: AppliedValueFilter) -> str:
+    if len(value_filter.match_keys) <= 1:
+        return ""
+    note = VALUE_FILTER_MATCH_NOTES.get(value_filter.field)
+    return f"({note})" if note else ""
+
 
 # 결과가 비었는지 판정한다. count는 행이 아니라 집계값이 0인지를 본다.
 def _is_empty_result(operation: str, rows: list[dict[str, Any]]) -> bool:
@@ -251,12 +262,10 @@ def analyze_publications_data(
         limitations = metric.limitations
 
     # 값 조건은 어떤 operation이든 산출 근거에 함께 드러낸다.
-    # 담당자처럼 검색어를 여러 형태로 푼 조건은 저장값이 검색어를 그대로 담고 있지 않으므로,
-    # 무엇을 무시하고 맞췄는지까지 밝혀야 모델이 근거를 정확히 인용한다.
+    # 검색어를 여러 형태로 푼 조건은 어떻게 맞췄는지까지 밝혀야 모델이 근거를 정확히 인용한다.
     if applied_value_filters:
         conditions = ", ".join(
-            f"{FIELDS[item.field].alias}에 '{item.contains}' 포함"
-            + ("(직급·경칭 표기는 무시)" if len(item.match_keys) > 1 else "")
+            f"{FIELDS[item.field].alias}에 '{item.contains}' 포함" + _match_note(item)
             for item in applied_value_filters
         )
         basis = f"{basis}; {conditions} 조건을 만족하는 행만 대상으로 한다"

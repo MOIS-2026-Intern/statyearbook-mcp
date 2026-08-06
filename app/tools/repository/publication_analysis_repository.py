@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.db import connect
+from app.tools.repository.department_mapping import department_match_keys
 from app.tools.repository.publication_repository import (
     OFFICER_SQL,
     ORGANIZATION_SQL,
@@ -138,6 +139,12 @@ class AppliedValueFilter:
 # 필드마다 검색어를 비교 키로 푸는 방법이 다르다. 지정하지 않은 필드는 공백·기호만 지운다.
 VALUE_FILTER_MATCH_KEYS: dict[str, Callable[[str], tuple[str, ...]]] = {
     "officer": officer_match_keys,
+    "department": department_match_keys,
+}
+# 검색어를 여러 형태로 푼 필드는 무엇을 함께 맞췄는지 산출 근거에 밝힌다.
+VALUE_FILTER_MATCH_NOTES: dict[str, str] = {
+    "officer": "직급·경칭 표기는 무시",
+    "department": "약칭·옛 이름으로 보고 현재 부서 이름까지 함께 대조",
 }
 
 
