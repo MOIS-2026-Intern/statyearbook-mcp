@@ -761,7 +761,8 @@ def _model_messages_from_request(request: ChatRequest, max_trace_chars: int) -> 
                 trace_text = truncate_text(json_dumps(trace_context), max_trace_chars)
                 content = (
                     f"{content}\n\n"
-                    "[이전 MCP 요청/응답]\n"
+                    "[이전 질문에 사용한 MCP 요청/응답 - 그때 답의 근거이며, "
+                    "새 질문의 수치는 이번 요청의 도구 결과로 다시 확인한다]\n"
                     f"{trace_text}"
                 )
 

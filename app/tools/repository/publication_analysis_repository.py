@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.db import connect
+from app.tools.repository.department_mapping import department_match_keys
 from app.tools.repository.publication_repository import (
     OFFICER_SQL,
     ORGANIZATION_SQL,
@@ -138,6 +139,12 @@ class AppliedValueFilter:
 # 필드마다 검색어를 비교 키로 푸는 방법이 다르다. 지정하지 않은 필드는 공백·기호만 지운다.
 VALUE_FILTER_MATCH_KEYS: dict[str, Callable[[str], tuple[str, ...]]] = {
     "officer": officer_match_keys,
+    "department": department_match_keys,
+}
+# 검색어를 여러 형태로 푼 필드는 무엇을 함께 맞췄는지 산출 근거에 밝힌다.
+VALUE_FILTER_MATCH_NOTES: dict[str, str] = {
+    "officer": "직급·경칭 표기는 무시",
+    "department": "약칭·옛 이름으로 보고 현재 부서 이름까지 함께 대조",
 }
 
 
@@ -195,6 +202,8 @@ METRICS: dict[str, MetricSpec] = {
         source_tables=("publications", "statistics", "contacts"),
         limitations=(
             "공식 제출기관 명부가 아니라 각 통계표 출처 문단에서 파싱한 담당 부서 기준",
+            "중앙행정기관·지방자치단체·위원회 등 실제 기관의 수가 아니므로 기관 수를 묻는 "
+            "질문의 답으로 쓰지 말고 search_statistics로 해당 통계표를 찾아 답해야 한다",
         ),
         requires_contacts=True,
     ),

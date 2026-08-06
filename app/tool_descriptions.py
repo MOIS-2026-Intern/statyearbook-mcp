@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 
 ANALYZE_PUBLICATIONS = (
-    "한 통계표가 아니라 연보 전체를 훑어야 답할 수 있는 목록·개수·분포를 조회한다. 통계 항목·표·"
-    "장·절·담당 부서·담당자·출처·주석이 그 대상이다. "
+    "연보라는 책에 무엇이 어떻게 수록되어 있는지를 조회한다. 몇 개의 통계 항목·표·장·절이 실렸고 "
+    "어떤 담당 부서·담당자·출처·주석이 붙어 있는지가 대상이며, 표 안에 적힌 수치는 다루지 않는다. "
+    "중앙행정기관·지방자치단체·위원회·공무원처럼 통계표가 조사한 실제 대상이 몇 개인지 묻는 질문은 "
+    "'총 몇 개'라고 물어도 이 도구의 대상이 아니라 search_statistics로 표를 찾아 답한다. "
     "질문에 담당자 이름이나 담당 부서명이 주어져 그 담당자가 맡은 통계를 역검색할 때도 사용한다. "
     "이때는 subject=contacts에 value_filters로 officer 또는 department 조건을 걸고, 담당 통계 "
     "목록을 답하려면 fields에 ref_id와 statistic_title을 함께 넣는다. 담당자 이름은 표 제목이나 "
@@ -21,8 +23,9 @@ ANALYZE_PUBLICATIONS_FIELDS = {
         "chapters=장, sections=절, organizations=contacts.dept 담당 부서, "
         "source_systems=출처 시스템, publications=발간판, contacts=담당 부서·담당자·전화번호·출처, "
         "footnotes=주석. "
-        "organizations는 연보에 통계를 제공한 담당 부서일 뿐이므로, 통계표가 조사한 행정기관·"
-        "지방자치단체·위원회의 수를 묻는 질문에는 어떤 subject도 쓰지 않고 search_statistics로 넘긴다."
+        "organizations는 연보에 통계를 제출한 과·팀 이름의 종류일 뿐 부·처·청 같은 기관의 수가 "
+        "아니다. 중앙행정기관·행정기관·지방자치단체·위원회가 몇 개인지 묻는 질문에는 어떤 subject도 "
+        "쓰지 않고 search_statistics로 넘긴다."
     ),
     "group_by": (
         "breakdown 전용 그룹 기준. publication_year, chapter, section, organization, "
@@ -163,6 +166,8 @@ SEARCH_STATISTICS = (
     "통계표의 제목 계층, 컬럼과 행 항목, 표에 달린 주석을 자연어로 검색해 후보와 stat_id를 반환한다. "
     "통계 주제로 표를 찾는 첫 단계이며, 선택한 통계표의 담당 정보가 필요하면 이어서 search_contacts를, "
     "실제 표 수치나 원문이 필요하면 search_tables를 사용한다. "
+    "중앙행정기관·지방자치단체·위원회·공무원처럼 통계표가 조사한 실제 대상의 수와 현황을 묻는 "
+    "질문도 여기서 표를 찾은 뒤 search_tables로 수치를 읽어 답한다. "
     "사람 이름과 부서명은 표 제목이나 본문에 없으므로 query에 넣지 않고 analyze_publications를 쓴다. "
     "publication_year는 통계연보 발간연도이며, 생략하면 통계마다 가장 최근 발간판을 검색한다."
 )
