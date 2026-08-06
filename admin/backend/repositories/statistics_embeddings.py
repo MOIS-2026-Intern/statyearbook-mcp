@@ -7,8 +7,11 @@ from utils.embedding import EmbeddingConfigurationError
 from utils.vector import vector_literal
 
 
-LEVEL4_EMBEDDING_WEIGHT = 0.70
-HIERARCHY_CONTEXT_WEIGHT = 0.30
+# 통계 제목 벡터는 "그 표가 무엇인가"(제목)와 "어디에 실렸는가"(장·절·세부절)를 각각 임베딩해
+# 합성한다. 제목 쪽이 검색을 좌우하고 계층은 제목만으로 뜻이 통하지 않는 표
+# (예: 국민디자인과제 아래의 '중앙행정기관', 국민비서 아래의 '알림서비스')를 갈라 주는 보조 신호다.
+TITLE_EMBEDDING_WEIGHT = 0.85
+HIERARCHY_CONTEXT_WEIGHT = 0.15
 
 
 # psycopg의 tuple·dict 행 형식 차이 없이 첫 값을 읽는다.
@@ -131,12 +134,12 @@ class StatisticsEmbeddingRepository:
         last_source_id = int(rows[-1]["stat_id"]) if rows else after_source_id
         return EmbeddingBatch(rows=rows, last_source_id=last_source_id)
 
-    # 세부 제목과 상위 문맥을 서로 다른 가중치의 임베딩 입력으로 구성한다.
+    # 제목과 상위 계층 문맥을 서로 다른 가중치의 임베딩 입력으로 구성한다.
     def select_embedding_texts(self, rows: list[dict]) -> WeightedEmbeddingTexts:
         return WeightedEmbeddingTexts(groups=(
             (
-                LEVEL4_EMBEDDING_WEIGHT,
-                [self._build_level4_embedding_text(row) for row in rows],
+                TITLE_EMBEDDING_WEIGHT,
+                [self._build_title_embedding_text(row) for row in rows],
             ),
             (
                 HIERARCHY_CONTEXT_WEIGHT,
@@ -152,20 +155,25 @@ class StatisticsEmbeddingRepository:
                 unique_parts.append(part)
         return " ".join(unique_parts).strip() or "(제목 없음)"
 
-    # 최하위 제목을 중심으로 한 통계 자체의 검색 문구를 만든다.
-    def _build_level4_embedding_text(self, row: dict) -> str:
+    # 통계 자체를 가리키는 제목 문구를 만든다.
+    # title_ko는 적재할 때 level4_title이 있으면 그 값, 없으면 level3_title로 채워지므로
+    # (load_parser의 title_ko = level4_title or level3_title) 이미 가장 깊은 제목이다.
+    # level4_title을 따로 넣어도 항상 title_ko와 같은 값이라 기여가 없어 넣지 않는다.
+    def _build_title_embedding_text(self, row: dict) -> str:
         return self._join_unique([
-            row.get("level4_title"),
             row.get("title_ko"),
             row.get("title_en"),
         ])
 
-    # 절·장 계층을 조합해 통계 제목을 보완하는 문맥 문구를 만든다.
+    # 장→절→세부절 순서로 통계가 실린 자리를 나타내는 문맥 문구를 만든다.
+    # 제목과 같은 조각은 뺀다. level4_title이 없는 통계는 title_ko가 곧 level3_title이라,
+    # 빼지 않으면 문맥 그룹이 제목을 한 번 더 넣는 꼴이 되어 계층 신호가 사라진다.
     def _build_hierarchy_context_text(self, row: dict) -> str:
+        title = row.get("title_ko")
         return self._join_unique([
-            row.get("level3_title"),
-            row.get("section"),
-            row.get("chapter"),
+            part
+            for part in (row.get("chapter"), row.get("section"), row.get("level3_title"))
+            if part != title
         ])
 
     # 벡터와 profile key를 같은 통계 행에 일괄 저장한다.
