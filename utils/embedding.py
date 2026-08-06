@@ -20,7 +20,11 @@ HUGGINGFACE_EMBEDDING_PROVIDER = "huggingface"
 SUPPORTED_EMBEDDING_PROVIDERS = frozenset(
     {LOCAL_EMBEDDING_PROVIDER, HUGGINGFACE_EMBEDDING_PROVIDER}
 )
-STATISTICS_CONTENT_VERSION = "statistics-title-v3-level4-70-context-30"
+# v3까지의 이름은 level4를 0.70으로 실었다고 적었지만 level4_title은 언제나 title_ko와 같은 값이라
+# 실제로는 기여한 적이 없고, 문맥 그룹은 level4가 없는 통계에서 제목을 되풀이하고 있었다.
+# v4는 제목 그룹을 title_ko/title_en으로, 문맥 그룹을 제목과 겹치지 않는 장·절·세부절로 정리한다.
+# 이 값을 바꾸면 profile key가 바뀌므로 statistics 임베딩을 다시 만들어야 한다.
+STATISTICS_CONTENT_VERSION = "statistics-title-v4-title-85-context-15"
 # 주석(notes) 청크가 늘었지만 headers·labels 청크를 만드는 규칙은 그대로다. 이 값을 바꾸면
 # profile key가 바뀌어 멀쩡한 기존 벡터까지 전부 다시 만들어야 하므로 유지한다.
 TABLE_SEARCH_CONTENT_VERSION = "table-search-v1-headers-labels"

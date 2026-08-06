@@ -9,6 +9,7 @@ from app.tools.repository.statistics_search_repository import (
     LATEST_EDITIONS_KEY_SQL,
 )
 from app.tools.service.statistics_search_service import (
+    RRF_K,
     search_statistics_data,
 )
 
@@ -80,6 +81,13 @@ class SearchStatisticsTests(unittest.TestCase):
     def test_latest_edition_keeps_every_row_of_the_newest_publication(self) -> None:
         self.assertNotIn("DISTINCT ON", LATEST_EDITIONS_CTE)
         self.assertIn("WHERE year = latest_year", LATEST_EDITIONS_CTE)
+
+    # RRF의 관례값 60은 후보가 수천 건일 때를 전제한다. 여기서는 경로마다 후보가
+    # max(20, limit*5)로 20~100건뿐이라 K가 후보 수보다 크면 1위와 꼴찌의 점수 차가 거의 없어져
+    # 순위가 지워지고, 제목이 정확히 맞는 표가 본문에 검색어가 흩어진 표에 밀린다.
+    def test_rrf_k_is_scaled_to_the_candidate_pool(self) -> None:
+        smallest_candidate_pool = 20
+        self.assertLessEqual(RRF_K, smallest_candidate_pool)
 
 
 if __name__ == "__main__":
