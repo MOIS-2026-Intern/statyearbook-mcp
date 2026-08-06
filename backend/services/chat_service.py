@@ -190,6 +190,7 @@ class ChatService:
         visualize_result_cache: dict[str, dict[str, Any]] = {}
         tool_call_counts: dict[str, int] = {}
         input_error_retry_used = False
+        no_results_retry_used = False
 
         for round_index in range(self._settings.max_tool_rounds):
             if round_index == 0:
@@ -267,6 +268,19 @@ class ChatService:
                 return _tool_failure_message(tool_results)
 
             if tool_results and all(_tool_result_has_no_data(result) for result in tool_results):
+                # 빈 결과를 곧바로 종료 문구로 바꾸면 모델이 검색어를 다시 잡아 볼 기회가 없다.
+                # 연보에 표가 있어도 첫 검색어가 어긋나면 못 찾은 것으로 끝나므로 한 번은 되돌려준다.
+                can_retry_no_results = (
+                    not no_results_retry_used
+                    and round_index + 1 < self._settings.max_tool_rounds
+                )
+                if can_retry_no_results:
+                    no_results_retry_used = True
+                    logger.info(
+                        "event=chat.tool_results outcome=no_results_retry tools=%s",
+                        ",".join(result.name or "unknown" for result in tool_results),
+                    )
+                    continue
                 logger.info(
                     "event=chat.tool_results outcome=no_results tools=%s",
                     ",".join(result.name or "unknown" for result in tool_results),
