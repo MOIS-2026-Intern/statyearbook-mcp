@@ -33,7 +33,7 @@ class Settings:
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"]
     )
     model_provider: str = "openai"
-    chat_model: str = "gpt-5.5"
+    chat_model: str = "gpt-5-mini"
     model_timeout_seconds: float = 60.0
     openai_api_key: str | None = None
     bizrouter_api_key: str | None = None
@@ -105,7 +105,7 @@ class Settings:
             model_provider=os.environ.get(
                 "STATYEARBOOK_BACKEND_MODEL_PROVIDER", "openai"
             ).strip().lower(),
-            chat_model=os.environ.get("STATYEARBOOK_BACKEND_CHAT_MODEL", "gpt-5.5"),
+            chat_model=os.environ.get("STATYEARBOOK_BACKEND_CHAT_MODEL", "gpt-5-mini"),
             model_timeout_seconds=float(
                 os.environ.get("STATYEARBOOK_BACKEND_MODEL_TIMEOUT_SECONDS", "60")
             ),
