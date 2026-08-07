@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """도구 입력 오류 뒤 모델이 한 번 경로를 교정할 수 있는지 검증한다."""
 import asyncio
+import json
 import unittest
 
 from backend.config import Settings
 from backend.models.chat import ChatRequest
-from backend.models.tooling import ModelMessage, ModelTurn, ToolCall
+from backend.models.tooling import ModelMessage, ModelTurn, ToolCall, ToolSpec
 from backend.services.chat_service import ChatService, _model_result_for_tool
 
 
@@ -337,6 +338,40 @@ class ChatToolRecoveryTests(unittest.TestCase):
         self.assertIn("확인하지 못했습니다", result)
         self.assertEqual(len(mcp.calls), 2)
 
+    # 마지막 턴의 대화에는 도구 호출 기록이 남아 있다. 도구 목록을 빼고 보내면 모델이 그
+    # 기록을 해석하지 못해 빈 응답을 돌려주므로, 목록은 남기고 호출만 막아야 한다.
+    def test_final_turn_keeps_the_tools_and_forbids_calling_them(self) -> None:
+        tools = [ToolSpec(name="search_statistics", description="검색", input_schema={})]
+        found = {
+            "content": [{"type": "text", "text": "후보 1건"}],
+            "structuredContent": {"count": 1, "results": [{"stat_id": 1}]},
+            "isError": False,
+        }
+        call = ModelTurn(text="", tool_calls=[ToolCall(
+            id="call-1", name="search_statistics", arguments={"query": "통계"})])
+        model = StubModelGateway([call, call, ModelTurn(text="정리한 답변입니다.")])
+        mcp = StubMcpGateway([found, found])
+        service = ChatService(Settings(max_tool_rounds=2), model_gateway=model)
+
+        result = asyncio.run(service._run_model_loop(
+            request=_request(), mcp=mcp, traces=[], messages=_messages(), tools=tools))
+
+        self.assertEqual(result, "정리한 답변입니다.")
+        final_call = model.calls[-1]
+        self.assertEqual(final_call["tools"], tools)
+        self.assertEqual(final_call["tool_choice"], "none")
+
+    # 도구를 부르는 도중의 턴까지 호출을 막으면 필요한 자료를 더 찾을 수 없다.
+    def test_tool_rounds_leave_tool_choice_unset(self) -> None:
+        model = StubModelGateway([ModelTurn(text="바로 답합니다.")])
+        service = ChatService(Settings(max_tool_rounds=2), model_gateway=model)
+
+        asyncio.run(service._run_model_loop(
+            request=_request(), mcp=StubMcpGateway([]), traces=[],
+            messages=_messages(), tools=[]))
+
+        self.assertIsNone(model.calls[0].get("tool_choice"))
+
 
 class SearchTablesResultTextTests(unittest.TestCase):
     @staticmethod
@@ -362,6 +397,57 @@ class SearchTablesResultTextTests(unittest.TestCase):
         text = self._model_text([{"seq": 1, "table_md": "| 구분 |\n|---|\n| 부 |"}])
 
         self.assertEqual(text, "통계표 원문과 메타데이터를 조회했습니다.")
+
+
+class DuplicatedToolPayloadTests(unittest.TestCase):
+    @staticmethod
+    def _list_result(rows: int) -> dict:
+        payload = {
+            "ok": True,
+            "operation": "list",
+            "result_count": rows,
+            "results": [{"ref_id": f"1-1-{i}", "statistic_title": "정부 조직도"} for i in range(rows)],
+        }
+        return {
+            "content": [
+                {"type": "text", "text": json.dumps(payload, ensure_ascii=False, indent=2)}
+            ],
+            "structuredContent": payload,
+            "isError": False,
+        }
+
+    # MCP가 같은 목록을 텍스트와 structuredContent로 두 번 실어 모델 입력 한도를 반으로 깎는다.
+    def test_drops_the_text_copy_of_the_structured_payload(self) -> None:
+        raw = self._list_result(200)
+
+        result = _model_result_for_tool("analyze_publications", raw)
+
+        self.assertEqual(len(result["content"]), 1)
+        self.assertEqual(result["content"][0]["text"], "도구 결과는 structuredContent에 있습니다.")
+        self.assertLess(len(json.dumps(result, ensure_ascii=False)),
+                        len(json.dumps(raw, ensure_ascii=False)) // 2)
+
+    # 텍스트를 걷어내도 모델이 답에 쓸 행은 하나도 잃지 않아야 한다.
+    def test_keeps_every_row_of_the_structured_payload(self) -> None:
+        result = _model_result_for_tool("analyze_publications", self._list_result(200))
+
+        self.assertEqual(result["structuredContent"]["result_count"], 200)
+        self.assertEqual(len(result["structuredContent"]["results"]), 200)
+
+    # 이미지처럼 structuredContent가 대신할 수 없는 블록은 남겨 둔다.
+    def test_keeps_content_blocks_that_are_not_text(self) -> None:
+        raw = self._list_result(2)
+        raw["content"].append({"type": "image", "mimeType": "image/png", "omitted": True})
+
+        result = _model_result_for_tool("analyze_publications", raw)
+
+        self.assertEqual([item["type"] for item in result["content"]], ["text", "image"])
+
+    # 오류 결과는 원인을 그대로 읽어야 하므로 축약하지 않는다.
+    def test_leaves_error_results_untouched(self) -> None:
+        raw = {"content": [{"type": "text", "text": "validation error"}], "isError": True}
+
+        self.assertIs(_model_result_for_tool("analyze_publications", raw), raw)
 
 
 if __name__ == "__main__":

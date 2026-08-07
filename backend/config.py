@@ -42,12 +42,12 @@ class Settings:
     model_provider: str = "openai"
     chat_model: str = "gpt-5-mini"
     model_timeout_seconds: float = 200.0
-    model_max_output_tokens: int = 16000
+    model_max_output_tokens: int = 48000
     model_streaming: bool = True
     openai_api_key: str | None = None
     bizrouter_api_key: str | None = None
     bizrouter_base_url: str = "https://api.bizrouter.ai/v1"
-    max_tool_rounds: int = 3
+    max_tool_rounds: int = 5
     tool_output_max_chars: int = 60_000
     mcp_server_label: str = "statyearbook"
     mcp_url: str = "http://127.0.0.1:8001/mcp"
@@ -119,7 +119,7 @@ class Settings:
                 os.environ.get("STATYEARBOOK_BACKEND_MODEL_TIMEOUT_SECONDS", "200")
             ),
             model_max_output_tokens=int(
-                os.environ.get("STATYEARBOOK_BACKEND_MODEL_MAX_OUTPUT_TOKENS", "16000")
+                os.environ.get("STATYEARBOOK_BACKEND_MODEL_MAX_OUTPUT_TOKENS", "48000")
             ),
             model_streaming=_flag(os.environ.get("STATYEARBOOK_BACKEND_MODEL_STREAMING"), True),
             openai_api_key=os.environ.get("STATYEARBOOK_BACKEND_OPENAI_API_KEY"),
@@ -129,7 +129,7 @@ class Settings:
                 "https://api.bizrouter.ai/v1",
             ).rstrip("/"),
             max_tool_rounds=int(
-                os.environ.get("STATYEARBOOK_BACKEND_MAX_TOOL_ROUNDS", "3")
+                os.environ.get("STATYEARBOOK_BACKEND_MAX_TOOL_ROUNDS", "5")
             ),
             tool_output_max_chars=int(
                 os.environ.get("STATYEARBOOK_BACKEND_TOOL_OUTPUT_MAX_CHARS", "60000")

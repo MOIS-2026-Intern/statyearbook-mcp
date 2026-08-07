@@ -38,6 +38,11 @@ _TERMINAL_STREAM_EVENTS = frozenset(
     {"response.completed", "response.incomplete", "response.failed"}
 )
 
+# 항목 없는 응답은 같은 요청을 다시 보내면 대개 정상으로 돌아온다. 재현 실험에서 23회 중
+# 3회 발생했으므로 1회 재시도로 약 1.7%까지 내려간다. 실패마다 입력을 다시 보내므로
+# 값을 키우면 지연과 비용이 그만큼 늘어난다.
+_EMPTY_OUTPUT_RETRIES = 1
+
 
 @dataclass(frozen=True)
 class OpenAIContinuationState:
@@ -64,6 +69,7 @@ class OpenAICompatibleGateway:
         input_items: list[Any],
         tools: list[dict[str, Any]],
         model_profile: str,
+        tool_choice: str | None = None,
         on_text_delta: TextDeltaCallback | None = None,
     ) -> Any:
         reasoning = _reasoning_for_profile(model_profile)
@@ -75,6 +81,8 @@ class OpenAICompatibleGateway:
             "parallel_tool_calls": False,
             "max_output_tokens": self._settings.model_max_output_tokens,
         }
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
         if reasoning is not None:
             kwargs["reasoning"] = reasoning
 
@@ -191,37 +199,63 @@ class OpenAICompatibleGateway:
         model_profile: str,
         tool_results: list[ToolResult] | None = None,
         state: object | None = None,
+        tool_choice: str | None = None,
         on_text_delta: TextDeltaCallback | None = None,
     ) -> ModelTurn:
         input_items = _input_items_from_state(state, messages)
         input_items.extend(_function_call_output(result) for result in tool_results or [])
+        openai_tools = [_openai_tool_from_spec(tool) for tool in tools]
+        streamed: list[str] = []
 
-        response = await self.create_response(
-            instructions=instructions,
-            input_items=input_items,
-            tools=[_openai_tool_from_spec(tool) for tool in tools],
-            model_profile=model_profile,
-            on_text_delta=on_text_delta,
-        )
+        # 되돌릴 수 없는 지점을 알기 위해 이미 내보낸 조각을 함께 모아 둔다.
+        def collect(text: str) -> None:
+            streamed.append(text)
+            on_text_delta(text)
 
-        output_items = to_jsonable(getattr(response, "output", []))
-        input_items.extend(output_items)
-        tool_calls = _function_calls(response)
-        text = _response_text(response, default="")
+        attempt = 0
+        while True:
+            response = await self.create_response(
+                instructions=instructions,
+                input_items=input_items,
+                tools=openai_tools,
+                model_profile=model_profile,
+                tool_choice=tool_choice,
+                on_text_delta=None if on_text_delta is None else collect,
+            )
+            output_items = to_jsonable(getattr(response, "output", []))
+            tool_calls = _function_calls(response)
+            text = _response_text(response, default="")
 
-        if not text and not tool_calls:
-            # 사용자에게는 안내 문구만 보이므로 무엇이 왔는지 로그로만 드러난다.
+            # 조각으로는 받았는데 완료 응답에 본문이 빠져 있으면 받은 조각을 그대로 쓴다.
+            if not text and streamed:
+                text = "".join(streamed).strip()
+            if text or tool_calls:
+                break
+
+            # 공급자가 항목이 하나도 없는 응답을 완료 상태로 돌려주는 일이 있다. 사용자에게는
+            # 안내 문구만 남으므로 무엇이 왔는지 남기고, 되돌릴 수 있으면 같은 요청을 다시 보낸다.
+            incomplete_reason = _get(getattr(response, "incomplete_details", None), "reason")
             logger.warning(
                 "event=model.empty_output provider=%s model=%s status=%s"
-                " item_types=%s items=%s",
+                " incomplete_reason=%s attempt=%s item_types=%s items=%s",
                 self._settings.model_provider,
                 self._settings.chat_model,
                 getattr(response, "status", None),
+                incomplete_reason,
+                attempt + 1,
                 [_get(item, "type") for item in output_items],
                 truncate_text(json_dumps(output_items), 1200),
             )
-            text = _missing_text_message()
+            # 출력 토큰을 다 써서 빈 응답이면 같은 요청을 다시 보내도 같은 자리에서 끊긴다.
+            if incomplete_reason == "max_output_tokens":
+                text = _truncated_text_message()
+                break
+            if attempt >= _EMPTY_OUTPUT_RETRIES:
+                text = _missing_text_message()
+                break
+            attempt += 1
 
+        input_items.extend(output_items)
         return ModelTurn(
             text=text,
             tool_calls=tool_calls,
@@ -320,9 +354,21 @@ def _response_text(response: Any, *, default: str) -> str:
     return default
 
 
-# 응답에 표시 가능한 텍스트가 없을 때의 안내 메시지를 반환한다.
+# 응답에 표시 가능한 텍스트가 없을 때의 안내 메시지를 반환한다. 사용자가 할 수 있는 일이
+# 다시 물어보는 것뿐이므로 원인과 함께 그 방법을 알린다.
 def _missing_text_message() -> str:
-    return "응답을 생성했지만 표시할 텍스트를 찾지 못했습니다."
+    return (
+        "답변을 받아오지 못했습니다. 확인한 자료가 있어도 표시할 내용이 오지 않아 "
+        "이번 질문에는 답할 수 없습니다. 같은 질문을 다시 보내면 대부분 정상적으로 답변합니다."
+    )
+
+
+# 출력 토큰 한도에 걸려 본문이 하나도 오지 않았을 때의 안내 메시지를 반환한다.
+def _truncated_text_message() -> str:
+    return (
+        "답변이 출력 한도에 걸려 본문이 생성되지 않았습니다. "
+        "질문의 범위를 좁혀 다시 물어보면 답변을 받을 수 있습니다."
+    )
 
 
 # 스트림을 끝까지 읽지 못한 경우에도 HTTP 연결을 확실히 반납한다.
