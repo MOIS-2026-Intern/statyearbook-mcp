@@ -55,6 +55,7 @@ class OpenAICompatibleGateway:
             "input": input_items,
             "tools": tools,
             "parallel_tool_calls": False,
+            "max_output_tokens": self._settings.model_max_output_tokens,
         }
         if reasoning is not None:
             kwargs["reasoning"] = reasoning
