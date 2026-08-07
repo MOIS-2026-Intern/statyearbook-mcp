@@ -11,7 +11,11 @@ from uuid import uuid4
 
 from backend.config import Settings
 from backend.gateways.mcp_gateway import McpGateway, describe_tool
-from backend.gateways.model_gateway import ModelGateway, create_model_gateway
+from backend.gateways.model_gateway import (
+    ModelGateway,
+    TextDeltaCallback,
+    create_model_gateway,
+)
 from backend.models.chat import (
     ChatMessage,
     ChatProgress,
@@ -59,6 +63,7 @@ class ChatService:
         self,
         request: ChatRequest,
         on_progress: ProgressCallback | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
     ) -> ChatResponse:
         started = time.perf_counter()
         metrics = _new_pipeline_metrics()
@@ -93,6 +98,7 @@ class ChatService:
                     messages=messages,
                     tools=tools,
                     on_progress=on_progress,
+                    on_text_delta=on_text_delta,
                     metrics=metrics,
                 )
 
@@ -181,6 +187,7 @@ class ChatService:
         messages: list[ModelMessage],
         tools: list[ToolSpec],
         on_progress: ProgressCallback | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
         metrics: dict[str, int] | None = None,
     ) -> str:
         pipeline_metrics = metrics if metrics is not None else _new_pipeline_metrics()
@@ -215,6 +222,7 @@ class ChatService:
                     model_profile=request.modelProfile,
                     tool_results=tool_results,
                     state=state,
+                    on_text_delta=on_text_delta,
                 )
             finally:
                 pipeline_metrics["model_ms"] += _elapsed_ms(model_started)
@@ -306,6 +314,7 @@ class ChatService:
                 model_profile=request.modelProfile,
                 tool_results=tool_results,
                 state=state,
+                on_text_delta=on_text_delta,
             )
         finally:
             pipeline_metrics["model_ms"] += _elapsed_ms(model_started)
@@ -493,7 +502,7 @@ def _model_result_for_tool(tool_name: str | None, result: dict[str, Any]) -> dic
 
     if tool_name == "search_tables" and (structured := _structured_content_from_result(result)) is not None:
         return {
-            "content": [{"type": "text", "text": "통계표 원문과 메타데이터를 조회했습니다."}],
+            "content": [{"type": "text", "text": _search_tables_text(structured)}],
             "structuredContent": structured,
             "isError": False,
         }
@@ -540,6 +549,17 @@ def _model_result_for_tool(tool_name: str | None, result: dict[str, Any]) -> dic
         },
         "isError": False,
     }
+
+
+# 표 본문이 없는 통계표는 조회 자체는 성공해 정상 결과처럼 보이므로 문구로 분명히 알린다.
+# 그대로 두면 모델이 수치를 찾아 같은 통계표 주변을 계속 뒤지며 도구 호출을 낭비한다.
+def _search_tables_text(structured: dict[str, Any]) -> str:
+    if structured.get("found") and not structured.get("tables"):
+        return (
+            "이 통계표에는 표 본문이 없습니다. 조직도나 도표로 실린 항목이라 수치를 읽을 수 "
+            "없으므로, 수치가 필요하면 has_tables가 true인 다른 통계표를 확인하세요."
+        )
+    return "통계표 원문과 메타데이터를 조회했습니다."
 
 
 # 실패한 도구 이름과 반환된 원인을 사용자에게 설명하는 종료 문구를 만든다.

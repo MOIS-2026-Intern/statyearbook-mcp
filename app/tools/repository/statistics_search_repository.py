@@ -53,6 +53,14 @@ def _cte_sql(latest_editions: bool) -> str:
     return LATEST_EDITIONS_CTE if latest_editions else ""
 
 
+# 조직도·도표처럼 표 본문이 없는 통계표는 수치를 읽을 수 없으므로 후보에 표시해 둔다.
+def _has_tables_sql(alias: str) -> str:
+    return (
+        f"EXISTS (SELECT 1 FROM stat_tables st WHERE st.stat_id = {alias}.stat_id)"
+        " AS has_tables"
+    )
+
+
 def _where_sql(publication_year: int | None, latest_editions: bool) -> str:
     where = [
         "embedding IS NOT NULL",
@@ -82,6 +90,7 @@ def _search_sql(publication_year: int | None, latest_editions: bool = False) -> 
                chapter_no, section_no, level3_no, level4_no,
                chapter, section, level3_title, level4_title,
                title_ko, title_en, unit, base_date, page_start,
+               {_has_tables_sql("statistics")},
                (embedding <=> %s::vector) AS distance
         FROM statistics
         WHERE {_where_sql(publication_year, latest_editions)}
@@ -91,12 +100,13 @@ def _search_sql(publication_year: int | None, latest_editions: bool = False) -> 
 
 
 def _table_metadata_sql() -> str:
-    return """
+    return f"""
         s.stat_id, s.year AS publication_year, s.ref_id,
         s.chapter_no, s.section_no, s.level3_no, s.level4_no,
         s.chapter, s.section, s.level3_title, s.level4_title,
         s.title_ko, s.title_en, s.unit, s.base_date, s.page_start,
-        t.seq AS table_seq, c.chunk_kind, c.search_labels, c.search_text
+        t.seq AS table_seq, c.chunk_kind, c.search_labels, c.search_text,
+        {_has_tables_sql("s")}
     """
 
 

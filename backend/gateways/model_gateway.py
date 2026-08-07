@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol
 
 from backend.config import Settings
 from backend.models.tooling import ModelMessage, ModelTurn, ToolResult, ToolSpec
+
+
+# 모델이 생성 중에 흘려보내는 답변 조각을 전달받는다.
+TextDeltaCallback = Callable[[str], None]
 
 
 class ModelGatewayConfigurationError(RuntimeError):
@@ -22,6 +27,7 @@ class ModelGateway(Protocol):
         model_profile: str,
         tool_results: list[ToolResult] | None = None,
         state: object | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
     ) -> ModelTurn:
         ...
 
