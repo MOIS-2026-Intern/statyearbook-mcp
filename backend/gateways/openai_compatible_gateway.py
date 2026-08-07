@@ -74,13 +74,35 @@ class OpenAICompatibleGateway:
             raise
         output = getattr(response, "output", []) or []
         tool_call_count = sum(_get(item, "type") == "function_call" for item in output)
+        usage = getattr(response, "usage", None)
+        incomplete_reason = _get(getattr(response, "incomplete_details", None), "reason")
         logger.debug(
-            "event=model.call provider=%s model=%s duration_ms=%s tool_calls=%s",
+            "event=model.call provider=%s model=%s duration_ms=%s tool_calls=%s"
+            " status=%s incomplete_reason=%s max_output_tokens=%s"
+            " input_tokens=%s output_tokens=%s reasoning_tokens=%s",
             self._settings.model_provider,
             self._settings.chat_model,
             _elapsed_ms(started),
             tool_call_count,
+            getattr(response, "status", None),
+            incomplete_reason,
+            self._settings.model_max_output_tokens,
+            _get(usage, "input_tokens"),
+            _get(usage, "output_tokens"),
+            _reasoning_tokens(usage),
         )
+        # 응답이 잘리면 사용자에게는 정상 답변처럼 보이므로 로그로만 드러난다.
+        if incomplete_reason:
+            logger.warning(
+                "event=model.incomplete provider=%s model=%s reason=%s"
+                " max_output_tokens=%s output_tokens=%s reasoning_tokens=%s",
+                self._settings.model_provider,
+                self._settings.chat_model,
+                incomplete_reason,
+                self._settings.model_max_output_tokens,
+                _get(usage, "output_tokens"),
+                _reasoning_tokens(usage),
+            )
         return response
 
     # 대화 상태와 도구 결과를 이어 모델의 한 턴을 구성한다.
@@ -208,6 +230,11 @@ def _response_text(response: Any, *, default: str) -> str:
 # 응답에 표시 가능한 텍스트가 없을 때의 안내 메시지를 반환한다.
 def _missing_text_message() -> str:
     return "응답을 생성했지만 표시할 텍스트를 찾지 못했습니다."
+
+
+# Responses API usage에서 추론 토큰 수를 꺼낸다. 공급자가 제공하지 않으면 None이다.
+def _reasoning_tokens(usage: Any) -> Any:
+    return _get(_get(usage, "output_tokens_details"), "reasoning_tokens")
 
 
 # 딕셔너리와 SDK 객체에서 동일한 방식으로 필드를 읽는다.

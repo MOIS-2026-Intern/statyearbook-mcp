@@ -34,7 +34,7 @@ class Settings:
     )
     model_provider: str = "openai"
     chat_model: str = "gpt-5-mini"
-    model_timeout_seconds: float = 180.0
+    model_timeout_seconds: float = 200.0
     model_max_output_tokens: int = 16000
     openai_api_key: str | None = None
     bizrouter_api_key: str | None = None
@@ -108,7 +108,7 @@ class Settings:
             ).strip().lower(),
             chat_model=os.environ.get("STATYEARBOOK_BACKEND_CHAT_MODEL", "gpt-5-mini"),
             model_timeout_seconds=float(
-                os.environ.get("STATYEARBOOK_BACKEND_MODEL_TIMEOUT_SECONDS", "180")
+                os.environ.get("STATYEARBOOK_BACKEND_MODEL_TIMEOUT_SECONDS", "200")
             ),
             model_max_output_tokens=int(
                 os.environ.get("STATYEARBOOK_BACKEND_MODEL_MAX_OUTPUT_TOKENS", "16000")
