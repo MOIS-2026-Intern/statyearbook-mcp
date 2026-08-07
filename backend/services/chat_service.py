@@ -494,22 +494,54 @@ def _tool_summary(result: dict[str, Any]) -> str:
     return "MCP 도구 호출 완료"
 
 
+# structuredContent를 대신할 안내로, 같은 내용을 두 번 싣지 않는다는 사실을 모델에 알린다.
+_STRUCTURED_RESULT_TEXT = "도구 결과는 structuredContent에 있습니다."
+
+
 # 후속 판단에 필요한 핵심만 모델에 넘기고 프런트엔드 trace용 원본은 보존한다.
 def _model_result_for_tool(tool_name: str | None, result: dict[str, Any]) -> dict[str, Any]:
     """모델에는 후속 판단에 필요한 내용만 전달하고 프론트엔드 trace는 원본을 보존한다."""
     if result.get("isError"):
         return result
 
-    if tool_name == "search_tables" and (structured := _structured_content_from_result(result)) is not None:
-        return {
-            "content": [{"type": "text", "text": _search_tables_text(structured)}],
-            "structuredContent": structured,
-            "isError": False,
-        }
+    if tool_name == "visualize":
+        return _visualize_model_result(result)
 
-    if tool_name != "visualize":
+    structured = _structured_content_from_result(result)
+    if structured is None:
         return result
 
+    # MCP는 같은 결과를 정렬된 JSON 텍스트와 structuredContent로 두 번 싣는다. 목록처럼 큰
+    # 결과는 이 중복만으로 tool_output_max_chars를 넘겨 모델이 뒷부분을 아예 못 보게 된다.
+    return _with_summary_text(
+        result,
+        structured,
+        _search_tables_text(structured)
+        if tool_name == "search_tables"
+        else _STRUCTURED_RESULT_TEXT,
+    )
+
+
+# 중복된 text 블록만 짧은 안내로 바꾸고 이미지처럼 대체할 수 없는 블록은 그대로 남긴다.
+def _with_summary_text(
+    result: dict[str, Any],
+    structured: dict[str, Any],
+    text: str,
+) -> dict[str, Any]:
+    kept = [
+        item
+        for item in result.get("content") or []
+        if not (isinstance(item, dict) and item.get("type") == "text")
+    ]
+    return {
+        **result,
+        "content": [{"type": "text", "text": text}, *kept],
+        "structuredContent": structured,
+    }
+
+
+# 시각화 사양은 프런트엔드가 trace에서 읽으므로 모델에는 판단에 필요한 요약만 넘긴다.
+def _visualize_model_result(result: dict[str, Any]) -> dict[str, Any]:
     structured = result.get("structuredContent")
     if not isinstance(structured, dict) or structured.get("ok") is False:
         return result

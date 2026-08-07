@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """도구 입력 오류 뒤 모델이 한 번 경로를 교정할 수 있는지 검증한다."""
 import asyncio
+import json
 import unittest
 
 from backend.config import Settings
@@ -362,6 +363,57 @@ class SearchTablesResultTextTests(unittest.TestCase):
         text = self._model_text([{"seq": 1, "table_md": "| 구분 |\n|---|\n| 부 |"}])
 
         self.assertEqual(text, "통계표 원문과 메타데이터를 조회했습니다.")
+
+
+class DuplicatedToolPayloadTests(unittest.TestCase):
+    @staticmethod
+    def _list_result(rows: int) -> dict:
+        payload = {
+            "ok": True,
+            "operation": "list",
+            "result_count": rows,
+            "results": [{"ref_id": f"1-1-{i}", "statistic_title": "정부 조직도"} for i in range(rows)],
+        }
+        return {
+            "content": [
+                {"type": "text", "text": json.dumps(payload, ensure_ascii=False, indent=2)}
+            ],
+            "structuredContent": payload,
+            "isError": False,
+        }
+
+    # MCP가 같은 목록을 텍스트와 structuredContent로 두 번 실어 모델 입력 한도를 반으로 깎는다.
+    def test_drops_the_text_copy_of_the_structured_payload(self) -> None:
+        raw = self._list_result(200)
+
+        result = _model_result_for_tool("analyze_publications", raw)
+
+        self.assertEqual(len(result["content"]), 1)
+        self.assertEqual(result["content"][0]["text"], "도구 결과는 structuredContent에 있습니다.")
+        self.assertLess(len(json.dumps(result, ensure_ascii=False)),
+                        len(json.dumps(raw, ensure_ascii=False)) // 2)
+
+    # 텍스트를 걷어내도 모델이 답에 쓸 행은 하나도 잃지 않아야 한다.
+    def test_keeps_every_row_of_the_structured_payload(self) -> None:
+        result = _model_result_for_tool("analyze_publications", self._list_result(200))
+
+        self.assertEqual(result["structuredContent"]["result_count"], 200)
+        self.assertEqual(len(result["structuredContent"]["results"]), 200)
+
+    # 이미지처럼 structuredContent가 대신할 수 없는 블록은 남겨 둔다.
+    def test_keeps_content_blocks_that_are_not_text(self) -> None:
+        raw = self._list_result(2)
+        raw["content"].append({"type": "image", "mimeType": "image/png", "omitted": True})
+
+        result = _model_result_for_tool("analyze_publications", raw)
+
+        self.assertEqual([item["type"] for item in result["content"]], ["text", "image"])
+
+    # 오류 결과는 원인을 그대로 읽어야 하므로 축약하지 않는다.
+    def test_leaves_error_results_untouched(self) -> None:
+        raw = {"content": [{"type": "text", "text": "validation error"}], "isError": True}
+
+        self.assertIs(_model_result_for_tool("analyze_publications", raw), raw)
 
 
 if __name__ == "__main__":

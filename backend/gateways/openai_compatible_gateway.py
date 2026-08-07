@@ -38,6 +38,11 @@ _TERMINAL_STREAM_EVENTS = frozenset(
     {"response.completed", "response.incomplete", "response.failed"}
 )
 
+# 항목 없는 응답은 같은 요청을 다시 보내면 대개 정상으로 돌아온다. 재현 실험에서 23회 중
+# 3회 발생했으므로 1회 재시도로 약 1.7%까지 내려간다. 실패마다 입력을 다시 보내므로
+# 값을 키우면 지연과 비용이 그만큼 늘어난다.
+_EMPTY_OUTPUT_RETRIES = 1
+
 
 @dataclass(frozen=True)
 class OpenAIContinuationState:
@@ -195,33 +200,51 @@ class OpenAICompatibleGateway:
     ) -> ModelTurn:
         input_items = _input_items_from_state(state, messages)
         input_items.extend(_function_call_output(result) for result in tool_results or [])
+        openai_tools = [_openai_tool_from_spec(tool) for tool in tools]
+        streamed: list[str] = []
 
-        response = await self.create_response(
-            instructions=instructions,
-            input_items=input_items,
-            tools=[_openai_tool_from_spec(tool) for tool in tools],
-            model_profile=model_profile,
-            on_text_delta=on_text_delta,
-        )
+        # 되돌릴 수 없는 지점을 알기 위해 이미 내보낸 조각을 함께 모아 둔다.
+        def collect(text: str) -> None:
+            streamed.append(text)
+            on_text_delta(text)
 
-        output_items = to_jsonable(getattr(response, "output", []))
-        input_items.extend(output_items)
-        tool_calls = _function_calls(response)
-        text = _response_text(response, default="")
+        attempt = 0
+        while True:
+            response = await self.create_response(
+                instructions=instructions,
+                input_items=input_items,
+                tools=openai_tools,
+                model_profile=model_profile,
+                on_text_delta=None if on_text_delta is None else collect,
+            )
+            output_items = to_jsonable(getattr(response, "output", []))
+            tool_calls = _function_calls(response)
+            text = _response_text(response, default="")
 
-        if not text and not tool_calls:
-            # 사용자에게는 안내 문구만 보이므로 무엇이 왔는지 로그로만 드러난다.
+            # 조각으로는 받았는데 완료 응답에 본문이 빠져 있으면 받은 조각을 그대로 쓴다.
+            if not text and streamed:
+                text = "".join(streamed).strip()
+            if text or tool_calls:
+                break
+
+            # 공급자가 항목이 하나도 없는 응답을 완료 상태로 돌려주는 일이 있다. 사용자에게는
+            # 안내 문구만 남으므로 무엇이 왔는지 남기고, 되돌릴 수 있으면 같은 요청을 다시 보낸다.
             logger.warning(
-                "event=model.empty_output provider=%s model=%s status=%s"
+                "event=model.empty_output provider=%s model=%s status=%s attempt=%s"
                 " item_types=%s items=%s",
                 self._settings.model_provider,
                 self._settings.chat_model,
                 getattr(response, "status", None),
+                attempt + 1,
                 [_get(item, "type") for item in output_items],
                 truncate_text(json_dumps(output_items), 1200),
             )
-            text = _missing_text_message()
+            if attempt >= _EMPTY_OUTPUT_RETRIES:
+                text = _missing_text_message()
+                break
+            attempt += 1
 
+        input_items.extend(output_items)
         return ModelTurn(
             text=text,
             tool_calls=tool_calls,
