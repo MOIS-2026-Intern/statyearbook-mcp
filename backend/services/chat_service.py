@@ -11,7 +11,11 @@ from uuid import uuid4
 
 from backend.config import Settings
 from backend.gateways.mcp_gateway import McpGateway, describe_tool
-from backend.gateways.model_gateway import ModelGateway, create_model_gateway
+from backend.gateways.model_gateway import (
+    ModelGateway,
+    TextDeltaCallback,
+    create_model_gateway,
+)
 from backend.models.chat import (
     ChatMessage,
     ChatProgress,
@@ -59,6 +63,7 @@ class ChatService:
         self,
         request: ChatRequest,
         on_progress: ProgressCallback | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
     ) -> ChatResponse:
         started = time.perf_counter()
         metrics = _new_pipeline_metrics()
@@ -93,6 +98,7 @@ class ChatService:
                     messages=messages,
                     tools=tools,
                     on_progress=on_progress,
+                    on_text_delta=on_text_delta,
                     metrics=metrics,
                 )
 
@@ -181,6 +187,7 @@ class ChatService:
         messages: list[ModelMessage],
         tools: list[ToolSpec],
         on_progress: ProgressCallback | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
         metrics: dict[str, int] | None = None,
     ) -> str:
         pipeline_metrics = metrics if metrics is not None else _new_pipeline_metrics()
@@ -215,6 +222,7 @@ class ChatService:
                     model_profile=request.modelProfile,
                     tool_results=tool_results,
                     state=state,
+                    on_text_delta=on_text_delta,
                 )
             finally:
                 pipeline_metrics["model_ms"] += _elapsed_ms(model_started)
@@ -306,6 +314,7 @@ class ChatService:
                 model_profile=request.modelProfile,
                 tool_results=tool_results,
                 state=state,
+                on_text_delta=on_text_delta,
             )
         finally:
             pipeline_metrics["model_ms"] += _elapsed_ms(model_started)
