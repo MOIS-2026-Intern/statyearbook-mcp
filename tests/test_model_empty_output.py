@@ -16,13 +16,20 @@ MESSAGE_OUTPUT = [
 ]
 
 
+class StubIncompleteDetails:
+    def __init__(self, reason: str):
+        self.reason = reason
+
+
 class StubResponse:
-    def __init__(self, output: list, text: str = ""):
+    def __init__(self, output: list, text: str = "", incomplete_reason: str | None = None):
         self.output = output
         self.output_text = text
-        self.status = "completed"
+        self.status = "incomplete" if incomplete_reason else "completed"
         self.usage = None
-        self.incomplete_details = None
+        self.incomplete_details = (
+            StubIncompleteDetails(incomplete_reason) if incomplete_reason else None
+        )
 
     def model_dump(self, **_kwargs) -> dict:
         return {"output": self.output, "status": self.status}
@@ -53,20 +60,22 @@ class StubClient:
     def __init__(self, results: list):
         self._results = list(results)
         self.calls = 0
+        self.kwargs: list[dict] = []
 
     @property
     def responses(self):
         return self
 
-    async def create(self, **_kwargs):
+    async def create(self, **kwargs):
         self.calls += 1
+        self.kwargs.append(kwargs)
         return self._results.pop(0)
 
     async def close(self) -> None:
         return None
 
 
-def _run(client: StubClient, on_text_delta=None, streaming: bool = False):
+def _run(client: StubClient, on_text_delta=None, streaming: bool = False, **kwargs):
     gateway = OpenAICompatibleGateway(Settings(), client)
     gateway._streaming_supported = streaming
     return asyncio.run(
@@ -76,6 +85,7 @@ def _run(client: StubClient, on_text_delta=None, streaming: bool = False):
             tools=[],
             model_profile="balanced",
             on_text_delta=on_text_delta,
+            **kwargs,
         )
     )
 
@@ -96,8 +106,18 @@ class EmptyOutputRetryTests(unittest.TestCase):
 
         turn = _run(client)
 
-        self.assertIn("표시할 텍스트를 찾지 못했습니다", turn.text)
+        self.assertIn("답변을 받아오지 못했습니다", turn.text)
+        self.assertIn("다시 보내면", turn.text)
         self.assertEqual(client.calls, _EMPTY_OUTPUT_RETRIES + 1)
+
+    # 출력 토큰을 다 써서 빈 응답이면 같은 요청을 다시 보내도 같은 자리에서 끊긴다.
+    def test_does_not_retry_a_truncated_response(self) -> None:
+        client = StubClient([StubResponse([], incomplete_reason="max_output_tokens")])
+
+        turn = _run(client)
+
+        self.assertEqual(client.calls, 1)
+        self.assertIn("출력 한도", turn.text)
 
     # 정상 응답을 재시도해 요금과 지연을 두 배로 쓰면 안 된다.
     def test_does_not_retry_a_healthy_response(self) -> None:
@@ -141,6 +161,24 @@ class EmptyOutputRetryTests(unittest.TestCase):
         self.assertEqual(client.calls, 1)
         self.assertEqual(turn.text, "재난관리기금 적립액입니다.")
         self.assertEqual("".join(received).strip(), turn.text)
+
+
+class ToolChoiceTests(unittest.TestCase):
+    # 도구 호출을 막아야 하는 마지막 턴에서만 tool_choice를 실어 보낸다.
+    def test_forwards_tool_choice_when_given(self) -> None:
+        client = StubClient([StubResponse(MESSAGE_OUTPUT, "정상 답변")])
+
+        _run(client, tool_choice="none")
+
+        self.assertEqual(client.kwargs[0]["tool_choice"], "none")
+
+    # 값이 없으면 공급자가 기본값을 쓰도록 필드 자체를 보내지 않는다.
+    def test_omits_tool_choice_by_default(self) -> None:
+        client = StubClient([StubResponse(MESSAGE_OUTPUT, "정상 답변")])
+
+        _run(client)
+
+        self.assertNotIn("tool_choice", client.kwargs[0])
 
 
 if __name__ == "__main__":

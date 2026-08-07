@@ -6,7 +6,7 @@ import unittest
 
 from backend.config import Settings
 from backend.models.chat import ChatRequest
-from backend.models.tooling import ModelMessage, ModelTurn, ToolCall
+from backend.models.tooling import ModelMessage, ModelTurn, ToolCall, ToolSpec
 from backend.services.chat_service import ChatService, _model_result_for_tool
 
 
@@ -337,6 +337,40 @@ class ChatToolRecoveryTests(unittest.TestCase):
 
         self.assertIn("확인하지 못했습니다", result)
         self.assertEqual(len(mcp.calls), 2)
+
+    # 마지막 턴의 대화에는 도구 호출 기록이 남아 있다. 도구 목록을 빼고 보내면 모델이 그
+    # 기록을 해석하지 못해 빈 응답을 돌려주므로, 목록은 남기고 호출만 막아야 한다.
+    def test_final_turn_keeps_the_tools_and_forbids_calling_them(self) -> None:
+        tools = [ToolSpec(name="search_statistics", description="검색", input_schema={})]
+        found = {
+            "content": [{"type": "text", "text": "후보 1건"}],
+            "structuredContent": {"count": 1, "results": [{"stat_id": 1}]},
+            "isError": False,
+        }
+        call = ModelTurn(text="", tool_calls=[ToolCall(
+            id="call-1", name="search_statistics", arguments={"query": "통계"})])
+        model = StubModelGateway([call, call, ModelTurn(text="정리한 답변입니다.")])
+        mcp = StubMcpGateway([found, found])
+        service = ChatService(Settings(max_tool_rounds=2), model_gateway=model)
+
+        result = asyncio.run(service._run_model_loop(
+            request=_request(), mcp=mcp, traces=[], messages=_messages(), tools=tools))
+
+        self.assertEqual(result, "정리한 답변입니다.")
+        final_call = model.calls[-1]
+        self.assertEqual(final_call["tools"], tools)
+        self.assertEqual(final_call["tool_choice"], "none")
+
+    # 도구를 부르는 도중의 턴까지 호출을 막으면 필요한 자료를 더 찾을 수 없다.
+    def test_tool_rounds_leave_tool_choice_unset(self) -> None:
+        model = StubModelGateway([ModelTurn(text="바로 답합니다.")])
+        service = ChatService(Settings(max_tool_rounds=2), model_gateway=model)
+
+        asyncio.run(service._run_model_loop(
+            request=_request(), mcp=StubMcpGateway([]), traces=[],
+            messages=_messages(), tools=[]))
+
+        self.assertIsNone(model.calls[0].get("tool_choice"))
 
 
 class SearchTablesResultTextTests(unittest.TestCase):

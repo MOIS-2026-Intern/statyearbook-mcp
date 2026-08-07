@@ -302,6 +302,8 @@ class ChatService:
         )
         model_started = time.perf_counter()
         try:
+            # 지금까지의 대화에는 도구 호출 기록이 남아 있다. 도구 목록을 빼고 보내면 모델이
+            # 그 기록을 해석하지 못해 빈 응답을 돌려주므로, 목록은 그대로 두고 호출만 막는다.
             final_turn = await self._model.create_turn(
                 instructions=(
                     build_system_prompt(
@@ -310,10 +312,11 @@ class ChatService:
                     + "\n\n도구 호출 횟수 제한에 도달했습니다. 지금까지 받은 도구 결과만 사용해 답하세요."
                 ),
                 messages=messages,
-                tools=[],
+                tools=tools,
                 model_profile=request.modelProfile,
                 tool_results=tool_results,
                 state=state,
+                tool_choice="none",
                 on_text_delta=on_text_delta,
             )
         finally:

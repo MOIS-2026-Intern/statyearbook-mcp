@@ -48,23 +48,56 @@ def cached_table(stat: dict, row: dict) -> dict:
     }
 
 
+# 넓은 표는 지역 열만 되풀이하고 나머지 열을 다음 쪽으로 넘겨 seq가 나뉜다. 이런 조각은
+# 행이 아니라 열이 이어지는 것이므로, 행 라벨이 순서까지 같을 때만 오른쪽으로 붙여야 한다.
+def _continues_columns(
+    columns: list[str],
+    records: list[dict],
+    body_columns: list[str],
+    body_records: list[dict],
+) -> bool:
+    if not columns or not body_columns or columns[0] != body_columns[0]:
+        return False
+    if not records or len(records) != len(body_records):
+        return False
+
+    label = columns[0]
+    return all(
+        str(record.get(label, "")) == str(other.get(label, ""))
+        for record, other in zip(records, body_records)
+    )
+
+
 # 같은 stat_id의 여러 seq 표 본문을 columns/records 기준으로 하나의 전체 표로 이어 붙인다.
 def merge_bodies(bodies: list[dict]) -> dict:
     merged = deepcopy(bodies[0])
-    base_columns = merged.get("columns") or []
-    records = list(merged.get("records") or [])
+    columns = list(merged.get("columns") or [])
+    records = [dict(record) for record in merged.get("records") or []]
     for body in bodies[1:]:
-        columns = body.get("columns") or []
-        for record in body.get("records") or []:
-            if columns == base_columns:
-                records.append(dict(record))
-            else:
-                values = [record.get(column, "") for column in columns]
-                records.append({
-                    base_columns[index]: values[index] if index < len(values) else ""
-                    for index in range(len(base_columns))
-                })
-    merged["columns"] = base_columns
+        body_columns = list(body.get("columns") or [])
+        body_records = [dict(record) for record in body.get("records") or []]
+
+        if body_columns == columns:
+            records.extend(body_records)
+            continue
+
+        if _continues_columns(columns, records, body_columns, body_records):
+            added = [column for column in body_columns[1:] if column not in columns]
+            columns.extend(added)
+            for record, other in zip(records, body_records):
+                for column in added:
+                    record[column] = other.get(column, "")
+            continue
+
+        # 머리글 표기만 어긋난 같은 표로 보고 위치를 기준으로 맞춘다.
+        for record in body_records:
+            values = [record.get(column, "") for column in body_columns]
+            records.append({
+                columns[index]: values[index] if index < len(values) else ""
+                for index in range(len(columns))
+            })
+
+    merged["columns"] = columns
     merged["records"] = records
     return merged
 
@@ -77,7 +110,12 @@ def merged_cached_table(stat: dict, rows: list[dict]) -> dict:
             json.loads(row["body"]) if isinstance(row["body"], str) else row["body"]
             for row in rows
         ]
-        base["body"] = merge_bodies(bodies)
+        body = merge_bodies(bodies)
+        base["body"] = body
+        # seq 1의 크기가 남아 있으면 합쳐진 표의 실제 행·열 수와 어긋난다.
+        if body.get("columns") and body.get("records"):
+            base["n_rows"] = len(body["records"])
+            base["n_cols"] = len(body["columns"])
     return base
 
 

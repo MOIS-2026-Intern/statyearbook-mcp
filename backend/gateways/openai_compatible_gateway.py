@@ -69,6 +69,7 @@ class OpenAICompatibleGateway:
         input_items: list[Any],
         tools: list[dict[str, Any]],
         model_profile: str,
+        tool_choice: str | None = None,
         on_text_delta: TextDeltaCallback | None = None,
     ) -> Any:
         reasoning = _reasoning_for_profile(model_profile)
@@ -80,6 +81,8 @@ class OpenAICompatibleGateway:
             "parallel_tool_calls": False,
             "max_output_tokens": self._settings.model_max_output_tokens,
         }
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
         if reasoning is not None:
             kwargs["reasoning"] = reasoning
 
@@ -196,6 +199,7 @@ class OpenAICompatibleGateway:
         model_profile: str,
         tool_results: list[ToolResult] | None = None,
         state: object | None = None,
+        tool_choice: str | None = None,
         on_text_delta: TextDeltaCallback | None = None,
     ) -> ModelTurn:
         input_items = _input_items_from_state(state, messages)
@@ -215,6 +219,7 @@ class OpenAICompatibleGateway:
                 input_items=input_items,
                 tools=openai_tools,
                 model_profile=model_profile,
+                tool_choice=tool_choice,
                 on_text_delta=None if on_text_delta is None else collect,
             )
             output_items = to_jsonable(getattr(response, "output", []))
@@ -229,16 +234,22 @@ class OpenAICompatibleGateway:
 
             # 공급자가 항목이 하나도 없는 응답을 완료 상태로 돌려주는 일이 있다. 사용자에게는
             # 안내 문구만 남으므로 무엇이 왔는지 남기고, 되돌릴 수 있으면 같은 요청을 다시 보낸다.
+            incomplete_reason = _get(getattr(response, "incomplete_details", None), "reason")
             logger.warning(
-                "event=model.empty_output provider=%s model=%s status=%s attempt=%s"
-                " item_types=%s items=%s",
+                "event=model.empty_output provider=%s model=%s status=%s"
+                " incomplete_reason=%s attempt=%s item_types=%s items=%s",
                 self._settings.model_provider,
                 self._settings.chat_model,
                 getattr(response, "status", None),
+                incomplete_reason,
                 attempt + 1,
                 [_get(item, "type") for item in output_items],
                 truncate_text(json_dumps(output_items), 1200),
             )
+            # 출력 토큰을 다 써서 빈 응답이면 같은 요청을 다시 보내도 같은 자리에서 끊긴다.
+            if incomplete_reason == "max_output_tokens":
+                text = _truncated_text_message()
+                break
             if attempt >= _EMPTY_OUTPUT_RETRIES:
                 text = _missing_text_message()
                 break
@@ -343,9 +354,21 @@ def _response_text(response: Any, *, default: str) -> str:
     return default
 
 
-# 응답에 표시 가능한 텍스트가 없을 때의 안내 메시지를 반환한다.
+# 응답에 표시 가능한 텍스트가 없을 때의 안내 메시지를 반환한다. 사용자가 할 수 있는 일이
+# 다시 물어보는 것뿐이므로 원인과 함께 그 방법을 알린다.
 def _missing_text_message() -> str:
-    return "응답을 생성했지만 표시할 텍스트를 찾지 못했습니다."
+    return (
+        "답변을 받아오지 못했습니다. 확인한 자료가 있어도 표시할 내용이 오지 않아 "
+        "이번 질문에는 답할 수 없습니다. 같은 질문을 다시 보내면 대부분 정상적으로 답변합니다."
+    )
+
+
+# 출력 토큰 한도에 걸려 본문이 하나도 오지 않았을 때의 안내 메시지를 반환한다.
+def _truncated_text_message() -> str:
+    return (
+        "답변이 출력 한도에 걸려 본문이 생성되지 않았습니다. "
+        "질문의 범위를 좁혀 다시 물어보면 답변을 받을 수 있습니다."
+    )
 
 
 # 스트림을 끝까지 읽지 못한 경우에도 HTTP 연결을 확실히 반납한다.

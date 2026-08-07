@@ -34,7 +34,10 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool(description=VISUALIZE)
     def visualize(
         stat_id: int,
-        table_seq: int = 1,
+        table_seq: Annotated[
+            int,
+            Field(description=VISUALIZE_FIELDS["table_seq"]),
+        ] = 1,
         table_handle: Annotated[
             str | None,
             Field(description=VISUALIZE_FIELDS["table_handle"]),
