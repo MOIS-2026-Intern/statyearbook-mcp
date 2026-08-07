@@ -384,7 +384,10 @@ class ChatService:
                     summary=(f"{_tool_summary(result)} (동일 호출 결과 재사용)" if reused else _tool_summary(result)),
                     durationMs=_elapsed_ms(started),
                     request={"arguments": arguments},
-                    response=truncate_jsonable(result, self._settings.tool_output_max_chars),
+                    response=truncate_jsonable(
+                        _trace_result_for_tool(call.name, result),
+                        self._settings.tool_output_max_chars,
+                    ),
                 )
             )
             return ToolResult(
@@ -541,6 +544,44 @@ def _with_summary_text(
         "content": [{"type": "text", "text": text}, *kept],
         "structuredContent": structured,
     }
+
+
+# 프런트엔드가 trace에서 실제로 읽는 필드. request는 같은 호출의 재시도를 묶는 키로 쓰인다.
+_VISUALIZE_TRACE_KEYS = (
+    "ok",
+    "version",
+    "library",
+    "renderer",
+    "stat",
+    "chart",
+    "request",
+    "transform",
+    "columns",
+    "warnings",
+    "vega_lite",
+)
+
+
+# visualize 결과는 같은 레코드를 vega_lite·records·selected_dataset에 세 번 싣고 원본 표
+# 미리보기까지 함께 담아 tool_output_max_chars를 넘긴다. 한도를 넘으면 차트를 그리는 데
+# 필요한 vega_lite까지 잘려 나가므로, trace에는 프런트엔드가 읽는 필드만 남긴다.
+def _visualize_trace_result(result: dict[str, Any]) -> dict[str, Any]:
+    structured = result.get("structuredContent")
+    if not isinstance(structured, dict) or not isinstance(structured.get("vega_lite"), dict):
+        return result
+
+    trimmed = _select_keys(structured, *_VISUALIZE_TRACE_KEYS)
+    data = structured.get("data")
+    if isinstance(data, dict):
+        trimmed["data"] = _select_keys(data, "record_count", "source_row_count")
+    return {**result, "structuredContent": trimmed}
+
+
+# 도구별로 trace에 남길 응답을 고른다. 기본은 원본 그대로다.
+def _trace_result_for_tool(tool_name: str | None, result: dict[str, Any]) -> dict[str, Any]:
+    if tool_name == "visualize" and not result.get("isError"):
+        return _visualize_trace_result(result)
+    return result
 
 
 # 시각화 사양은 프런트엔드가 trace에서 읽으므로 모델에는 판단에 필요한 요약만 넘긴다.
