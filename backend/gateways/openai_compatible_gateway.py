@@ -19,6 +19,7 @@ from backend.serializers.mcp_result_serializer import (
     json_dumps,
     parse_json_object,
     to_jsonable,
+    truncate_text,
 )
 
 
@@ -206,8 +207,23 @@ class OpenAICompatibleGateway:
         output_items = to_jsonable(getattr(response, "output", []))
         input_items.extend(output_items)
         tool_calls = _function_calls(response)
+        text = _response_text(response, default="")
+
+        if not text and not tool_calls:
+            # 사용자에게는 안내 문구만 보이므로 무엇이 왔는지 로그로만 드러난다.
+            logger.warning(
+                "event=model.empty_output provider=%s model=%s status=%s"
+                " item_types=%s items=%s",
+                self._settings.model_provider,
+                self._settings.chat_model,
+                getattr(response, "status", None),
+                [_get(item, "type") for item in output_items],
+                truncate_text(json_dumps(output_items), 1200),
+            )
+            text = _missing_text_message()
+
         return ModelTurn(
-            text=_response_text(response, default="" if tool_calls else _missing_text_message()),
+            text=text,
             tool_calls=tool_calls,
             state=OpenAIContinuationState(input_items=input_items),
         )
