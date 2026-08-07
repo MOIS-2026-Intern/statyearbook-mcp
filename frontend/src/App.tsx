@@ -5,8 +5,10 @@ import { ChatMessage } from "./components/ChatMessage";
 import { Composer } from "./components/Composer";
 import { McpInspector } from "./components/McpInspector";
 import { Sidebar } from "./components/Sidebar";
+import { StreamingMessage } from "./components/StreamingMessage";
 import { MAX_USER_MESSAGES_PER_CONVERSATION, RECENT_HISTORY_TURN_LIMIT } from "./config/chatLimits";
 import { seedConversations } from "./data/mockChat";
+import { useStickToBottom } from "./hooks/useStickToBottom";
 import { limitConversationState, loadConversationState, saveConversationState } from "./storage/conversationStore";
 import type { ChatMessage as ChatMessageType, ChatProgress, Conversation, McpTrace } from "./types/chat";
 
@@ -116,10 +118,13 @@ export default function App() {
   const [modelProfile, setModelProfile] = useState("balanced");
   const [limitNoticeDismissed, setLimitNoticeDismissed] = useState(false);
   const [progressByConversation, setProgressByConversation] = useState<Record<string, ChatProgress>>({});
+  const [streamingByConversation, setStreamingByConversation] = useState<Record<string, string>>({});
+  const { viewportRef, contentRef, resetToBottom } = useStickToBottom();
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   const activeConversationIsSending = sendingConversationId === activeConversationId;
   const activeProgress = progressByConversation[activeConversationId];
+  const activeStreamingText = streamingByConversation[activeConversationId] ?? "";
   const activeConversationUserMessageCount = activeConversation ? countUserMessages(activeConversation.messages) : 0;
   const conversationMessageLimitReached =
     activeConversationUserMessageCount >= MAX_USER_MESSAGES_PER_CONVERSATION;
@@ -133,6 +138,11 @@ export default function App() {
   useEffect(() => {
     setLimitNoticeDismissed(false);
   }, [activeConversationId]);
+
+  // 다른 대화로 옮기면 이전 대화에서 위로 올려 둔 위치를 물려받지 않는다.
+  useEffect(() => {
+    resetToBottom();
+  }, [activeConversationId, resetToBottom]);
 
   const tracesById = useMemo<Record<string, McpTrace>>(() => {
     return Object.fromEntries((activeConversation?.traces ?? []).map((trace) => [trace.id, trace]));
@@ -209,6 +219,21 @@ export default function App() {
             ...current,
             [conversationId]: progress,
           }));
+          // 새 단계가 시작되면 직전 단계에서 흘러나온 조각은 최종 답변이 아니므로 비운다.
+          setStreamingByConversation((current) => {
+            if (!current[conversationId]) {
+              return current;
+            }
+            const next = { ...current };
+            delete next[conversationId];
+            return next;
+          });
+        },
+        (text) => {
+          setStreamingByConversation((current) => ({
+            ...current,
+            [conversationId]: (current[conversationId] ?? "") + text,
+          }));
         },
       );
 
@@ -241,6 +266,11 @@ export default function App() {
     } finally {
       setSendingConversationId((current) => (current === conversationId ? null : current));
       setProgressByConversation((current) => {
+        const next = { ...current };
+        delete next[conversationId];
+        return next;
+      });
+      setStreamingByConversation((current) => {
         const next = { ...current };
         delete next[conversationId];
         return next;
@@ -317,9 +347,9 @@ export default function App() {
           </div>
         ) : null}
 
-        <section className="chat-scroll" aria-live="polite">
+        <section className="chat-scroll" aria-live="polite" ref={viewportRef}>
           {activeConversation.messages.length > 0 ? (
-            <div className="message-stack">
+            <div className="message-stack" ref={contentRef}>
               {activeConversation.messages.map((message) => (
                 <ChatMessage
                   key={message.id}
@@ -328,6 +358,7 @@ export default function App() {
                   tracesById={tracesById}
                 />
               ))}
+              {activeStreamingText ? <StreamingMessage text={activeStreamingText} /> : null}
               {activeConversationIsSending ? (
                 <div className="thinking-row" role="status">
                   <span />

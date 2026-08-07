@@ -6,7 +6,7 @@ import unittest
 from backend.config import Settings
 from backend.models.chat import ChatRequest
 from backend.models.tooling import ModelMessage, ModelTurn, ToolCall
-from backend.services.chat_service import ChatService
+from backend.services.chat_service import ChatService, _model_result_for_tool
 
 
 class StubModelGateway:
@@ -336,6 +336,32 @@ class ChatToolRecoveryTests(unittest.TestCase):
 
         self.assertIn("확인하지 못했습니다", result)
         self.assertEqual(len(mcp.calls), 2)
+
+
+class SearchTablesResultTextTests(unittest.TestCase):
+    @staticmethod
+    def _model_text(tables: list) -> str:
+        result = _model_result_for_tool(
+            "search_tables",
+            {
+                "structuredContent": {"found": True, "stat_id": 329, "tables": tables},
+                "isError": False,
+            },
+        )
+        return result["content"][0]["text"]
+
+    # 조직도처럼 표가 없는 통계표는 조회가 성공해도 수치를 못 읽는다고 알려야 한다.
+    def test_says_the_statistic_has_no_table_body(self) -> None:
+        text = self._model_text([])
+
+        self.assertIn("표 본문이 없습니다", text)
+        self.assertIn("has_tables", text)
+
+    # 표가 있으면 기존 문구를 그대로 유지해 불필요한 경로 변경을 유도하지 않는다.
+    def test_keeps_the_normal_message_when_a_table_exists(self) -> None:
+        text = self._model_text([{"seq": 1, "table_md": "| 구분 |\n|---|\n| 부 |"}])
+
+        self.assertEqual(text, "통계표 원문과 메타데이터를 조회했습니다.")
 
 
 if __name__ == "__main__":

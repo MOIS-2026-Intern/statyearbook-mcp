@@ -22,6 +22,13 @@ def _csv(value: str | None, default: list[str]) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+# 켜고 끄는 환경 변수를 해석하고 값이 비어 있으면 기본값을 사용한다.
+def _flag(value: str | None, default: bool) -> bool:
+    if value is None or not value.strip():
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "statyearbook-backend"
@@ -34,11 +41,13 @@ class Settings:
     )
     model_provider: str = "openai"
     chat_model: str = "gpt-5-mini"
-    model_timeout_seconds: float = 60.0
+    model_timeout_seconds: float = 200.0
+    model_max_output_tokens: int = 16000
+    model_streaming: bool = True
     openai_api_key: str | None = None
     bizrouter_api_key: str | None = None
     bizrouter_base_url: str = "https://api.bizrouter.ai/v1"
-    max_tool_rounds: int = 5
+    max_tool_rounds: int = 3
     tool_output_max_chars: int = 60_000
     mcp_server_label: str = "statyearbook"
     mcp_url: str = "http://127.0.0.1:8001/mcp"
@@ -107,8 +116,12 @@ class Settings:
             ).strip().lower(),
             chat_model=os.environ.get("STATYEARBOOK_BACKEND_CHAT_MODEL", "gpt-5-mini"),
             model_timeout_seconds=float(
-                os.environ.get("STATYEARBOOK_BACKEND_MODEL_TIMEOUT_SECONDS", "60")
+                os.environ.get("STATYEARBOOK_BACKEND_MODEL_TIMEOUT_SECONDS", "200")
             ),
+            model_max_output_tokens=int(
+                os.environ.get("STATYEARBOOK_BACKEND_MODEL_MAX_OUTPUT_TOKENS", "16000")
+            ),
+            model_streaming=_flag(os.environ.get("STATYEARBOOK_BACKEND_MODEL_STREAMING"), True),
             openai_api_key=os.environ.get("STATYEARBOOK_BACKEND_OPENAI_API_KEY"),
             bizrouter_api_key=os.environ.get("STATYEARBOOK_BACKEND_BIZROUTER_API_KEY"),
             bizrouter_base_url=os.environ.get(
@@ -116,7 +129,7 @@ class Settings:
                 "https://api.bizrouter.ai/v1",
             ).rstrip("/"),
             max_tool_rounds=int(
-                os.environ.get("STATYEARBOOK_BACKEND_MAX_TOOL_ROUNDS", "5")
+                os.environ.get("STATYEARBOOK_BACKEND_MAX_TOOL_ROUNDS", "3")
             ),
             tool_output_max_chars=int(
                 os.environ.get("STATYEARBOOK_BACKEND_TOOL_OUTPUT_MAX_CHARS", "60000")

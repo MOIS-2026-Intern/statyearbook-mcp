@@ -70,6 +70,62 @@ class SearchStatisticsTests(unittest.TestCase):
         self.assertEqual(response["applied_publication_year"], 2025)
         embed_query_mock.assert_called_once_with("행정기관 위원회")
 
+    @patch("app.tools.service.statistics_search_service.SEARCH_REPOSITORY.fetch_rows")
+    @patch("app.tools.service.statistics_search_service.embed_query", return_value="[0.1,0.2]")
+    @patch(
+        "app.tools.service.statistics_search_service.table_search_embedding_profile",
+        return_value=SimpleNamespace(profile_key="table-profile-key"),
+    )
+    @patch(
+        "app.tools.service.statistics_search_service.embedding_profile",
+        return_value=SimpleNamespace(profile_key="profile-key"),
+    )
+    # 조직도처럼 표 본문이 없는 통계표를 표시해야 모델이 수치를 찾아 헛돌지 않는다.
+    def test_reports_whether_the_statistic_has_a_table_body(
+        self,
+        _embedding_profile_mock,
+        _table_profile_mock,
+        _embed_query_mock,
+        fetch_rows_mock,
+    ) -> None:
+        chart_only = {
+            **RESULT_ROW,
+            "stat_id": 9,
+            "ref_id": "1-1-6",
+            "title_ko": "정부 조직도",
+            "has_tables": False,
+        }
+        fetch_rows_mock.return_value = ([{**RESULT_ROW, "has_tables": True}, chart_only], [], [])
+
+        results = search_statistics_data("행정기관 위원회", limit=2)["results"]
+
+        self.assertEqual(
+            {result["stat_id"]: result["has_tables"] for result in results},
+            {8: True, 9: False},
+        )
+
+    @patch("app.tools.service.statistics_search_service.SEARCH_REPOSITORY.fetch_rows")
+    @patch("app.tools.service.statistics_search_service.embed_query", return_value="[0.1,0.2]")
+    @patch(
+        "app.tools.service.statistics_search_service.table_search_embedding_profile",
+        return_value=SimpleNamespace(profile_key="table-profile-key"),
+    )
+    @patch(
+        "app.tools.service.statistics_search_service.embedding_profile",
+        return_value=SimpleNamespace(profile_key="profile-key"),
+    )
+    # 값이 없는 조회 경로 때문에 멀쩡한 후보가 표 없는 것으로 표시되면 안 된다.
+    def test_missing_table_flag_defaults_to_having_a_table(
+        self,
+        _embedding_profile_mock,
+        _table_profile_mock,
+        _embed_query_mock,
+        fetch_rows_mock,
+    ) -> None:
+        fetch_rows_mock.return_value = ([RESULT_ROW], [], [])
+
+        self.assertTrue(search_statistics_data("행정기관 위원회")["results"][0]["has_tables"])
+
     # 목차 번호는 발간판마다 다시 매겨지고 앞 판의 번호를 다른 통계가 물려받으므로,
     # 번호로 판을 이으면 번호를 뺏긴 구판 통계가 검색에서 통째로 빠진다.
     def test_latest_edition_key_uses_title_not_ref_id(self) -> None:

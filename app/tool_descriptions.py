@@ -169,6 +169,8 @@ SEARCH_STATISTICS = (
     "중앙행정기관·지방자치단체·위원회·공무원처럼 통계표가 조사한 실제 대상의 수와 현황을 묻는 "
     "질문도 여기서 표를 찾은 뒤 search_tables로 수치를 읽어 답한다. "
     "사람 이름과 부서명은 표 제목이나 본문에 없으므로 query에 넣지 않고 analyze_publications를 쓴다. "
+    "결과의 has_tables가 false인 후보는 조직도·도표처럼 표 본문이 없어 search_tables로 수치를 읽을 수 "
+    "없으므로, 수치를 묻는 질문이면 has_tables가 true인 후보를 고른다. "
     "publication_year는 통계연보 발간연도이며, 생략하면 통계마다 가장 최근 발간판을 검색한다."
 )
 SEARCH_STATISTICS_FIELDS = {

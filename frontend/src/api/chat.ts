@@ -11,6 +11,11 @@ interface ProgressStreamEvent {
   progress: ChatProgress;
 }
 
+interface DeltaStreamEvent {
+  type: "delta";
+  text: string;
+}
+
 interface ResultStreamEvent {
   type: "result";
   response: ChatResponse;
@@ -21,12 +26,17 @@ interface ErrorStreamEvent {
   error: string;
 }
 
-type ChatStreamEvent = ProgressStreamEvent | ResultStreamEvent | ErrorStreamEvent;
+type ChatStreamEvent =
+  | ProgressStreamEvent
+  | DeltaStreamEvent
+  | ResultStreamEvent
+  | ErrorStreamEvent;
 
 // 프로필 설정에 따라 mock 응답 또는 백엔드 진행 상태 스트림을 호출한다.
 export async function sendChatMessage(
   request: ChatRequest,
   onProgress?: (progress: ChatProgress) => void,
+  onDelta?: (text: string) => void,
 ): Promise<ChatResponse> {
   if (useMockApi) {
     onProgress?.({
@@ -69,6 +79,10 @@ export async function sendChatMessage(
     const event = JSON.parse(line) as ChatStreamEvent;
     if (event.type === "progress") {
       onProgress?.(event.progress);
+      return;
+    }
+    if (event.type === "delta") {
+      onDelta?.(event.text);
       return;
     }
     if (event.type === "error") {

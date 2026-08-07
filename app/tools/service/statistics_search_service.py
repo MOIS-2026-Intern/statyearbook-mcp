@@ -160,6 +160,8 @@ def _base_candidate(row: dict) -> dict:
         "unit": row["unit"],
         "base_date": row["base_date"],
         "page_start": row["page_start"],
+        # 조회 경로가 이 값을 주지 않으면 표가 있는 쪽으로 가정해 후보를 괜히 막지 않는다.
+        "has_tables": bool(row.get("has_tables", True)),
         "table_seq": None,
         "matched_source": "title",
         "matched_text": row.get("title_ko"),

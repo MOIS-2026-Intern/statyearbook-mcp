@@ -108,9 +108,17 @@ async def _stream_chat_events(payload: ChatRequest) -> AsyncIterator[bytes]:
             }
         )
 
+    # 생성 중인 답변 조각으로, 최종 result가 도착하면 그 내용으로 대체된다.
+    def on_text_delta(text: str) -> None:
+        queue.put_nowait({"type": "delta", "text": text})
+
     async def run_chat() -> None:
         try:
-            response = await _get_chat_service().respond(payload, on_progress=on_progress)
+            response = await _get_chat_service().respond(
+                payload,
+                on_progress=on_progress,
+                on_text_delta=on_text_delta,
+            )
             queue.put_nowait(
                 {
                     "type": "result",
