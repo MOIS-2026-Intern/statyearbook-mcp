@@ -16,6 +16,7 @@ from app.tools.repository.publication_comparison_repository import (
     _publication_years,
     _resolve_publication_years,
     _selected_fields,
+    _source_tables,
     _validate_request,
     build_query_plan,
 )
@@ -89,8 +90,8 @@ def compare_publications_data(
             f"{MATCH_KEY_DEFINITIONS[match_by]} 기준으로 대응시킨 뒤 집합을 비교"
         ),
         "record_count_meaning": spec.record_count_note,
-        "limitations": _limitations(subject, match_by),
-        "source_tables": list(spec.source_tables),
+        "limitations": _limitations(subject, match_by, fields),
+        "source_tables": list(_source_tables(spec, fields)),
     }
 
     if operation == "summary":

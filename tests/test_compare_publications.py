@@ -31,6 +31,21 @@ ONLY_IN_BASE_ROWS = [
         "_total_count": 20,
     }
 ]
+CHANGED_ORGANIZATION_ROWS = [
+    {
+        "match_key": "지방자치단체의회의원정수",
+        "base_stat_id": 118,
+        "target_stat_id": 402,
+        "base_statistic_title": "지방자치단체 의회의원 정수",
+        "target_statistic_title": "지방자치단체 의회의원 정수",
+        "base_organization": "자치분권제도과",
+        "target_organization": "자치분권지원과",
+        "base_record_count": 1,
+        "target_record_count": 1,
+        "changed_fields": ["organization"],
+        "_total_count": 1,
+    }
+]
 
 
 # DB를 대신해 고정된 발간연도 목록과 조회 결과를 돌려준다.
@@ -121,6 +136,55 @@ class ComparePublicationsTests(unittest.TestCase):
 
         self.assertIn("2024", str(error.exception))
 
+    # 담당 부서 변경은 두 발간판의 부서 목록을 따로 받지 않고 한 번의 비교로 답해야 한다.
+    def test_changed_compares_department_of_each_statistic(self) -> None:
+        years_mock, execute_mock = _patched(CHANGED_ORGANIZATION_ROWS)
+        with years_mock, execute_mock as execute_plan_mock:
+            result = compare_publications_data(
+                operation="changed",
+                base_publication_year=2025,
+                target_publication_year=2026,
+                fields=["stat_id", "statistic_title", "organization"],
+            )
+
+        self.assertEqual(result["compared_fields"], ["statistic_title", "organization"])
+        self.assertIn("contacts", result["source_tables"])
+        self.assertEqual(result["results"][0]["base_organization"], "자치분권제도과")
+        self.assertEqual(result["results"][0]["target_organization"], "자치분권지원과")
+        sql = execute_plan_mock.call_args.args[0].sql
+        # 연락처는 통계당 한 행으로 접어 붙여야 record_count가 흔들리지 않는다.
+        self.assertIn("LEFT JOIN LATERAL", sql)
+        self.assertIn("string_agg(DISTINCT", sql)
+        # 표기 차이는 정규화한 비교 컬럼으로 걸러 담당 변경만 남긴다.
+        self.assertIn(
+            "b.organization_compare_key IS DISTINCT FROM t.organization_compare_key",
+            sql,
+        )
+        # 이름으로 대응시킨 비교에서 statistic_title 변경은 표기 차이임을 알려야 한다.
+        self.assertTrue(
+            any("statistic_title" in note for note in result["limitations"]),
+            result["limitations"],
+        )
+        self.assertTrue(
+            any("조직 개편" in note for note in result["limitations"]),
+            result["limitations"],
+        )
+
+    # 연락처 필드를 고르지 않은 비교는 연락처 조인 비용을 내지 않아야 한다.
+    def test_omits_contact_join_when_no_contact_field_is_selected(self) -> None:
+        years_mock, execute_mock = _patched([])
+        with years_mock, execute_mock as execute_plan_mock:
+            result = compare_publications_data(
+                operation="changed",
+                base_publication_year=2025,
+                target_publication_year=2026,
+                fields=["statistic_title", "unit"],
+            )
+
+        sql = execute_plan_mock.call_args.args[0].sql
+        self.assertNotIn("contacts", sql)
+        self.assertNotIn("contacts", result["source_tables"])
+
     # subject가 지원하지 않는 대응 기준과 필드는 거부해야 한다.
     def test_rejects_unsupported_match_by_and_fields(self) -> None:
         years_mock, execute_mock = _patched([])
@@ -131,12 +195,14 @@ class ComparePublicationsTests(unittest.TestCase):
                     subject="organizations",
                     match_by="number",
                 )
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as error:
                 compare_publications_data(
                     operation="only_in_base",
-                    subject="statistics",
+                    subject="chapters",
                     fields=["organization"],
                 )
+
+        self.assertIn("chapter_no", str(error.exception))
 
 
 if __name__ == "__main__":

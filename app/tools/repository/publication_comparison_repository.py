@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from app.db import connect
@@ -56,6 +56,12 @@ class ItemColumn:
     # 두 발간판의 값을 맞대어 변경을 판정할 수 있는 필드인지 나타낸다.
     # stat_id처럼 발간판마다 새로 부여되는 식별자와 페이지 번호는 비교 대상이 아니다.
     comparable: bool = True
+    # contacts를 통계당 한 행으로 접는 LATERAL 집계에서 읽는 필드인지 나타낸다.
+    # 이 필드를 고르지 않은 요청은 집계를 붙이지 않아 조회 비용이 늘지 않는다.
+    requires_contacts: bool = False
+    # 변경 판정에만 쓸 표현식. 반환값은 원문 그대로 두고 비교만 정규화한 값으로 한다.
+    # 생략하면 expression을 그대로 맞대어 본다.
+    compare_expression: str | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,9 @@ class CompareSubjectSpec:
     definition: str
     source_tables: tuple[str, ...]
     record_count_note: str = ""
+    # 대응 기준이 이미 표기 차이를 지워 놓은 필드. 이 필드가 변경으로 잡히면 값이 아니라
+    # 표기만 달라진 것이므로, 응답이 그렇게 읽으라고 알린다.
+    match_key_covers: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -82,6 +91,38 @@ STATISTICS_JOIN_SQL = "JOIN statistics s ON s.pub_id = p.pub_id"
 CONTACTS_JOIN_SQL = f"{STATISTICS_JOIN_SQL}\n    JOIN contacts c ON c.stat_id = s.stat_id"
 TITLE_KEY_SQL = match_key_sql("s.title_ko")
 UNIT_KEY_SQL = match_key_sql("s.unit")
+
+# 비교 전용 컬럼에 붙일 접미사. 응답에는 선택한 필드만 싣고 이 컬럼은 내보내지 않는다.
+COMPARE_KEY_SUFFIX = "_compare_key"
+# 한 통계에 연락처가 여러 개 달리면 이 구분자로 이어 붙인다.
+CONTACT_VALUE_SEPARATOR = " | "
+CONTACT_AGGREGATE_ALIAS = "sc"
+
+
+# 한 통계에 달린 연락처 값을 중복 없이 정렬해 한 문자열로 접는다.
+# 정렬을 고정해야 적재 순서가 달라져도 두 발간판의 값이 같으면 같게 나온다.
+def _contact_aggregate_sql(expression: str) -> str:
+    return (
+        f"string_agg(DISTINCT {expression}, '{CONTACT_VALUE_SEPARATOR}' "
+        f"ORDER BY {expression})"
+    )
+
+
+# 통계 한 건에 연락처가 여러 개일 수 있으므로 집계해서 붙인다. 그냥 JOIN하면 통계 행이
+# 연락처 수만큼 늘어 record_count가 '이름이 같은 별개 통계'를 잘못 가리키고,
+# DISTINCT ON이 연락처 하나를 임의로 골라 변경 판정이 발간판마다 흔들린다.
+STATISTIC_CONTACTS_JOIN_SQL = "\n".join(
+    (
+        "LEFT JOIN LATERAL (",
+        f"    SELECT {_contact_aggregate_sql(ORGANIZATION_SQL)} AS dept,",
+        f"           {_contact_aggregate_sql(SOURCE_SYSTEM_SQL)} AS source_system",
+        "    FROM contacts c",
+        "    WHERE c.stat_id = s.stat_id",
+        f") {CONTACT_AGGREGATE_ALIAS} ON TRUE",
+    )
+)
+STATISTIC_ORGANIZATION_SQL = f"{CONTACT_AGGREGATE_ALIAS}.dept"
+STATISTIC_SOURCE_SYSTEM_SQL = f"{CONTACT_AGGREGATE_ALIAS}.source_system"
 
 SUBJECTS: dict[str, CompareSubjectSpec] = {
     "statistics": CompareSubjectSpec(
@@ -104,6 +145,18 @@ SUBJECTS: dict[str, CompareSubjectSpec] = {
             "unit": ItemColumn("s.unit"),
             "base_date": ItemColumn("s.base_date"),
             "page_start": ItemColumn("s.page_start", comparable=False),
+            # 부서·출처 시스템은 표기가 발간판마다 흔들리므로 비교는 정규화한 키로 한다.
+            # 그러지 않으면 '행정 기획과'와 '행정기획과'가 담당이 바뀐 것으로 잡힌다.
+            "organization": ItemColumn(
+                STATISTIC_ORGANIZATION_SQL,
+                requires_contacts=True,
+                compare_expression=match_key_sql(STATISTIC_ORGANIZATION_SQL),
+            ),
+            "source_system": ItemColumn(
+                STATISTIC_SOURCE_SYSTEM_SQL,
+                requires_contacts=True,
+                compare_expression=match_key_sql(STATISTIC_SOURCE_SYSTEM_SQL),
+            ),
         },
         default_fields=(
             "stat_id",
@@ -115,6 +168,11 @@ SUBJECTS: dict[str, CompareSubjectSpec] = {
         ),
         dedupe_order_sql="stat_id",
         order_columns=("page_start", "stat_id"),
+        match_key_covers={
+            "title": ("statistic_title",),
+            "title_and_unit": ("statistic_title", "unit"),
+            "number": ("ref_id",),
+        },
         unit_label="통계 항목",
         definition="통계연보에 수록된 논리 통계 항목",
         source_tables=("publications", "statistics"),
@@ -140,6 +198,7 @@ SUBJECTS: dict[str, CompareSubjectSpec] = {
         definition="통계 항목에 연결된 장",
         source_tables=("publications", "statistics"),
         record_count_note="그 장에 속한 통계 항목 수",
+        match_key_covers={"title": ("chapter",), "number": ("chapter_no",)},
     ),
     "sections": CompareSubjectSpec(
         join_sql=STATISTICS_JOIN_SQL,
@@ -160,6 +219,10 @@ SUBJECTS: dict[str, CompareSubjectSpec] = {
         definition="통계 항목에 연결된 절",
         source_tables=("publications", "statistics"),
         record_count_note="그 절에 속한 통계 항목 수",
+        match_key_covers={
+            "title": ("section",),
+            "number": ("chapter_no", "section_no"),
+        },
     ),
     "organizations": CompareSubjectSpec(
         join_sql=CONTACTS_JOIN_SQL,
@@ -172,6 +235,7 @@ SUBJECTS: dict[str, CompareSubjectSpec] = {
         definition="통계표 출처 문단에서 파싱된 담당 부서",
         source_tables=("publications", "statistics", "contacts"),
         record_count_note="그 부서가 담당하는 것으로 기재된 연락처 레코드 수",
+        match_key_covers={"title": ("organization",)},
     ),
     "source_systems": CompareSubjectSpec(
         join_sql=CONTACTS_JOIN_SQL,
@@ -184,6 +248,7 @@ SUBJECTS: dict[str, CompareSubjectSpec] = {
         definition="통계표 출처 문단에서 파싱된 출처 시스템",
         source_tables=("publications", "statistics", "contacts"),
         record_count_note="그 출처 시스템이 기재된 연락처 레코드 수",
+        match_key_covers={"title": ("source_system",)},
     ),
 }
 
@@ -207,6 +272,12 @@ MATCH_KEY_LIMITATIONS: dict[str, tuple[str, ...]] = {
 DUPLICATE_TITLE_LIMITATION = (
     "이름이 같고 단위가 다른 별개 통계는 한 항목으로 합쳐지므로, duplicate_key_count나 "
     "record_count가 1보다 크면 match_by=title_and_unit으로 다시 비교한다"
+)
+CONTACT_FIELD_LIMITATIONS: tuple[str, ...] = (
+    "organization과 source_system은 조직 개편이나 이름 변경도 값이 달라진 것으로 잡으므로, "
+    "담당이 실제로 옮겨간 것과 같은 부서의 이름만 바뀐 것을 구분하지 않는다",
+    f"한 통계에 연락처가 여러 개면 값을 '{CONTACT_VALUE_SEPARATOR}'로 이어 붙여 비교하므로, "
+    "담당 부서가 하나 늘거나 빠져도 변경으로 잡힌다",
 )
 
 
@@ -248,7 +319,11 @@ def _validate_request(
     unsupported_fields = set(fields or ()) - set(spec.columns)
     if unsupported_fields:
         unsupported = ", ".join(sorted(unsupported_fields))
-        raise ValueError(f"unsupported fields for subject={subject}: {unsupported}")
+        supported = ", ".join(spec.columns)
+        raise ValueError(
+            f"unsupported fields for subject={subject}: {unsupported}; "
+            f"supported: {supported}"
+        )
     if operation == "changed" and not _comparable_fields(spec, fields):
         raise ValueError(
             "changed requires at least one comparable field in fields; "
@@ -265,12 +340,78 @@ def _comparable_fields(
     return tuple(name for name in selected if spec.columns[name].comparable)
 
 
-# 대응 기준과 subject가 함께 만드는 한계를 응답에 실을 문장으로 모은다.
-def _limitations(subject: str, match_by: str) -> list[str]:
+# 대응 기준과 subject, 고른 필드가 함께 만드는 한계를 응답에 실을 문장으로 모은다.
+def _limitations(
+    subject: str,
+    match_by: str,
+    fields: list[str] | None = None,
+) -> list[str]:
+    spec = SUBJECTS[subject]
     limitations = list(MATCH_KEY_LIMITATIONS[match_by])
     if subject == "statistics" and match_by == "title":
         limitations.append(DUPLICATE_TITLE_LIMITATION)
+    if _uses_contacts(spec, _selected_fields(spec, fields)):
+        limitations.extend(CONTACT_FIELD_LIMITATIONS)
+    covered = tuple(
+        alias
+        for alias in _comparable_fields(spec, fields)
+        if alias in spec.match_key_covers.get(match_by, ())
+    )
+    if covered:
+        limitations.append(
+            f"match_by={match_by}는 {', '.join(covered)}의 표기 차이를 이미 지우고 "
+            "대응시키므로, changed_fields에 이 필드만 있는 항목은 값이 달라진 것이 아니라 "
+            "띄어쓰기나 기호 표기만 달라진 것이다"
+        )
     return limitations
+
+
+# 고른 필드가 연락처 집계를 필요로 하는지 판정한다.
+def _uses_contacts(spec: CompareSubjectSpec, selected: tuple[str, ...]) -> bool:
+    return any(spec.columns[alias].requires_contacts for alias in selected)
+
+
+# 응답에 실을 산출 근거 테이블 목록을 만든다. 연락처 필드를 고르면 contacts가 더해진다.
+def _source_tables(spec: CompareSubjectSpec, fields: list[str] | None) -> tuple[str, ...]:
+    selected = _selected_fields(spec, fields)
+    if not _uses_contacts(spec, selected) or "contacts" in spec.source_tables:
+        return spec.source_tables
+    return (*spec.source_tables, "contacts")
+
+
+# CTE가 만들 컬럼을 고른다. 연락처 컬럼은 고른 필드에 들어 있을 때만 넣는다.
+def _item_columns(
+    spec: CompareSubjectSpec,
+    selected: tuple[str, ...],
+) -> dict[str, ItemColumn]:
+    return {
+        alias: column
+        for alias, column in spec.columns.items()
+        if not column.requires_contacts or alias in selected
+    }
+
+
+# 고른 필드에 맞춰 조인을 조립한다. 연락처를 안 보는 요청은 집계 조인을 붙이지 않는다.
+def _join_sql(spec: CompareSubjectSpec, selected: tuple[str, ...]) -> str:
+    if not _uses_contacts(spec, selected):
+        return spec.join_sql
+    return "\n".join((spec.join_sql, STATISTIC_CONTACTS_JOIN_SQL))
+
+
+# 변경 판정에 쓸 컬럼 이름을 고른다. 정규화한 비교 컬럼이 있으면 그쪽을 본다.
+def _compare_alias(alias: str, column: ItemColumn) -> str:
+    return f"{alias}{COMPARE_KEY_SUFFIX}" if column.compare_expression else alias
+
+
+# 변경 판정 대상 필드를 (반환 필드명, 비교 컬럼명) 쌍으로 묶는다.
+def _compare_pairs(
+    spec: CompareSubjectSpec,
+    fields: list[str] | None,
+) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (alias, _compare_alias(alias, spec.columns[alias]))
+        for alias in _comparable_fields(spec, fields)
+    )
 
 
 # 요청 필드를 중복 없이 정리하고, 생략하면 subject 기본 필드를 쓴다.
@@ -325,10 +466,21 @@ def _resolve_publication_years(
 
 # 한 발간판의 비교 항목을 match_key마다 한 행으로 접는 CTE를 만든다.
 # record_count는 접히기 전 원본 행 수이므로 같은 키가 여러 항목을 덮었는지 드러낸다.
-def _items_cte_sql(name: str, spec: CompareSubjectSpec, key_sql: str) -> str:
-    columns_sql = ",\n                   ".join(
-        f"{column.expression} AS {alias}" for alias, column in spec.columns.items()
-    )
+def _items_cte_sql(
+    name: str,
+    spec: CompareSubjectSpec,
+    key_sql: str,
+    selected: tuple[str, ...],
+) -> str:
+    column_parts: list[str] = []
+    for alias, column in _item_columns(spec, selected).items():
+        column_parts.append(f"{column.expression} AS {alias}")
+        if column.compare_expression:
+            column_parts.append(
+                f"{column.compare_expression} AS {alias}{COMPARE_KEY_SUFFIX}"
+            )
+    columns_sql = ",\n                   ".join(column_parts)
+    join_sql = "\n            ".join(_join_sql(spec, selected).splitlines())
     return "\n".join(
         (
             f"    {name} AS (",
@@ -337,7 +489,7 @@ def _items_cte_sql(name: str, spec: CompareSubjectSpec, key_sql: str) -> str:
             f"                   {columns_sql},",
             f"                   COUNT(*) OVER (PARTITION BY {key_sql}) AS record_count",
             "            FROM publications p",
-            f"            {spec.join_sql}",
+            f"            {join_sql}",
             f"            WHERE p.year = %s AND {key_sql} IS NOT NULL",
             f"        ) matched ORDER BY match_key, {spec.dedupe_order_sql}",
             "    )",
@@ -346,12 +498,24 @@ def _items_cte_sql(name: str, spec: CompareSubjectSpec, key_sql: str) -> str:
 
 
 # 선택한 필드가 두 발간판 사이에서 달라졌는지 판정하는 SQL 조각을 만든다.
-def _changed_fields_sql(spec: CompareSubjectSpec, compared: tuple[str, ...]) -> str:
+# 판정은 정규화한 비교 컬럼으로 하고, 이름은 사용자가 고른 필드명 그대로 돌려준다.
+def _changed_fields_sql(compare_pairs: tuple[tuple[str, str], ...]) -> str:
     cases = ", ".join(
-        f"CASE WHEN b.{alias} IS DISTINCT FROM t.{alias} THEN '{alias}' END"
-        for alias in compared
+        f"CASE WHEN b.{compare_alias} IS DISTINCT FROM t.{compare_alias} "
+        f"THEN '{alias}' END"
+        for alias, compare_alias in compare_pairs
     )
     return f"ARRAY_REMOVE(ARRAY[{cases}], NULL)"
+
+
+# 두 발간판의 값이 하나라도 달라졌는지 판정하는 조건을 만든다.
+def _changed_condition_sql(compare_pairs: tuple[tuple[str, str], ...]) -> str:
+    if not compare_pairs:
+        return "FALSE"
+    return " OR ".join(
+        f"b.{compare_alias} IS DISTINCT FROM t.{compare_alias}"
+        for _, compare_alias in compare_pairs
+    )
 
 
 # 두 발간판의 항목 집합을 비교하는 SQL 계획을 만든다.
@@ -369,22 +533,18 @@ def build_query_plan(
     spec = SUBJECTS[subject]
     key_sql = spec.match_keys[match_by]
     selected = _selected_fields(spec, fields)
-    compared = _comparable_fields(spec, fields)
+    compare_pairs = _compare_pairs(spec, fields)
     cte_sql = "\n".join(
         (
             "WITH",
-            f"{_items_cte_sql('base_items', spec, key_sql)},",
-            _items_cte_sql("target_items", spec, key_sql),
+            f"{_items_cte_sql('base_items', spec, key_sql, selected)},",
+            _items_cte_sql("target_items", spec, key_sql, selected),
         )
     )
     years = (base_publication_year, target_publication_year)
 
     if operation == "summary":
-        changed_sql = (
-            " OR ".join(f"b.{alias} IS DISTINCT FROM t.{alias}" for alias in compared)
-            if compared
-            else "FALSE"
-        )
+        changed_sql = _changed_condition_sql(compare_pairs)
         sql = "\n".join(
             (
                 cte_sql,
@@ -428,15 +588,12 @@ def build_query_plan(
                 ),
                 "b.record_count AS base_record_count",
                 "t.record_count AS target_record_count",
-                f"{_changed_fields_sql(spec, compared)} AS changed_fields",
+                f"{_changed_fields_sql(compare_pairs)} AS changed_fields",
                 "COUNT(*) OVER () AS _total_count",
             )
         )
         where_sql = (
-            "WHERE "
-            + " OR ".join(
-                f"b.{alias} IS DISTINCT FROM t.{alias}" for alias in compared
-            )
+            f"WHERE {_changed_condition_sql(compare_pairs)}"
             if operation == "changed"
             else ""
         )
