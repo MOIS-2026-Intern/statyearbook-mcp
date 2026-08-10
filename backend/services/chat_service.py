@@ -302,6 +302,8 @@ class ChatService:
         )
         model_started = time.perf_counter()
         try:
+            # 지금까지의 대화에는 도구 호출 기록이 남아 있다. 도구 목록을 빼고 보내면 모델이
+            # 그 기록을 해석하지 못해 빈 응답을 돌려주므로, 목록은 그대로 두고 호출만 막는다.
             final_turn = await self._model.create_turn(
                 instructions=(
                     build_system_prompt(
@@ -310,10 +312,11 @@ class ChatService:
                     + "\n\n도구 호출 횟수 제한에 도달했습니다. 지금까지 받은 도구 결과만 사용해 답하세요."
                 ),
                 messages=messages,
-                tools=[],
+                tools=tools,
                 model_profile=request.modelProfile,
                 tool_results=tool_results,
                 state=state,
+                tool_choice="none",
                 on_text_delta=on_text_delta,
             )
         finally:
@@ -381,7 +384,10 @@ class ChatService:
                     summary=(f"{_tool_summary(result)} (동일 호출 결과 재사용)" if reused else _tool_summary(result)),
                     durationMs=_elapsed_ms(started),
                     request={"arguments": arguments},
-                    response=truncate_jsonable(result, self._settings.tool_output_max_chars),
+                    response=truncate_jsonable(
+                        _trace_result_for_tool(call.name, result),
+                        self._settings.tool_output_max_chars,
+                    ),
                 )
             )
             return ToolResult(
@@ -494,22 +500,92 @@ def _tool_summary(result: dict[str, Any]) -> str:
     return "MCP 도구 호출 완료"
 
 
+# structuredContent를 대신할 안내로, 같은 내용을 두 번 싣지 않는다는 사실을 모델에 알린다.
+_STRUCTURED_RESULT_TEXT = "도구 결과는 structuredContent에 있습니다."
+
+
 # 후속 판단에 필요한 핵심만 모델에 넘기고 프런트엔드 trace용 원본은 보존한다.
 def _model_result_for_tool(tool_name: str | None, result: dict[str, Any]) -> dict[str, Any]:
     """모델에는 후속 판단에 필요한 내용만 전달하고 프론트엔드 trace는 원본을 보존한다."""
     if result.get("isError"):
         return result
 
-    if tool_name == "search_tables" and (structured := _structured_content_from_result(result)) is not None:
-        return {
-            "content": [{"type": "text", "text": _search_tables_text(structured)}],
-            "structuredContent": structured,
-            "isError": False,
-        }
+    if tool_name == "visualize":
+        return _visualize_model_result(result)
 
-    if tool_name != "visualize":
+    structured = _structured_content_from_result(result)
+    if structured is None:
         return result
 
+    # MCP는 같은 결과를 정렬된 JSON 텍스트와 structuredContent로 두 번 싣는다. 목록처럼 큰
+    # 결과는 이 중복만으로 tool_output_max_chars를 넘겨 모델이 뒷부분을 아예 못 보게 된다.
+    return _with_summary_text(
+        result,
+        structured,
+        _search_tables_text(structured)
+        if tool_name == "search_tables"
+        else _STRUCTURED_RESULT_TEXT,
+    )
+
+
+# 중복된 text 블록만 짧은 안내로 바꾸고 이미지처럼 대체할 수 없는 블록은 그대로 남긴다.
+def _with_summary_text(
+    result: dict[str, Any],
+    structured: dict[str, Any],
+    text: str,
+) -> dict[str, Any]:
+    kept = [
+        item
+        for item in result.get("content") or []
+        if not (isinstance(item, dict) and item.get("type") == "text")
+    ]
+    return {
+        **result,
+        "content": [{"type": "text", "text": text}, *kept],
+        "structuredContent": structured,
+    }
+
+
+# 프런트엔드가 trace에서 실제로 읽는 필드. request는 같은 호출의 재시도를 묶는 키로 쓰인다.
+_VISUALIZE_TRACE_KEYS = (
+    "ok",
+    "version",
+    "library",
+    "renderer",
+    "stat",
+    "chart",
+    "request",
+    "transform",
+    "columns",
+    "warnings",
+    "vega_lite",
+)
+
+
+# visualize 결과는 같은 레코드를 vega_lite·records·selected_dataset에 세 번 싣고 원본 표
+# 미리보기까지 함께 담아 tool_output_max_chars를 넘긴다. 한도를 넘으면 차트를 그리는 데
+# 필요한 vega_lite까지 잘려 나가므로, trace에는 프런트엔드가 읽는 필드만 남긴다.
+def _visualize_trace_result(result: dict[str, Any]) -> dict[str, Any]:
+    structured = result.get("structuredContent")
+    if not isinstance(structured, dict) or not isinstance(structured.get("vega_lite"), dict):
+        return result
+
+    trimmed = _select_keys(structured, *_VISUALIZE_TRACE_KEYS)
+    data = structured.get("data")
+    if isinstance(data, dict):
+        trimmed["data"] = _select_keys(data, "record_count", "source_row_count")
+    return {**result, "structuredContent": trimmed}
+
+
+# 도구별로 trace에 남길 응답을 고른다. 기본은 원본 그대로다.
+def _trace_result_for_tool(tool_name: str | None, result: dict[str, Any]) -> dict[str, Any]:
+    if tool_name == "visualize" and not result.get("isError"):
+        return _visualize_trace_result(result)
+    return result
+
+
+# 시각화 사양은 프런트엔드가 trace에서 읽으므로 모델에는 판단에 필요한 요약만 넘긴다.
+def _visualize_model_result(result: dict[str, Any]) -> dict[str, Any]:
     structured = result.get("structuredContent")
     if not isinstance(structured, dict) or structured.get("ok") is False:
         return result

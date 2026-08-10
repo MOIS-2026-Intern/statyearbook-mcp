@@ -27,6 +27,7 @@ class ModelGateway(Protocol):
         model_profile: str,
         tool_results: list[ToolResult] | None = None,
         state: object | None = None,
+        tool_choice: str | None = None,
         on_text_delta: TextDeltaCallback | None = None,
     ) -> ModelTurn:
         ...
