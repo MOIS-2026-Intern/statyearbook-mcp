@@ -44,7 +44,6 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     conversationId: str
     message: str = Field(min_length=1)
-    modelProfile: str = "balanced"
     includeMcpTrace: bool = True
     history: list[ChatMessage] = Field(default_factory=list)
     traces: list[McpTrace] = Field(default_factory=list)

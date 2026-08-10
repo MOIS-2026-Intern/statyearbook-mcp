@@ -24,7 +24,6 @@ class ModelGateway(Protocol):
         instructions: str,
         messages: list[ModelMessage],
         tools: list[ToolSpec],
-        model_profile: str,
         tool_results: list[ToolResult] | None = None,
         state: object | None = None,
         tool_choice: str | None = None,

@@ -3,13 +3,11 @@ import { DatabaseZap, Mic, Paperclip, SendHorizontal } from "lucide-react";
 
 interface ComposerProps {
   disabled: boolean;
-  modelProfile: string;
-  onModelProfileChange: (profile: string) => void;
   onSendMessage: (message: string) => void;
 }
 
-// 메시지 입력, 모델 프로필 선택, 전송 상태를 관리하는 작성기를 렌더링한다.
-export function Composer({ disabled, modelProfile, onModelProfileChange, onSendMessage }: ComposerProps) {
+// 메시지 입력과 전송 상태를 관리하는 작성기를 렌더링한다.
+export function Composer({ disabled, onSendMessage }: ComposerProps) {
   const [value, setValue] = useState("");
 
   // 빈 입력과 비활성 상태를 제외하고 정리된 메시지를 전송한다.
@@ -56,14 +54,6 @@ export function Composer({ disabled, modelProfile, onModelProfileChange, onSendM
         </div>
 
         <div className="composer__actions">
-          <label className="model-select">
-            <span className="sr-only">모델 프로필</span>
-            <select value={modelProfile} onChange={(event) => onModelProfileChange(event.target.value)}>
-              <option value="balanced">기본</option>
-              <option value="fast">빠른 응답</option>
-              <option value="deep">깊은 분석</option>
-            </select>
-          </label>
           <button className="icon-button" type="button" aria-label="음성 입력" title="음성 입력">
             <Mic size={18} />
           </button>

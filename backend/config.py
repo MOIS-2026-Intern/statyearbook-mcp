@@ -43,6 +43,9 @@ class Settings:
     chat_model: str = "gpt-5-mini"
     model_timeout_seconds: float = 200.0
     model_max_output_tokens: int = 48000
+    # 공급자마다 허용하는 추론 강도 값이 다르므로 배포 환경에서 고정한다. 빈 값이면
+    # 필드 자체를 보내지 않아, 이 파라미터를 받지 않는 공급자도 그대로 쓸 수 있다.
+    model_reasoning_effort: str = "medium"
     model_streaming: bool = True
     openai_api_key: str | None = None
     bizrouter_api_key: str | None = None
@@ -121,6 +124,9 @@ class Settings:
             model_max_output_tokens=int(
                 os.environ.get("STATYEARBOOK_BACKEND_MODEL_MAX_OUTPUT_TOKENS", "48000")
             ),
+            model_reasoning_effort=os.environ.get(
+                "STATYEARBOOK_BACKEND_MODEL_REASONING_EFFORT", "medium"
+            ).strip(),
             model_streaming=_flag(os.environ.get("STATYEARBOOK_BACKEND_MODEL_STREAMING"), True),
             openai_api_key=os.environ.get("STATYEARBOOK_BACKEND_OPENAI_API_KEY"),
             bizrouter_api_key=os.environ.get("STATYEARBOOK_BACKEND_BIZROUTER_API_KEY"),
