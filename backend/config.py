@@ -36,6 +36,7 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8000
     reload: bool = True
+    graceful_shutdown_timeout_seconds: int = 5
     cors_origins: list[str] = field(
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"]
     )
@@ -110,6 +111,11 @@ class Settings:
             host=os.environ.get("STATYEARBOOK_BACKEND_HOST", "127.0.0.1"),
             port=int(os.environ.get("PORT") or os.environ.get("STATYEARBOOK_BACKEND_PORT", "8000")),
             reload=profile == "local",
+            graceful_shutdown_timeout_seconds=int(
+                os.environ.get(
+                    "STATYEARBOOK_BACKEND_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", "5"
+                )
+            ),
             cors_origins=_csv(
                 os.environ.get("STATYEARBOOK_BACKEND_CORS_ORIGINS"),
                 ["http://localhost:5173", "http://127.0.0.1:5173"],

@@ -82,7 +82,8 @@ backend와 app(MCP server)의 기본 로그 레벨은 `DEBUG`입니다. 배포 �
 MCP 연결, 도구 확인, 모델 분석, 도구 호출, 결과 검토 상태를 표시합니다. 기존
 `POST /api/chat` JSON API도 호환성을 위해 유지합니다. MCP 도구 사양은 기본 300초
 동안 재사용하며 `STATYEARBOOK_BACKEND_MCP_TOOL_CACHE_TTL_SECONDS=0`으로 끌 수
-있습니다.
+있습니다. backend는 종료 신호 뒤 진행 중인 요청을 기본 5초까지만 기다리며,
+`STATYEARBOOK_BACKEND_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS`로 조정할 수 있습니다.
 
 새 연보는 관리자 화면 또는 다음 명령으로 적재합니다.
 
