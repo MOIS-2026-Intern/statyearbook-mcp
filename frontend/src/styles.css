@@ -967,14 +967,21 @@ button {
   cursor: not-allowed;
 }
 
+/* 멈춤 버튼은 전송 버튼과 같은 자리를 쓰므로 같은 중립 계열을 유지한다. 상태는 색을 바꾸지
+   않고 한 단계씩 눌러 어둡게 하는 정도로만 알리고, 구분은 아이콘이 맡는다. */
 .send-button--stop {
-  border-color: var(--danger);
-  background: var(--danger);
+  border-color: var(--text);
+  background: var(--text);
 }
 
 .send-button--stop:hover {
-  border-color: #a63238;
-  background: #a63238;
+  border-color: #111827;
+  background: #111827;
+}
+
+.send-button--stop:active {
+  border-color: #0b1220;
+  background: #0b1220;
 }
 
 /* 중단 안내는 모델의 답변이 아니므로 본문과 구분되게 낮춘다. */
