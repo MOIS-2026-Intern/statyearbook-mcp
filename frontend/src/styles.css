@@ -967,6 +967,21 @@ button {
   cursor: not-allowed;
 }
 
+.send-button--stop {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.send-button--stop:hover {
+  border-color: #a63238;
+  background: #a63238;
+}
+
+/* 중단 안내는 모델의 답변이 아니므로 본문과 구분되게 낮춘다. */
+.message__content--stopped {
+  color: var(--muted);
+}
+
 .mcp-inspector {
   display: grid;
   min-width: 0;

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MoreHorizontal, PanelRightOpen, Share2, Sparkles, X } from "lucide-react";
-import { sendChatMessage } from "./api/chat";
+import { isChatStoppedError, sendChatMessage } from "./api/chat";
 import { ChatMessage } from "./components/ChatMessage";
 import { Composer } from "./components/Composer";
 import { McpInspector } from "./components/McpInspector";
@@ -47,9 +47,26 @@ function createErrorMessage(error: unknown): ChatMessageType {
   };
 }
 
+// 사용자가 멈춘 응답 자리에 남길 안내 메시지를 만든다. 생성 중이던 본문과 trace는 버린다.
+function createStoppedMessage(): ChatMessageType {
+  return {
+    id: crypto.randomUUID(),
+    role: "assistant",
+    content: "사용자에 의해 응답이 중단되었습니다",
+    createdAt: new Date().toISOString(),
+    stopped: true,
+  };
+}
+
 // 첫 사용자 메시지를 대화 목록용 짧은 제목으로 줄인다.
 function summarizeTitle(message: string) {
   return message.length > 28 ? `${message.slice(0, 28)}...` : message;
+}
+
+// 중단 안내는 모델이 만든 답이 아니라 화면용 기록이므로 모델 입력에서 뺀다. 답을 받지 못한
+// 질문 자체는 남겨, 중단한 뒤 이어서 물으면 모델이 앞 질문을 알고 답하게 한다.
+function excludeStoppedNotices(messages: ChatMessageType[]): ChatMessageType[] {
+  return messages.filter((message) => !message.stopped);
 }
 
 // 모델에 보낼 최근 사용자 턴부터의 대화 메시지만 선택한다.
@@ -118,6 +135,7 @@ export default function App() {
   const [limitNoticeDismissed, setLimitNoticeDismissed] = useState(false);
   const [progressByConversation, setProgressByConversation] = useState<Record<string, ChatProgress>>({});
   const [streamingByConversation, setStreamingByConversation] = useState<Record<string, string>>({});
+  const abortControllerRef = useRef<AbortController | null>(null);
   const { viewportRef, contentRef, resetToBottom } = useStickToBottom();
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
@@ -185,8 +203,13 @@ export default function App() {
     const userMessage = createUserMessage(message);
     const conversationId = activeConversation.id;
     const shouldRename = activeConversation.messages.length === 0;
-    const history = getRecentTurnMessages(activeConversation.messages, RECENT_HISTORY_TURN_LIMIT);
+    const history = getRecentTurnMessages(
+      excludeStoppedNotices(activeConversation.messages),
+      RECENT_HISTORY_TURN_LIMIT,
+    );
     const historyTraces = getTracesForMessages(history, activeConversation.traces);
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
 
     setConversations((current) =>
       current.map((conversation) =>
@@ -233,6 +256,7 @@ export default function App() {
             [conversationId]: (current[conversationId] ?? "") + text,
           }));
         },
+        abortController.signal,
       );
 
       setConversations((current) =>
@@ -248,20 +272,24 @@ export default function App() {
         ),
       );
     } catch (error) {
-      const errorMessage = createErrorMessage(error);
+      // 멈춤 버튼으로 끊은 요청은 오류가 아니다. 받다 만 본문과 trace는 버리고 안내만 남긴다.
+      const resultMessage = isChatStoppedError(error) ? createStoppedMessage() : createErrorMessage(error);
 
       setConversations((current) =>
         current.map((conversation) =>
           conversation.id === conversationId
             ? {
                 ...conversation,
-                updatedAt: errorMessage.createdAt,
-                messages: [...conversation.messages, errorMessage],
+                updatedAt: resultMessage.createdAt,
+                messages: [...conversation.messages, resultMessage],
               }
             : conversation,
         ),
       );
     } finally {
+      if (abortControllerRef.current === abortController) {
+        abortControllerRef.current = null;
+      }
       setSendingConversationId((current) => (current === conversationId ? null : current));
       setProgressByConversation((current) => {
         const next = { ...current };
@@ -274,6 +302,11 @@ export default function App() {
         return next;
       });
     }
+  };
+
+  // 스트림을 끊어 backend의 추론·도구 호출까지 함께 멈춘다. 뒷정리는 sendMessage가 맡는다.
+  const stopMessage = () => {
+    abortControllerRef.current?.abort();
   };
 
   if (!activeConversation) {
@@ -387,7 +420,9 @@ export default function App() {
         <footer className="composer-wrap">
           <Composer
             disabled={activeConversationIsSending || conversationMessageLimitReached}
+            sending={activeConversationIsSending}
             onSendMessage={sendMessage}
+            onStopMessage={stopMessage}
           />
           <p>AI 응답은 오류가 있을 수 있습니다. 중요한 통계는 원자료와 함께 확인하세요.</p>
         </footer>

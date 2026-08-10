@@ -85,6 +85,14 @@ MCP 연결, 도구 확인, 모델 분석, 도구 호출, 결과 검토 상태를
 있습니다. backend는 종료 신호 뒤 진행 중인 요청을 기본 5초까지만 기다리며,
 `STATYEARBOOK_BACKEND_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS`로 조정할 수 있습니다.
 
+답변을 생성하는 동안 전송 버튼은 멈춤 버튼으로 바뀝니다. 멈춤은 스트림 연결을 끊고,
+backend는 그 자리에서 모델 추론과 MCP 도구 호출을 취소한 뒤 세션과 요청 상태를 버립니다
+(`event=chat.stream.stopped`, `event=chat.pipeline outcome=stopped`). 중단된 턴은 화면과
+localStorage에 `사용자에 의해 응답이 중단되었습니다`로만 남고, 받다 만 본문과 MCP trace는
+저장하지 않습니다. 답을 받지 못한 질문과 앞선 대화·trace는 그대로 남아 다음 질문에 함께
+전달되므로, 중단한 뒤 이어서 물으면 모델이 앞 질문을 알고 답합니다. 화면용 기록인 중단
+안내만 모델 입력에서 빠집니다.
+
 새 연보는 관리자 화면 또는 다음 명령으로 적재합니다.
 
 ```bash

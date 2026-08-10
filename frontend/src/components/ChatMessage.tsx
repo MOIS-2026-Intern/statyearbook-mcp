@@ -68,7 +68,11 @@ export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessagePr
       ) : null}
 
       <div className={`message ${isUser ? "message--user" : "message--assistant"}`}>
-        <div className={`message__content ${isUser ? "message__content--plain" : "message__content--markdown"}`}>
+        <div
+          className={`message__content ${isUser ? "message__content--plain" : "message__content--markdown"} ${
+            message.stopped ? "message__content--stopped" : ""
+          }`}
+        >
           {isUser ? (
             message.content
           ) : (

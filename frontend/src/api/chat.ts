@@ -32,12 +32,20 @@ type ChatStreamEvent =
   | ResultStreamEvent
   | ErrorStreamEvent;
 
+// 사용자가 멈춘 요청과 실제 오류를 호출한 쪽에서 구분한다.
+export function isChatStoppedError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
 // 프로필 설정에 따라 mock 응답 또는 백엔드 진행 상태 스트림을 호출한다.
 export async function sendChatMessage(
   request: ChatRequest,
   onProgress?: (progress: ChatProgress) => void,
   onDelta?: (text: string) => void,
+  signal?: AbortSignal,
 ): Promise<ChatResponse> {
+  signal?.throwIfAborted();
+
   if (useMockApi) {
     onProgress?.({
       stage: "planning",
@@ -56,6 +64,8 @@ export async function sendChatMessage(
       "Content-Type": "application/json",
     },
     body: JSON.stringify(request),
+    // 멈춤 버튼은 이 연결을 끊는다. backend는 끊긴 연결을 보고 추론과 도구 호출을 취소한다.
+    signal,
   });
 
   if (!response.ok) {

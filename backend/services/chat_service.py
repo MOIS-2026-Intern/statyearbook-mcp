@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -116,6 +117,15 @@ class ChatService:
                 ),
                 traces=returned_traces,
             )
+        except asyncio.CancelledError:
+            # 사용자가 멈춘 요청이다. 취소는 모델 스트림과 MCP 세션까지 전파되어 두 자원을
+            # 닫고, 이 요청이 모은 추론 상태·도구 결과·trace는 요청 안에서만 살아 있으므로
+            # 여기서 버린다. 다음 질의는 남은 것 없이 새로 시작한다.
+            outcome = "stopped"
+            traces.clear()
+            messages.clear()
+            logger.info("event=chat.stopped conversation=%s", request.conversationId)
+            raise
         finally:
             if not connect_recorded:
                 metrics["mcp_connect_ms"] = _elapsed_ms(connect_started)
