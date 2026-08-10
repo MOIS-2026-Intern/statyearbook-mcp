@@ -68,11 +68,10 @@ class OpenAICompatibleGateway:
         instructions: str,
         input_items: list[Any],
         tools: list[dict[str, Any]],
-        model_profile: str,
         tool_choice: str | None = None,
         on_text_delta: TextDeltaCallback | None = None,
     ) -> Any:
-        reasoning = _reasoning_for_profile(model_profile)
+        reasoning = _reasoning_config(self._settings.model_reasoning_effort)
         kwargs: dict[str, Any] = {
             "model": self._settings.chat_model,
             "instructions": instructions,
@@ -196,7 +195,6 @@ class OpenAICompatibleGateway:
         instructions: str,
         messages: list[ModelMessage],
         tools: list[ToolSpec],
-        model_profile: str,
         tool_results: list[ToolResult] | None = None,
         state: object | None = None,
         tool_choice: str | None = None,
@@ -218,7 +216,6 @@ class OpenAICompatibleGateway:
                 instructions=instructions,
                 input_items=input_items,
                 tools=openai_tools,
-                model_profile=model_profile,
                 tool_choice=tool_choice,
                 on_text_delta=None if on_text_delta is None else collect,
             )
@@ -263,13 +260,13 @@ class OpenAICompatibleGateway:
         )
 
 
-# UI 모델 프로필을 Responses API reasoning 강도로 변환한다.
-def _reasoning_for_profile(model_profile: str) -> dict[str, str] | None:
-    if model_profile == "fast":
-        return {"effort": "none"}
-    if model_profile == "deep":
-        return {"effort": "medium"}
-    return {"effort": "low"}
+# 설정에 고정된 추론 강도를 Responses API reasoning 필드로 만든다. 값이 비어 있으면
+# 필드를 실어 보내지 않아 공급자 기본값을 그대로 쓴다.
+def _reasoning_config(effort: str) -> dict[str, str] | None:
+    effort = effort.strip()
+    if not effort:
+        return None
+    return {"effort": effort}
 
 
 # 최초 메시지 또는 직전 응답 상태에서 API 입력 항목을 복원한다.

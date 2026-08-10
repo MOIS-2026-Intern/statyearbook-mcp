@@ -75,15 +75,20 @@ class StubClient:
         return None
 
 
-def _run(client: StubClient, on_text_delta=None, streaming: bool = False, **kwargs):
-    gateway = OpenAICompatibleGateway(Settings(), client)
+def _run(
+    client: StubClient,
+    on_text_delta=None,
+    streaming: bool = False,
+    settings: Settings | None = None,
+    **kwargs,
+):
+    gateway = OpenAICompatibleGateway(settings or Settings(), client)
     gateway._streaming_supported = streaming
     return asyncio.run(
         gateway.create_turn(
             instructions="지시",
             messages=[ModelMessage(role="user", content="질문")],
             tools=[],
-            model_profile="balanced",
             on_text_delta=on_text_delta,
             **kwargs,
         )
@@ -179,6 +184,24 @@ class ToolChoiceTests(unittest.TestCase):
         _run(client)
 
         self.assertNotIn("tool_choice", client.kwargs[0])
+
+
+class ReasoningEffortTests(unittest.TestCase):
+    # 추론 강도는 요청마다 달라지지 않고 배포 설정 값으로 고정된다.
+    def test_sends_the_configured_effort(self) -> None:
+        client = StubClient([StubResponse(MESSAGE_OUTPUT, "정상 답변")])
+
+        _run(client, settings=Settings(model_reasoning_effort="high"))
+
+        self.assertEqual(client.kwargs[0]["reasoning"], {"effort": "high"})
+
+    # 이 파라미터를 받지 않는 공급자를 위해 빈 값이면 필드를 싣지 않는다.
+    def test_omits_reasoning_when_effort_is_blank(self) -> None:
+        client = StubClient([StubResponse(MESSAGE_OUTPUT, "정상 답변")])
+
+        _run(client, settings=Settings(model_reasoning_effort=""))
+
+        self.assertNotIn("reasoning", client.kwargs[0])
 
 
 if __name__ == "__main__":

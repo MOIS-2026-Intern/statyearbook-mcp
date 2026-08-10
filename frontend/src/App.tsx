@@ -115,7 +115,6 @@ export default function App() {
   const [activeConversationId, setActiveConversationId] = useState(initialConversationState.activeConversationId);
   const [sendingConversationId, setSendingConversationId] = useState<string | null>(null);
   const [showMcpTrace, setShowMcpTrace] = useState(true);
-  const [modelProfile, setModelProfile] = useState("balanced");
   const [limitNoticeDismissed, setLimitNoticeDismissed] = useState(false);
   const [progressByConversation, setProgressByConversation] = useState<Record<string, ChatProgress>>({});
   const [streamingByConversation, setStreamingByConversation] = useState<Record<string, string>>({});
@@ -209,7 +208,6 @@ export default function App() {
         {
           conversationId,
           message,
-          modelProfile,
           includeMcpTrace: true,
           history,
           traces: historyTraces,
@@ -389,8 +387,6 @@ export default function App() {
         <footer className="composer-wrap">
           <Composer
             disabled={activeConversationIsSending || conversationMessageLimitReached}
-            modelProfile={modelProfile}
-            onModelProfileChange={setModelProfile}
             onSendMessage={sendMessage}
           />
           <p>AI 응답은 오류가 있을 수 있습니다. 중요한 통계는 원자료와 함께 확인하세요.</p>
