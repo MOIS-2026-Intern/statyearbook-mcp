@@ -1,13 +1,15 @@
 import { FormEvent, KeyboardEvent, useState } from "react";
-import { DatabaseZap, Mic, Paperclip, SendHorizontal } from "lucide-react";
+import { DatabaseZap, Mic, Paperclip, SendHorizontal, Square } from "lucide-react";
 
 interface ComposerProps {
   disabled: boolean;
+  sending: boolean;
   onSendMessage: (message: string) => void;
+  onStopMessage: () => void;
 }
 
 // 메시지 입력과 전송 상태를 관리하는 작성기를 렌더링한다.
-export function Composer({ disabled, onSendMessage }: ComposerProps) {
+export function Composer({ disabled, sending, onSendMessage, onStopMessage }: ComposerProps) {
   const [value, setValue] = useState("");
 
   // 빈 입력과 비활성 상태를 제외하고 정리된 메시지를 전송한다.
@@ -57,9 +59,21 @@ export function Composer({ disabled, onSendMessage }: ComposerProps) {
           <button className="icon-button" type="button" aria-label="음성 입력" title="음성 입력">
             <Mic size={18} />
           </button>
-          <button className="send-button" type="submit" disabled={disabled || !value.trim()} aria-label="전송">
-            <SendHorizontal size={19} />
-          </button>
+          {sending ? (
+            <button
+              className="send-button send-button--stop"
+              type="button"
+              onClick={onStopMessage}
+              aria-label="응답 중단"
+              title="응답 중단"
+            >
+              <Square size={13} fill="currentColor" />
+            </button>
+          ) : (
+            <button className="send-button" type="submit" disabled={disabled || !value.trim()} aria-label="전송">
+              <SendHorizontal size={19} />
+            </button>
+          )}
         </div>
       </div>
     </form>

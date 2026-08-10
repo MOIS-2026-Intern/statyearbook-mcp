@@ -5,7 +5,6 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from contextlib import suppress
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -125,6 +124,9 @@ async def _stream_chat_events(payload: ChatRequest) -> AsyncIterator[bytes]:
                     "response": response.model_dump(mode="json"),
                 }
             )
+        except asyncio.CancelledError:
+            # 중단된 요청은 알릴 상대가 없다. 결과를 queue에 남기지 않고 그대로 끝낸다.
+            raise
         except ModelGatewayConfigurationError as exc:
             logger.error(
                 "event=chat.stream.error error_type=%s error=%s",
@@ -149,8 +151,36 @@ async def _stream_chat_events(payload: ChatRequest) -> AsyncIterator[bytes]:
             ).encode("utf-8")
             if event["type"] in {"result", "error"}:
                 break
+    except (asyncio.CancelledError, GeneratorExit):
+        # 멈춤 버튼은 클라이언트가 스트림을 끊는 것으로 도착한다. 서버는 이 지점에서
+        # 취소되며, 아래 finally가 진행 중이던 추론·도구 호출을 함께 끊는다.
+        logger.info(
+            "event=chat.stream.stopped conversation=%s reason=client_disconnect",
+            payload.conversationId,
+        )
+        raise
     finally:
-        if not task.done():
-            task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        await _cancel_chat_run(task)
+
+
+# 취소가 전파되면 모델 스트림과 MCP 세션을 닫는 동안만 기다린다. 정리가 응답하지 않는
+# 연결에 걸려도 요청 처리가 그 자리에 묶이지 않도록 대기에 한도를 둔다.
+_STOP_CLEANUP_TIMEOUT_SECONDS = 5.0
+
+
+# 중단된 요청이 모델 토큰과 MCP 호출을 계속 쓰지 않도록 실행 task를 끊고 정리를 기다린다.
+async def _cancel_chat_run(task: asyncio.Task[None]) -> None:
+    if task.done():
+        return
+
+    task.cancel()
+    try:
+        await asyncio.wait_for(task, timeout=_STOP_CLEANUP_TIMEOUT_SECONDS)
+    except asyncio.CancelledError:
+        pass
+    except TimeoutError:
+        # 취소는 이미 걸어 두었으므로 남은 정리는 task가 스스로 마친다.
+        logger.warning(
+            "event=chat.stream.stop_cleanup_timeout timeout_s=%s",
+            _STOP_CLEANUP_TIMEOUT_SECONDS,
+        )
