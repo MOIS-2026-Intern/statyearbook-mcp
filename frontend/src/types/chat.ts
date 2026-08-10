@@ -42,7 +42,6 @@ export interface Conversation {
 export interface ChatRequest {
   conversationId: string;
   message: string;
-  modelProfile: string;
   includeMcpTrace: boolean;
   history: ChatMessage[];
   traces: McpTrace[];

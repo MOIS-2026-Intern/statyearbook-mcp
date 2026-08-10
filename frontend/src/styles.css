@@ -955,23 +955,6 @@ button {
   padding: 0 10px;
 }
 
-.model-select select {
-  height: 34px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-soft);
-  cursor: pointer;
-  font-weight: 700;
-  outline: none;
-  padding: 0 6px;
-}
-
-.model-select select:hover {
-  border-color: var(--border);
-  background: var(--surface);
-}
-
 .send-button {
   border-color: #111827;
   background: #111827;
