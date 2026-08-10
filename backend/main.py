@@ -69,4 +69,5 @@ def run() -> None:
         reload=settings.reload,
         access_log=False,
         log_level=settings.log_level.lower(),
+        timeout_graceful_shutdown=settings.graceful_shutdown_timeout_seconds,
     )
