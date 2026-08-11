@@ -77,7 +77,7 @@ export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessagePr
             message.content
           ) : (
             <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
+              remarkPlugins={[[remarkGfm, { singleTilde: false }]]}
               components={{
                 a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
                 table: ({ node: _node, ...props }) => (
