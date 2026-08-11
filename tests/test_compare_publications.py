@@ -46,6 +46,21 @@ CHANGED_ORGANIZATION_ROWS = [
         "_total_count": 1,
     }
 ]
+CHANGED_OFFICER_ROWS = [
+    {
+        "match_key": "정부원격근무서비스이용자수",
+        "base_stat_id": 201,
+        "target_stat_id": 511,
+        "base_statistic_title": "정부원격근무서비스 이용자 수",
+        "target_statistic_title": "정부원격근무서비스 이용자 수",
+        "base_officer": "주무관 김일표",
+        "target_officer": "사무관 김일표",
+        "base_record_count": 1,
+        "target_record_count": 1,
+        "changed_fields": ["officer"],
+        "_total_count": 1,
+    }
+]
 
 
 # DB를 대신해 고정된 발간연도 목록과 조회 결과를 돌려준다.
@@ -170,6 +185,68 @@ class ComparePublicationsTests(unittest.TestCase):
             result["limitations"],
         )
 
+    # 담당자 변경은 contacts.officer 값을 그대로 비교하고 제목은 반환만 해야 한다.
+    def test_changed_compares_officer_field_only(self) -> None:
+        years_mock, execute_mock = _patched(CHANGED_OFFICER_ROWS)
+        with years_mock, execute_mock as execute_plan_mock:
+            result = compare_publications_data(
+                operation="changed",
+                base_publication_year=2025,
+                target_publication_year=2026,
+                fields=["stat_id", "statistic_title", "officer"],
+                compare_fields=["officer"],
+            )
+
+        self.assertEqual(result["compared_fields"], ["officer"])
+        self.assertIn("contacts", result["source_tables"])
+        self.assertEqual(result["results"][0]["base_officer"], "주무관 김일표")
+        self.assertEqual(result["results"][0]["target_officer"], "사무관 김일표")
+        sql = execute_plan_mock.call_args.args[0].sql
+        self.assertIn("string_agg(DISTINCT", sql)
+        self.assertIn("c.officer", sql)
+        self.assertIn("b.officer IS DISTINCT FROM t.officer", sql)
+        self.assertNotIn("b.statistic_title IS DISTINCT FROM t.statistic_title", sql)
+        self.assertTrue(
+            any("직급" in note for note in result["limitations"]),
+            result["limitations"],
+        )
+
+    # 비교 필드가 반환 필드에 없어도 필요한 contacts 조인과 변경 판정을 준비해야 한다.
+    def test_compare_fields_can_be_separate_from_returned_fields(self) -> None:
+        years_mock, execute_mock = _patched([])
+        with years_mock, execute_mock as execute_plan_mock:
+            result = compare_publications_data(
+                operation="changed",
+                base_publication_year=2025,
+                target_publication_year=2026,
+                fields=["stat_id", "statistic_title"],
+                compare_fields=["officer"],
+            )
+
+        self.assertEqual(result["selected_fields"], ["stat_id", "statistic_title"])
+        self.assertEqual(result["compared_fields"], ["officer"])
+        sql = execute_plan_mock.call_args.args[0].sql
+        self.assertIn("LEFT JOIN LATERAL", sql)
+        self.assertIn("b.officer IS DISTINCT FROM t.officer", sql)
+        self.assertNotIn("b.officer AS base_officer", sql)
+
+    # 요약의 changed_count도 반환 기본 필드가 아니라 명시한 담당자 필드만 비교해야 한다.
+    def test_summary_can_count_officer_changes_only(self) -> None:
+        years_mock, execute_mock = _patched([SUMMARY_ROW])
+        with years_mock, execute_mock as execute_plan_mock:
+            result = compare_publications_data(
+                operation="summary",
+                base_publication_year=2025,
+                target_publication_year=2026,
+                compare_fields=["officer"],
+            )
+
+        self.assertEqual(result["compared_fields"], ["officer"])
+        self.assertIn("contacts", result["source_tables"])
+        sql = execute_plan_mock.call_args.args[0].sql
+        self.assertIn("b.officer IS DISTINCT FROM t.officer", sql)
+        self.assertNotIn("b.ref_id IS DISTINCT FROM t.ref_id", sql)
+
     # 연락처 필드를 고르지 않은 비교는 연락처 조인 비용을 내지 않아야 한다.
     def test_omits_contact_join_when_no_contact_field_is_selected(self) -> None:
         years_mock, execute_mock = _patched([])
@@ -201,8 +278,14 @@ class ComparePublicationsTests(unittest.TestCase):
                     subject="chapters",
                     fields=["organization"],
                 )
+            with self.assertRaises(ValueError) as compare_error:
+                compare_publications_data(
+                    operation="summary",
+                    compare_fields=["stat_id"],
+                )
 
         self.assertIn("chapter_no", str(error.exception))
+        self.assertIn("comparable", str(compare_error.exception))
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from app.db import connect
 from app.tools.repository.publication_repository import (
+    OFFICER_SQL,
     ORGANIZATION_SQL,
     SOURCE_SYSTEM_SQL,
     match_key_sql,
@@ -42,6 +43,7 @@ CompareField = Literal[
     "base_date",
     "page_start",
     "organization",
+    "officer",
     "source_system",
 ]
 
@@ -115,6 +117,7 @@ STATISTIC_CONTACTS_JOIN_SQL = "\n".join(
     (
         "LEFT JOIN LATERAL (",
         f"    SELECT {_contact_aggregate_sql(ORGANIZATION_SQL)} AS dept,",
+        f"           {_contact_aggregate_sql(OFFICER_SQL)} AS officer,",
         f"           {_contact_aggregate_sql(SOURCE_SYSTEM_SQL)} AS source_system",
         "    FROM contacts c",
         "    WHERE c.stat_id = s.stat_id",
@@ -122,6 +125,7 @@ STATISTIC_CONTACTS_JOIN_SQL = "\n".join(
     )
 )
 STATISTIC_ORGANIZATION_SQL = f"{CONTACT_AGGREGATE_ALIAS}.dept"
+STATISTIC_OFFICER_SQL = f"{CONTACT_AGGREGATE_ALIAS}.officer"
 STATISTIC_SOURCE_SYSTEM_SQL = f"{CONTACT_AGGREGATE_ALIAS}.source_system"
 
 SUBJECTS: dict[str, CompareSubjectSpec] = {
@@ -151,6 +155,12 @@ SUBJECTS: dict[str, CompareSubjectSpec] = {
                 STATISTIC_ORGANIZATION_SQL,
                 requires_contacts=True,
                 compare_expression=match_key_sql(STATISTIC_ORGANIZATION_SQL),
+            ),
+            # 담당자는 contacts.officer 값 자체를 비교한다. 직급이나 이름을 분리하거나
+            # officer_match_keys로 검색어를 정규화하지 않으므로 직급 변경도 변경으로 잡힌다.
+            "officer": ItemColumn(
+                STATISTIC_OFFICER_SQL,
+                requires_contacts=True,
             ),
             "source_system": ItemColumn(
                 STATISTIC_SOURCE_SYSTEM_SQL,
@@ -273,11 +283,17 @@ DUPLICATE_TITLE_LIMITATION = (
     "이름이 같고 단위가 다른 별개 통계는 한 항목으로 합쳐지므로, duplicate_key_count나 "
     "record_count가 1보다 크면 match_by=title_and_unit으로 다시 비교한다"
 )
-CONTACT_FIELD_LIMITATIONS: tuple[str, ...] = (
+ORGANIZATION_SOURCE_FIELD_LIMITATIONS: tuple[str, ...] = (
     "organization과 source_system은 조직 개편이나 이름 변경도 값이 달라진 것으로 잡으므로, "
     "담당이 실제로 옮겨간 것과 같은 부서의 이름만 바뀐 것을 구분하지 않는다",
+)
+CONTACT_FIELD_LIMITATIONS: tuple[str, ...] = (
     f"한 통계에 연락처가 여러 개면 값을 '{CONTACT_VALUE_SEPARATOR}'로 이어 붙여 비교하므로, "
-    "담당 부서가 하나 늘거나 빠져도 변경으로 잡힌다",
+    "필드 값이 하나 늘거나 빠져도 변경으로 잡힌다",
+)
+OFFICER_FIELD_LIMITATIONS: tuple[str, ...] = (
+    "officer는 contacts.officer의 담당자 문자열을 직급과 이름으로 분리하지 않고 비교하므로, "
+    "직급이나 담당자 표기가 달라져도 변경으로 잡힌다",
 )
 
 
@@ -294,6 +310,7 @@ def _validate_request(
     subject: str,
     match_by: str,
     fields: list[str] | None,
+    compare_fields: list[str] | None,
     limit: int,
     offset: int,
 ) -> None:
@@ -316,6 +333,8 @@ def _validate_request(
         raise ValueError("offset can only be used with list operations")
     if fields == []:
         raise ValueError("fields must contain at least one field")
+    if compare_fields == []:
+        raise ValueError("compare_fields must contain at least one field")
     unsupported_fields = set(fields or ()) - set(spec.columns)
     if unsupported_fields:
         unsupported = ", ".join(sorted(unsupported_fields))
@@ -324,9 +343,30 @@ def _validate_request(
             f"unsupported fields for subject={subject}: {unsupported}; "
             f"supported: {supported}"
         )
-    if operation == "changed" and not _comparable_fields(spec, fields):
+    unsupported_compare_fields = set(compare_fields or ()) - set(spec.columns)
+    if unsupported_compare_fields:
+        unsupported = ", ".join(sorted(unsupported_compare_fields))
+        supported = ", ".join(spec.columns)
         raise ValueError(
-            "changed requires at least one comparable field in fields; "
+            f"unsupported compare_fields for subject={subject}: {unsupported}; "
+            f"supported: {supported}"
+        )
+    if compare_fields is not None and not _comparison_fields(
+        spec,
+        fields,
+        compare_fields,
+    ):
+        raise ValueError(
+            "compare_fields requires at least one comparable field; "
+            "stat_id and page_start are not compared between publications"
+        )
+    if operation == "changed" and not _comparison_fields(
+        spec,
+        fields,
+        compare_fields,
+    ):
+        raise ValueError(
+            "changed requires at least one comparable field in fields or compare_fields; "
             "stat_id and page_start are not compared between publications"
         )
 
@@ -340,21 +380,43 @@ def _comparable_fields(
     return tuple(name for name in selected if spec.columns[name].comparable)
 
 
+# 별도 비교 필드를 지정하면 반환 필드와 무관하게 그 필드만 변경 판정에 쓴다.
+# 생략한 기존 호출은 지금처럼 반환 필드 중 비교 가능한 필드를 모두 사용한다.
+def _comparison_fields(
+    spec: CompareSubjectSpec,
+    fields: list[str] | None,
+    compare_fields: list[str] | None,
+) -> tuple[str, ...]:
+    if compare_fields is None:
+        return _comparable_fields(spec, fields)
+    return tuple(
+        dict.fromkeys(
+            name for name in compare_fields if spec.columns[name].comparable
+        )
+    )
+
+
 # 대응 기준과 subject, 고른 필드가 함께 만드는 한계를 응답에 실을 문장으로 모은다.
 def _limitations(
     subject: str,
     match_by: str,
     fields: list[str] | None = None,
+    compare_fields: list[str] | None = None,
 ) -> list[str]:
     spec = SUBJECTS[subject]
+    required = _required_fields(spec, fields, compare_fields)
     limitations = list(MATCH_KEY_LIMITATIONS[match_by])
     if subject == "statistics" and match_by == "title":
         limitations.append(DUPLICATE_TITLE_LIMITATION)
-    if _uses_contacts(spec, _selected_fields(spec, fields)):
+    if _uses_contacts(spec, required):
         limitations.extend(CONTACT_FIELD_LIMITATIONS)
+    if {"organization", "source_system"}.intersection(required):
+        limitations.extend(ORGANIZATION_SOURCE_FIELD_LIMITATIONS)
+    if "officer" in required:
+        limitations.extend(OFFICER_FIELD_LIMITATIONS)
     covered = tuple(
         alias
-        for alias in _comparable_fields(spec, fields)
+        for alias in _comparison_fields(spec, fields, compare_fields)
         if alias in spec.match_key_covers.get(match_by, ())
     )
     if covered:
@@ -372,9 +434,13 @@ def _uses_contacts(spec: CompareSubjectSpec, selected: tuple[str, ...]) -> bool:
 
 
 # 응답에 실을 산출 근거 테이블 목록을 만든다. 연락처 필드를 고르면 contacts가 더해진다.
-def _source_tables(spec: CompareSubjectSpec, fields: list[str] | None) -> tuple[str, ...]:
-    selected = _selected_fields(spec, fields)
-    if not _uses_contacts(spec, selected) or "contacts" in spec.source_tables:
+def _source_tables(
+    spec: CompareSubjectSpec,
+    fields: list[str] | None,
+    compare_fields: list[str] | None = None,
+) -> tuple[str, ...]:
+    required = _required_fields(spec, fields, compare_fields)
+    if not _uses_contacts(spec, required) or "contacts" in spec.source_tables:
         return spec.source_tables
     return (*spec.source_tables, "contacts")
 
@@ -407,10 +473,11 @@ def _compare_alias(alias: str, column: ItemColumn) -> str:
 def _compare_pairs(
     spec: CompareSubjectSpec,
     fields: list[str] | None,
+    compare_fields: list[str] | None,
 ) -> tuple[tuple[str, str], ...]:
     return tuple(
         (alias, _compare_alias(alias, spec.columns[alias]))
-        for alias in _comparable_fields(spec, fields)
+        for alias in _comparison_fields(spec, fields, compare_fields)
     )
 
 
@@ -420,6 +487,22 @@ def _selected_fields(
     fields: list[str] | None,
 ) -> tuple[str, ...]:
     return tuple(dict.fromkeys(fields if fields is not None else spec.default_fields))
+
+
+# CTE에는 응답에 반환할 필드와 변경 판정에만 쓸 필드를 모두 준비한다.
+def _required_fields(
+    spec: CompareSubjectSpec,
+    fields: list[str] | None,
+    compare_fields: list[str] | None,
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            (
+                *_selected_fields(spec, fields),
+                *_comparison_fields(spec, fields, compare_fields),
+            )
+        )
+    )
 
 
 # 비교할 두 발간연도를 결정한다. 생략하면 가장 최근 두 발간판을 비교한다.
@@ -527,18 +610,20 @@ def build_query_plan(
     base_publication_year: int,
     target_publication_year: int,
     fields: list[CompareField] | None = None,
+    compare_fields: list[CompareField] | None = None,
     limit: int = 500,
     offset: int = 0,
 ) -> QueryPlan:
     spec = SUBJECTS[subject]
     key_sql = spec.match_keys[match_by]
     selected = _selected_fields(spec, fields)
-    compare_pairs = _compare_pairs(spec, fields)
+    required = _required_fields(spec, fields, compare_fields)
+    compare_pairs = _compare_pairs(spec, fields, compare_fields)
     cte_sql = "\n".join(
         (
             "WITH",
-            f"{_items_cte_sql('base_items', spec, key_sql, selected)},",
-            _items_cte_sql("target_items", spec, key_sql, selected),
+            f"{_items_cte_sql('base_items', spec, key_sql, required)},",
+            _items_cte_sql("target_items", spec, key_sql, required),
         )
     )
     years = (base_publication_year, target_publication_year)
