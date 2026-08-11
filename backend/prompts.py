@@ -116,6 +116,18 @@ search_contacts 결과 처리:
 """.strip()
 
 
+COMPARE_PUBLICATIONS_RESULT_PROMPT = """
+compare_publications 결과 처리:
+- results를 표로 답할 때 ref_id, base_ref_id, target_ref_id 같은 원시 필드명을 제목 행에 노출하지 않습니다.
+- 두 발간판의 ref_id를 한 열로 합쳐 표시하면 그 열 제목은 반드시 `목차 번호`로 씁니다.
+- 두 발간판의 ref_id가 달라 별도 열로 표시하면 각각 `{base_publication_year}년판 목차 번호`,
+  `{target_publication_year}년판 목차 번호`로 씁니다.
+- statistic_title은 `통계명`, organization은 발간연도에 맞춘 `담당 부서`, officer는 발간연도에 맞춘
+  `담당자`처럼 사용자가 이해할 수 있는 한국어 제목 행으로 바꿉니다.
+- match_key, stat_id, base_stat_id, target_stat_id와 그 밖의 원시 필드명은 답변에 노출하지 않습니다.
+""".strip()
+
+
 SEARCH_TABLES_RESULT_PROMPT = """
 search_tables 결과 응답 형식:
 - 여러 수치를 비교하거나 표 원문을 보여줄 때는 읽기 쉬운 Markdown 표 형식을 우선합니다.
@@ -140,6 +152,7 @@ visualize 결과 응답 형식:
 
 TOOL_RESULT_PROMPTS = {
     "analyze_publications": ANALYZE_PUBLICATIONS_RESULT_PROMPT,
+    "compare_publications": COMPARE_PUBLICATIONS_RESULT_PROMPT,
     "search_contacts": SEARCH_CONTACTS_RESULT_PROMPT,
     "search_statistics": SEARCH_STATISTICS_RESULT_PROMPT,
     "search_tables": SEARCH_TABLES_RESULT_PROMPT,
