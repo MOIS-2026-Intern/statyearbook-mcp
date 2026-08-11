@@ -102,6 +102,12 @@ COMPARE_PUBLICATIONS = (
     "양쪽에 다 있는 항목, 양쪽에 있으나 값이 달라진 항목을 찾는다. "
     "'25년판에만 있고 26년판에는 없는 자료가 몇 개인지', '새로 생긴 통계', '없어진 통계', "
     "'담당 부서가 바뀐 통계'처럼 두 판을 비교해야 답할 수 있는 질문에 사용한다. "
+    "'담당 부서가 바뀐 통계'는 subject=statistics에 operation=changed와 "
+    "fields=[ref_id, statistic_title, organization], compare_fields=[organization]으로 한 번에 묻는다. "
+    "'담당자명이 바뀐 통계'는 fields=[ref_id, statistic_title, officer], "
+    "compare_fields=[officer]로 묻는다. "
+    "두 발간판의 담당 정보 목록을 "
+    "각각 받아 직접 맞대어 보지 않는다. "
     "한 발간판 안의 개수나 분포만 필요하면 analyze_publications를 사용한다. "
     "operation은 summary=다섯 가지 건수를 한 번에, only_in_base=base 발간판에만 있는 항목 목록, "
     "only_in_target=target 발간판에만 있는 항목 목록, in_both=양쪽 공통 항목을 base·target 값 쌍으로, "
@@ -120,7 +126,9 @@ COMPARE_PUBLICATIONS_FIELDS = {
     "subject": (
         "비교 대상. statistics=논리 통계 항목, chapters=장, sections=절, "
         "organizations=contacts.dept 담당 부서, source_systems=출처 시스템. "
-        "'자료', '통계', '표'를 묻는 질문은 statistics를 쓴다."
+        "'자료', '통계', '표'를 묻는 질문은 statistics를 쓴다. "
+        "organizations와 source_systems는 부서·시스템 자체가 새로 생기거나 없어졌는지를 보며, "
+        "'어느 통계의 담당이 바뀌었는지'는 statistics에 organization 또는 officer를 넣어 묻는다."
     ),
     "match_by": (
         "두 발간판에서 같은 항목으로 볼 기준. title=이름의 공백·기호 차이를 지운 값(기본값), "
@@ -138,11 +146,22 @@ COMPARE_PUBLICATIONS_FIELDS = {
         "생략하면 base 다음으로 가까운 최신 발간판을 적용한다."
     ),
     "fields": (
-        "반환할 항목 필드이자 changed의 변경 판정 대상. statistics는 stat_id/ref_id/장·절·제목·"
-        "단위·기준일·시작 페이지, chapters는 chapter_no/chapter, sections는 chapter_no/section_no/"
+        "응답에 반환할 항목 필드. compare_fields를 생략한 기존 호출에서는 changed의 변경 판정 "
+        "대상도 겸한다. statistics는 stat_id/ref_id/장·절·제목·단위·기준일·시작 페이지와 "
+        "organization(담당 부서)·officer(contacts.officer 담당자)·source_system(출처 시스템), "
+        "chapters는 chapter_no/chapter, sections는 chapter_no/section_no/"
         "section, organizations는 organization, source_systems는 source_system을 쓸 수 있다. "
         "생략하면 subject별 기본 필드를 반환한다. 항목의 표 내용을 이어서 조회하려면 stat_id를 포함한다. "
-        "stat_id와 page_start는 발간판마다 새로 부여되므로 변경 판정에서 제외된다."
+        "stat_id와 page_start는 발간판마다 새로 부여되므로 변경 판정에서 제외된다. "
+        "statistics를 match_by=title로 목록 비교할 때도 양쪽 목차 번호를 함께 보여주도록 ref_id를 포함한다. "
+        "반환할 제목·식별자와 변경 판정 필드를 분리하려면 compare_fields를 함께 지정한다."
+    ),
+    "compare_fields": (
+        "summary의 changed_count와 changed/in_both의 changed_fields를 판정할 필드. 생략하면 "
+        "기존처럼 fields 중 비교 가능한 필드를 모두 사용한다. 담당 부서 변경만 찾을 때는 "
+        "[organization], 담당자 변경만 찾을 때는 [officer]를 쓴다. officer는 contacts.officer "
+        "값을 직접 비교하므로 이름이나 직급 어느 쪽이 달라져도 변경이다. stat_id와 page_start는 "
+        "비교할 수 없다."
     ),
     "limit": (
         "목록 operation이 반환할 최대 행 수로 1~500. truncated=true이면 next_offset으로 "

@@ -50,6 +50,10 @@ def register(mcp: FastMCP) -> None:
             list[CompareField] | None,
             Field(description=COMPARE_PUBLICATIONS_FIELDS["fields"]),
         ] = None,
+        compare_fields: Annotated[
+            list[CompareField] | None,
+            Field(description=COMPARE_PUBLICATIONS_FIELDS["compare_fields"]),
+        ] = None,
         limit: Annotated[
             int,
             Field(
@@ -70,6 +74,7 @@ def register(mcp: FastMCP) -> None:
             base_publication_year=base_publication_year,
             target_publication_year=target_publication_year,
             fields=fields,
+            compare_fields=compare_fields,
             limit=limit,
             offset=offset,
         )

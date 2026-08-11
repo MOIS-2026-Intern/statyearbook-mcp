@@ -10,12 +10,13 @@ from app.tools.repository.publication_comparison_repository import (
     CompareSubjectSpec,
     MATCH_KEY_DEFINITIONS,
     SUBJECTS,
-    _comparable_fields,
+    _comparison_fields,
     _execute_plan,
     _limitations,
     _publication_years,
     _resolve_publication_years,
     _selected_fields,
+    _source_tables,
     _validate_request,
     build_query_plan,
 )
@@ -42,10 +43,19 @@ def compare_publications_data(
     base_publication_year: int | None = None,
     target_publication_year: int | None = None,
     fields: list[CompareField] | None = None,
+    compare_fields: list[CompareField] | None = None,
     limit: int = 500,
     offset: int = 0,
 ) -> dict[str, Any]:
-    _validate_request(operation, subject, match_by, fields, limit, offset)
+    _validate_request(
+        operation,
+        subject,
+        match_by,
+        fields,
+        compare_fields,
+        limit,
+        offset,
+    )
     available_years = _publication_years()
     base_year, target_year, publication_years_defaulted = _resolve_publication_years(
         base_publication_year,
@@ -60,12 +70,13 @@ def compare_publications_data(
         base_publication_year=base_year,
         target_publication_year=target_year,
         fields=fields,
+        compare_fields=compare_fields,
         limit=limit,
         offset=offset,
     )
     rows = _execute_plan(plan)
     selected = _selected_fields(spec, fields)
-    compared = _comparable_fields(spec, fields)
+    compared = _comparison_fields(spec, fields, compare_fields)
 
     response: dict[str, Any] = {
         "ok": True,
@@ -89,8 +100,8 @@ def compare_publications_data(
             f"{MATCH_KEY_DEFINITIONS[match_by]} 기준으로 대응시킨 뒤 집합을 비교"
         ),
         "record_count_meaning": spec.record_count_note,
-        "limitations": _limitations(subject, match_by),
-        "source_tables": list(spec.source_tables),
+        "limitations": _limitations(subject, match_by, fields, compare_fields),
+        "source_tables": list(_source_tables(spec, fields, compare_fields)),
     }
 
     if operation == "summary":
@@ -149,4 +160,3 @@ def _definition(
             f"비교 필드 값이 달라진 {subject_label}"
         )
     return f"{base_year}년판과 {target_year}년판에 모두 있는 {subject_label}"
-
