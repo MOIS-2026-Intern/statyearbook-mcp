@@ -41,6 +41,8 @@ MAX_JOINED_ROWS = 60
 MAX_VALUE_LABELS = 24
 # 두 계열의 크기 차이가 이보다 크면 한 축에 그렸을 때 작은 계열이 보이지 않는다.
 DUAL_AXIS_SCALE_RATIO = 20
+# 단위가 같은 계열은 되도록 한 축에 두지만, 이보다 벌어지면 작은 쪽이 선 한 줄로 뭉개진다.
+SAME_UNIT_SPLIT_RATIO = 100
 RELATION_WORDS = ("관계", "상관", "산점", "scatter", "correlation")
 RATIO_WORDS = ("비율", "구성비", "증감률", "rate", "ratio", "percent", "%")
 # 지역·연도 축에서 개별 항목과 나란히 두면 축을 압도하는 전체 집계 라벨이다.
@@ -427,14 +429,17 @@ def _scale_ratio(series: list[dict[str, Any]]) -> float:
 
 
 # 단위가 다른 두 계열은 축을 나눠야 작은 계열이 보인다.
-# 반대로 단위가 같으면 규모가 벌어져도 한 축에 둔다. 축을 나누면 눈금이 달라져
-# 막대 높이를 그대로 견주는 읽기가 어긋나기 때문이다.
+# 단위가 같으면 규모가 벌어져도 한 축에 두는 편이 옳다. 축을 나누면 눈금이 달라져
+# 막대 높이를 그대로 견주는 읽기가 어긋나기 때문이다. 다만 규모가 백 배를 넘으면
+# 작은 쪽 막대가 몇 픽셀도 되지 않아 아예 보이지 않으므로 그때는 나눈다.
 def _needs_dual_axis(chart_type: str, series: list[dict[str, Any]]) -> bool:
     if chart_type not in {"bar", "grouped_bar", "line", "area", "combo"} or len(series) != 2:
         return False
     units = [clean_label(item.get("unit")) for item in series]
     if all(units):
-        return units[0] != units[1]
+        if units[0] != units[1]:
+            return True
+        return _scale_ratio(series) >= SAME_UNIT_SPLIT_RATIO
     # 단위를 알 수 없을 때만 값의 규모 차이로 판단한다.
     return _scale_ratio(series) >= DUAL_AXIS_SCALE_RATIO
 
@@ -711,11 +716,20 @@ def build_multi_source_spec(
         records = limit_categories(records, selected_type, key_is_year, top_n, warnings)
 
     units = {item["unit"] for item in series}
+    same_unit = _same_unit(series)
+    scale_ratio = _scale_ratio(series)
     dual_axis = selected_type != "scatter" and _needs_dual_axis(selected_type, series)
     if dual_axis:
         # 값 축을 나누면 막대를 나란히 둘 수 없다. 계열마다 mark를 달리하는 콤보 차트로 바꾼다.
         selected_type = "combo"
-    elif _same_unit(series) and _scale_ratio(series) >= DUAL_AXIS_SCALE_RATIO:
+    if dual_axis and same_unit:
+        # 같은 단위인데 규모가 이만큼 벌어지는 것은 표의 단위 표기가 서로 어긋났다는 뜻일 때가 많다.
+        warnings.append(
+            f"단위가 같은데도 두 지표의 규모가 약 {scale_ratio:,.0f}배 차이나, 한 축에 두면 작은 쪽이 "
+            "보이지 않아 값 축을 좌우로 나눴습니다. 두 축의 눈금이 서로 다르므로 막대 높이를 그대로 "
+            "견주면 안 되며, 표에 적힌 단위가 실제 수치와 맞는지 확인이 필요합니다."
+        )
+    elif same_unit and scale_ratio >= DUAL_AXIS_SCALE_RATIO:
         warnings.append(
             "두 지표의 규모 차이가 커서 작은 쪽 막대가 낮게 보입니다. 단위가 같아 축은 하나로 두었으니, "
             "작은 쪽을 자세히 보려면 그 표만 따로 그려 주세요."
@@ -752,8 +766,9 @@ def build_multi_source_spec(
         chart["y_title"] = _axis_title(series[0])
         # 값 축을 나누면 mark도 바뀌므로 원래 이유를 덧붙이지 않고 다시 쓴다.
         axis_label = "연도" if key_is_year else "표끼리 공통인 항목"
+        cause = "규모가 크게 달라" if same_unit else "단위가 달라"
         chart["reason"] = (
-            f"{axis_label}을 축으로 맞추되, 두 계열의 단위가 달라 한 축에 나란히 두면 작은 쪽이 "
+            f"{axis_label}을 축으로 맞추되, 두 계열의 {cause} 한 축에 나란히 두면 작은 쪽이 "
             "보이지 않으므로 값 축을 좌우로 나누고 첫 계열은 막대, 나머지는 선으로 겹쳤습니다."
         )
 

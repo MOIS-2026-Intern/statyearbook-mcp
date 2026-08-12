@@ -97,6 +97,18 @@ WIDE_YEAR_TABLE = {
         ["대 구 Daegu", "420", "420", "410"],
     ]),
 }
+MIXED_UNIT_COLUMNS = ["연도 Year", "전체 이용건수 Total", "온라인 이용건수 Online", "이용률 Ratio"]
+# 건수와 비율처럼 단위가 갈리는 지표가 한 표에 같이 있는 모양.
+MIXED_UNIT_TABLE = {
+    **TABLE,
+    "title_ko": "온라인 민원 이용률",
+    "unit": "천건, %",
+    "body": body(MIXED_UNIT_COLUMNS, [
+        ["2023", "1,322,590", "1,058,072", "80.0"],
+        ["2024", "1,481,307", "1,239,853", "83.7"],
+        ["2025", "1,565,834", "1,326,261", "84.7"],
+    ]),
+}
 DELTA_COLUMNS = ["지역 Region", "전년 대비 증감 Change"]
 DELTA_TABLE = {
     **TABLE,
@@ -323,6 +335,48 @@ class ChartSelectionTests(unittest.TestCase):
         self.assertEqual(rule_layer["encoding"]["y2"], {"datum": 0})
         self.assertEqual(point_layer["mark"]["type"], "point")
 
+    # 한 표에서 뽑은 지표라도 단위가 갈리면 축을 나눠야 작은 단위 지표가 바닥에 눌리지 않는다.
+    def test_mixed_unit_metrics_split_the_value_axis(self) -> None:
+        spec = build_plot_spec(
+            MIXED_UNIT_TABLE, "연도별 온라인 민원 이용건수와 이용률 추이", "auto",
+            None, None, None, None, "auto",
+            metrics=[
+                {"column": "온라인 이용건수 Online", "label": "이용건수"},
+                {"column": "이용률 Ratio", "label": "이용률"},
+            ],
+        )
+        vega_lite = build_vega_lite_spec(spec)
+
+        self.assertEqual(spec["chart"]["type"], "combo")
+        self.assertTrue(spec["chart"]["dual_axis"])
+        self.assertEqual(vega_lite["resolve"], {"scale": {"y": "independent"}})
+        first, second = vega_lite["layer"]
+        self.assertEqual(first["encoding"]["y"]["title"], "이용건수 (천건)")
+        self.assertEqual(first["encoding"]["y"]["axis"]["orient"], "left")
+        self.assertEqual(second["encoding"]["y"]["title"], "이용률 (%)")
+        self.assertEqual(second["encoding"]["y"]["axis"]["orient"], "right")
+
+    # 같은 단위 지표는 한 축에 모으고, 단위가 다른 지표만 반대쪽 축으로 보낸다.
+    def test_same_unit_metrics_share_one_axis_of_the_combo(self) -> None:
+        spec = build_plot_spec(
+            MIXED_UNIT_TABLE, "연도별 민원 이용건수와 이용률", "auto",
+            None, None, None, None, "auto",
+            metrics=[
+                {"column": "전체 이용건수 Total", "label": "전체"},
+                {"column": "온라인 이용건수 Online", "label": "온라인"},
+                {"column": "이용률 Ratio", "label": "이용률"},
+            ],
+        )
+        vega_lite = build_vega_lite_spec(spec)
+
+        self.assertEqual(spec["chart"]["type"], "combo")
+        counts, ratio = vega_lite["layer"]
+        self.assertEqual(counts["transform"][0]["filter"]["oneOf"], ["전체", "온라인"])
+        # 한 축을 나눠 쓰는 막대는 서로 겹치지 않게 옆으로 민다.
+        self.assertEqual(counts["layer"][0]["encoding"]["xOffset"]["sort"], ["전체", "온라인"])
+        self.assertEqual(counts["encoding"]["y"]["title"], "천건")
+        self.assertEqual(ratio["transform"][0]["filter"]["oneOf"], ["이용률"])
+
     # 행이 지역, 열이 연도인 표는 그대로는 순위를 매길 수 없어 범주별 시계열로 펴야 한다.
     def test_wide_year_table_is_pivoted_for_a_rank_query(self) -> None:
         spec = build_plot_spec(
@@ -378,7 +432,7 @@ class ChartSelectionTests(unittest.TestCase):
 
         self.assertEqual(spec["chart"]["type"], "combo")
         first, second = vega_lite["layer"]
-        self.assertEqual(first["transform"][0]["filter"], {"field": "series", "equal": "남자"})
+        self.assertEqual(first["transform"][0]["filter"], {"field": "series", "oneOf": ["남자"]})
         self.assertEqual(first["layer"][0]["mark"]["type"], "bar")
         self.assertEqual(second["layer"][0]["mark"]["type"], "line")
         # 축을 나누지 않았으므로 두 계열이 같은 값 축을 쓴다.

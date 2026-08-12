@@ -85,6 +85,12 @@ DAMAGE_BY_REGION = table(
     ["지역", "재산피해"],
     [["서 울 Seoul", "1,204"], ["부 산 Busan", "3,517"]],
 )
+# 단위 표기는 같은데 실제 수치가 천 배 가까이 큰 표(원본 단위 표기가 어긋난 경우).
+INFLATED_DAMAGE = table(
+    612, "지역별 자연재난 피해", "백만원",
+    ["지역", "재산피해"],
+    [["서 울 Seoul", "417,860,381"], ["부 산 Busan", "213,179,459"]],
+)
 
 
 # build_multi_source_spec 호출 인자를 간단히 구성한다.
@@ -157,7 +163,7 @@ class MultiSourceVisualizeTests(unittest.TestCase):
         self.assertTrue(spec["chart"]["dual_axis"])
         self.assertEqual(vega_lite["resolve"], {"scale": {"y": "independent"}})
         first, second = vega_lite["layer"]
-        self.assertEqual(first["transform"][0]["filter"], {"field": "series", "equal": "인구"})
+        self.assertEqual(first["transform"][0]["filter"], {"field": "series", "oneOf": ["인구"]})
         self.assertEqual(first["encoding"]["y"]["title"], "인구 (명)")
         self.assertEqual(first["encoding"]["y"]["axis"]["orient"], "left")
         self.assertEqual(second["encoding"]["y"]["title"], "채무 (억원)")
@@ -289,6 +295,19 @@ class MultiSourceVisualizeTests(unittest.TestCase):
         )
         # 축을 나누면 눈금이 갈려 높이를 그대로 견줄 수 없으므로, 대신 규모 차이를 알린다.
         self.assertTrue(any("규모 차이가 커서" in warning for warning in spec["warnings"]))
+
+    # 단위가 같아도 규모가 백 배를 넘으면 작은 쪽이 아예 보이지 않아 축을 나눠야 한다.
+    def test_same_unit_but_huge_scale_gap_splits_the_axis(self) -> None:
+        spec = build(
+            [(FUND, {"label": "적립액"}), (INFLATED_DAMAGE, {"label": "피해액"})],
+            query="지역별 재난관리기금 적립액과 자연재난 피해액을 한 그래프에",
+        )
+
+        self.assertEqual(spec["chart"]["type"], "combo")
+        self.assertTrue(spec["chart"]["dual_axis"])
+        # 눈금이 갈렸다는 사실과, 그 원인이 단위 표기일 수 있다는 점을 함께 알린다.
+        self.assertTrue(any("눈금이 서로 다르므로" in warning for warning in spec["warnings"]))
+        self.assertTrue(any("단위가 실제 수치와 맞는지" in warning for warning in spec["warnings"]))
 
     # 단위와 규모가 같은 연도 지표는 축을 나누지 않고 선그래프로 겹쳐야 한다.
     def test_same_unit_year_values_stay_a_line_chart(self) -> None:

@@ -216,30 +216,55 @@ def _combo_mark(kind: str) -> dict[str, Any]:
     return {"type": "line", "point": True, "strokeWidth": 2.5}
 
 
+# 계열을 단위별로 묶는다. 같은 단위 계열은 한 축을 함께 쓰고, 단위가 갈리면 축도 갈린다.
+def _unit_groups(series: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in series:
+        groups.setdefault(str(item.get("unit") or ""), []).append(item)
+    return list(groups.values())
+
+
+# 축 하나가 맡은 계열들의 제목을 만든다. 여러 계열이 한 축을 쓰면 단위만 적는다.
+def _group_axis_title(group: list[dict[str, Any]]) -> str:
+    if len(group) == 1:
+        return _series_axis_title(group[0])
+    return str(group[0].get("unit") or "값")
+
+
 # 성격이 다른 지표를 한 그래프에 놓을 때 계열마다 mark를 나눠 그린다.
 # 계열별 mark와 값 라벨을 한 겹으로 묶어야 라벨이 자기 계열의 축을 따라간다.
 def _combo_view(chart: dict[str, Any], x_is_year: bool) -> dict[str, Any]:
     series = chart["series"]
     labels = [item["label"] for item in series]
+    colors = {label: COMBO_COLORS[index % len(COMBO_COLORS)] for index, label in enumerate(labels)}
     dual = bool(chart.get("dual_axis"))
     shared_title = chart.get("y_title") or chart.get("unit") or "값"
+    # 축을 나눌 때는 같은 단위끼리 한 축에 모은다. 단위가 같은데도 규모 차이로 축을 나누는
+    # 경우가 있어, 단위로 갈리지 않으면 계열마다 축을 하나씩 준다.
+    groups = _unit_groups(series) if dual else []
+    if len(groups) < 2:
+        groups = [[item] for item in series]
 
     layers: list[dict[str, Any]] = []
-    for index, item in enumerate(series):
-        color = COMBO_COLORS[index % len(COMBO_COLORS)]
+    for index, group in enumerate(groups):
+        group_labels = [item["label"] for item in group]
         value_axis: dict[str, Any] = {
             "field": "value",
             "type": "quantitative",
-            "title": _series_axis_title(item) if dual else shared_title,
+            "title": _group_axis_title(group) if dual else shared_title,
         }
         if dual:
-            value_axis["axis"] = {
-                "orient": "left" if index == 0 else "right",
-                "titleColor": color,
-                "labelColor": color,
-            }
-        kind = item.get("mark") or ("bar" if index == 0 else "line")
-        marks: list[dict[str, Any]] = [{"mark": _combo_mark(kind)}]
+            axis: dict[str, Any] = {"orient": "left" if index == 0 else "right"}
+            if len(group) == 1:
+                # 축 제목과 mark 색을 맞춰 어느 축이 어느 계열인지 드러낸다.
+                axis["titleColor"] = axis["labelColor"] = colors[group_labels[0]]
+            value_axis["axis"] = axis
+        kind = group[0].get("mark") or ("bar" if index == 0 else "line")
+        mark_encoding: dict[str, Any] = {}
+        if kind == "bar" and len(group) > 1:
+            # 한 축을 나눠 쓰는 막대는 서로 겹치지 않게 옆으로 민다.
+            mark_encoding["xOffset"] = {"field": "series", "sort": group_labels}
+        marks: list[dict[str, Any]] = [{"mark": _combo_mark(kind), "encoding": mark_encoding}]
         if chart.get("value_labels", True):
             # 막대 값은 막대 위에, 겹쳐 그린 계열의 값은 점 오른쪽에 둔다.
             # 축을 나누면 두 계열이 같은 높이에 놓이기 쉬워 라벨을 같은 자리에 두면 서로 가린다.
@@ -250,12 +275,12 @@ def _combo_view(chart: dict[str, Any], x_is_year: bool) -> dict[str, Any]:
             marks.append({
                 "mark": {"type": "text", "fontSize": LABEL_FONT_SIZE, **placement},
                 "encoding": {
+                    **mark_encoding,
                     "text": {"field": "value", "type": "quantitative", "format": VALUE_FORMAT},
-                    "color": {"value": color},
                 },
             })
         layers.append({
-            "transform": [{"filter": {"field": "series", "equal": item["label"]}}],
+            "transform": [{"filter": {"field": "series", "oneOf": group_labels}}],
             "encoding": {
                 "y": value_axis,
                 "color": _series_color(labels, COMBO_COLORS),

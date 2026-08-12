@@ -237,6 +237,22 @@ def _correct_chart(
     return None
 
 
+# 단위가 둘로 갈리는 계열은 한 축에 그리면 작은 쪽이 축 바닥에 눌려 보이지 않는다.
+# 값 축을 좌우로 나눌 수 있는 것은 두 종류까지라, 단위가 셋 이상이면 나누지 못한다.
+def needs_axis_split(series: list[dict[str, Any]]) -> bool:
+    units = [str(item.get("unit") or "").strip() for item in series]
+    return len(series) >= 2 and all(units) and len(set(units)) == 2
+
+
+# 단위가 갈리는 계열은 계열마다 mark를 달리하는 콤보로 바꿔 값 축을 좌우로 나눈다.
+def apply_axis_split(chart_type: str, series: list[dict[str, Any]]) -> tuple[str, bool]:
+    if chart_type not in {"bar", "grouped_bar", "line", "area", "combo"}:
+        return chart_type, False
+    if not needs_axis_split(series):
+        return chart_type, False
+    return "combo", True
+
+
 # 표 메타데이터와 선택 범주로 차트 제목을 만든다.
 def _chart_title(table: dict, subtitle: str | None = None) -> str:
     title = table["title_ko"]
@@ -610,12 +626,15 @@ def _selection_plan_spec(
 
     columns = [metric["column"] for metric in validated]
     labels = _metric_labels(columns, [metric.get("label") for metric in validated])
-    category_profiles = [profile for profile in profiles if profile.get("is_categorical")]
+    # 범주 컬럼이 없으면 연도 컬럼을 축으로 쓴다. 축을 못 찾으면 모든 행이 한 칸에 겹쳐 쌓인다.
+    axis_profiles = [
+        profile for profile in profiles if profile.get("is_categorical")
+    ] or [profile for profile in profiles if profile["is_year"]]
     x_column = resolve_column(x, profiles)
     if x_column and not profile_map[x_column].get("is_categorical") and not profile_map[x_column].get("is_year"):
         warnings.append(f"선택 계획의 x축 컬럼 '{x_column}'은 범주형 또는 연도형이 아닙니다.")
         x_column = None
-    x_column = x_column or (category_profiles[0]["name"] if category_profiles else None)
+    x_column = x_column or (axis_profiles[0]["name"] if axis_profiles else None)
     x_profile = profile_map.get(x_column) if x_column else None
 
     records: list[dict[str, Any]] = []
@@ -668,6 +687,17 @@ def _selection_plan_spec(
     chart_unit = next(iter(units)) if len(units) == 1 else table.get("unit")
     if not records:
         warnings.append("선택한 행의 지표 값이 비어 있어 차트 데이터를 만들지 못했습니다.")
+
+    # 지표마다 단위가 달라도 한 축에 그리면 작은 단위 지표가 축 바닥에 눌린다.
+    chart_series = [
+        {"label": label, "unit": metric["unit"]}
+        for metric, label in zip(validated, labels)
+        if any(record.get("series") == label for record in records)
+    ]
+    if has_group:
+        selected_type, dual_axis = apply_axis_split(selected_type, chart_series)
+    else:
+        dual_axis = False
     chart = {
         "type": selected_type,
         "requested_type": chart_type,
@@ -680,12 +710,18 @@ def _selection_plan_spec(
             "선택한 원본 셀에 숫자 값이 없어 차트를 생성하지 않았습니다."
             if not records
             else "원본 표와 대조한 행·지표 선택 계획으로 차트 데이터를 구성했습니다."
+            + (
+                " 지표마다 단위가 달라 값 축을 좌우로 나누고 계열별로 mark를 달리했습니다."
+                if dual_axis else ""
+            )
         ),
         "title": _chart_title(table),
         "x": "metric" if single_row else x_column,
         "y": "value",
         "group": "metric" if has_group else None,
         "unit": chart_unit,
+        "series": chart_series if has_group else None,
+        "dual_axis": dual_axis,
     }
     return _build_response(
         table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
@@ -1223,12 +1259,27 @@ def build_plot_spec(
     records = limit_categories(records, selected_type, x_is_year, top_n, warnings)
     records = sort_records(records, x_is_year, selected_type, resolved_sort_order)
 
+    # 계열이 지표 컬럼이면 컬럼마다 단위가 다를 수 있어 값 축을 좌우로 나눠야 한다.
+    chart_series = [
+        {"label": label, "unit": metric_unit(str(label), table["unit"])}
+        for label in dict.fromkeys(
+            record["series"] for record in records if record.get("series")
+        )
+    ] if has_group and series_source == "metric" else []
+    dual_axis = False
+    if chart_series:
+        selected_type, dual_axis = apply_axis_split(selected_type, chart_series)
+        if dual_axis:
+            reason = f"{reason} 지표마다 단위가 달라 값 축을 좌우로 나누고 계열별로 mark를 달리했습니다."
+
     chart = {
         "type": selected_type,
         "requested_type": chart_type,
         "decision_source": decision_source,
         "reason": reason,
         "title": _chart_title(table),
+        "series": chart_series or None,
+        "dual_axis": dual_axis,
         "x": x_column,
         "y": y_source,
         "group": series_source if has_group else None,
