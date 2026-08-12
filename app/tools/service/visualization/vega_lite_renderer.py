@@ -7,6 +7,8 @@ VALUE_FORMAT = ",.2~f"
 LABEL_COLOR = "#344054"
 ON_MARK_LABEL_COLOR = "#111827"
 LABEL_FONT_SIZE = 11
+# 값 축을 좌우로 나눌 때 축 제목과 mark 색을 맞춰 어느 축이 어느 계열인지 드러낸다.
+DUAL_AXIS_COLORS = ("#4c78a8", "#f58518")
 # 막대 꼭대기의 합계는 층 값보다 눈에 먼저 들어오도록 굵게 쓴다.
 TOTAL_LABEL_FONT_WEIGHT = 700
 # 세로 막대는 글자 높이에 위아래 여백을 더한 만큼, 가로 막대는 글자 수만큼의 폭이 있어야
@@ -127,6 +129,128 @@ def _category_order(records: list[dict[str, Any]], sort_order: str | None) -> li
     ]
 
 
+# 여러 표를 겹쳐 그릴 때 계열마다 값 축을 따로 두는 뷰를 만든다.
+# 계열별 mark와 값 라벨을 한 겹으로 묶어야 라벨이 자기 계열의 축을 따라간다.
+def _dual_axis_view(chart: dict[str, Any], x_is_year: bool) -> dict[str, Any]:
+    series = chart["series"]
+    labels = [item["label"] for item in series]
+    # 요청이 선그래프가 아니면 첫 계열을 막대로 그려 어느 축을 읽어야 하는지 눈에 띄게 한다.
+    combo = chart.get("requested_type") not in {"line", "area"}
+    color_scale = {"domain": labels, "range": list(DUAL_AXIS_COLORS[: len(labels)])}
+
+    layers: list[dict[str, Any]] = []
+    for index, item in enumerate(series):
+        color = DUAL_AXIS_COLORS[index % len(DUAL_AXIS_COLORS)]
+        unit = item.get("unit")
+        value_axis = {
+            "field": "value",
+            "type": "quantitative",
+            "title": f"{item['label']} ({unit})" if unit else item["label"],
+            "axis": {
+                "orient": "left" if index == 0 else "right",
+                "titleColor": color,
+                "labelColor": color,
+            },
+        }
+        is_bar = combo and index == 0
+        mark = (
+            {"type": "bar", "cornerRadiusEnd": 3}
+            if is_bar
+            else {"type": "line", "point": True, "strokeWidth": 2.5}
+        )
+        marks: list[dict[str, Any]] = [{"mark": mark}]
+        if chart.get("value_labels", True):
+            marks.append({
+                "mark": {
+                    "type": "text",
+                    "fontSize": LABEL_FONT_SIZE,
+                    "dy": -8,
+                    "baseline": "bottom",
+                },
+                "encoding": {
+                    "text": {"field": "value", "type": "quantitative", "format": VALUE_FORMAT},
+                    "color": {"value": color},
+                },
+            })
+        layers.append({
+            "transform": [{"filter": {"field": "series", "equal": item["label"]}}],
+            "encoding": {
+                "y": value_axis,
+                "color": {
+                    "field": "series",
+                    "type": "nominal",
+                    "title": "",
+                    "scale": color_scale,
+                },
+            },
+            "layer": marks,
+        })
+
+    category_axis: dict[str, Any] = {
+        "field": "x",
+        "type": "ordinal" if x_is_year else "nominal",
+        "title": "",
+    }
+    if chart.get("category_order"):
+        category_axis["sort"] = chart["category_order"]
+    return {
+        "encoding": {"x": category_axis},
+        "layer": layers,
+        "resolve": {"scale": {"y": "independent"}},
+    }
+
+
+# 여러 표에서 짝지은 두 지표를 항목 이름과 함께 점으로 그린다.
+def _relation_scatter_view(chart: dict[str, Any]) -> dict[str, Any]:
+    x_title = chart.get("x_title") or chart.get("x") or ""
+    y_title = chart.get("y_title") or chart.get("unit") or "값"
+    return {
+        "encoding": {
+            "x": {
+                "field": "x",
+                "type": "quantitative",
+                "title": x_title,
+                "scale": {"zero": False},
+            },
+            "y": {
+                "field": "value",
+                "type": "quantitative",
+                "title": y_title,
+                "scale": {"zero": False},
+            },
+            "tooltip": [
+                {"field": "label", "type": "nominal", "title": ""},
+                {"field": "x", "type": "quantitative", "title": x_title, "format": VALUE_FORMAT},
+                {"field": "value", "type": "quantitative", "title": y_title, "format": VALUE_FORMAT},
+            ],
+        },
+        "layer": [
+            {
+                "mark": {
+                    "type": "point",
+                    "filled": True,
+                    "size": 90,
+                    "opacity": 0.85,
+                    "color": DUAL_AXIS_COLORS[0],
+                },
+            },
+            {
+                "mark": {
+                    "type": "text",
+                    "fontSize": LABEL_FONT_SIZE,
+                    "dy": -10,
+                    "baseline": "bottom",
+                },
+                "encoding": {
+                    # 겹치는 라벨은 서버가 비워 두므로 값은 tooltip으로 확인한다.
+                    "text": {"field": "point_label", "type": "nominal"},
+                    "color": {"value": LABEL_COLOR},
+                },
+            },
+        ],
+    }
+
+
 # 내부 차트 타입을 Vega-Lite mark/encoding 뷰로 변환한다.
 def _vega_view(
     chart: dict[str, Any],
@@ -136,6 +260,11 @@ def _vega_view(
 ) -> dict[str, Any]:
     ctype = chart["type"]
     unit = chart.get("unit") or "값"
+
+    if ctype == "scatter" and chart.get("point_label"):
+        return _relation_scatter_view(chart)
+    if chart.get("dual_axis") and chart.get("series"):
+        return _dual_axis_view(chart, x_is_year)
 
     if ctype == "donut":
         return {
@@ -223,10 +352,21 @@ def _vega_view(
     # 막대는 기본 세로형이고 orientation=horizontal일 때만 값·범주 축을 교환한다.
     horizontal = is_bar and chart.get("orientation") == "horizontal"
     x_type = "quantitative" if ctype == "scatter" else "ordinal" if x_is_year else "nominal"
-    category_axis: dict[str, Any] = {"field": "x", "type": x_type, "title": ""}
-    value_axis: dict[str, Any] = {"field": "value", "type": "quantitative", "title": unit}
+    category_axis: dict[str, Any] = {
+        "field": "x",
+        "type": x_type,
+        "title": chart.get("x_title") or "",
+    }
+    value_axis: dict[str, Any] = {
+        "field": "value",
+        "type": "quantitative",
+        "title": chart.get("y_title") or unit,
+    }
     sort_order = chart.get("sort_order")
-    if is_bar and sort_order in {"ascending", "descending"}:
+    if chart.get("category_order"):
+        # 서버가 축 순서를 정한 차트는 그 순서를 그대로 domain으로 넘긴다.
+        category_axis["sort"] = chart["category_order"]
+    elif is_bar and sort_order in {"ascending", "descending"}:
         # 누적 막대는 라벨 레이어마다 데이터셋이 갈려 op 기반 정렬이 무시되므로 미리 계산한 순서를 쓴다.
         category_axis["sort"] = category_order or {
             "field": "value",
@@ -239,8 +379,14 @@ def _vega_view(
     )
     if has_series:
         encoding["color"] = {"field": "series", "type": "nominal", "title": ""}
+        offset: dict[str, Any] = {"field": "series"}
+        # 여러 표를 겹칠 때는 요청한 표 순서가 곧 범례·색 순서다.
+        series_order = [item["label"] for item in chart.get("series") or []]
+        if series_order:
+            encoding["color"]["scale"] = {"domain": series_order}
+            offset["sort"] = series_order
         if ctype == "grouped_bar":
-            encoding["yOffset" if horizontal else "xOffset"] = {"field": "series"}
+            encoding["yOffset" if horizontal else "xOffset"] = offset
     if ctype == "stacked_bar" and has_series:
         # 레이어마다 쌓는 순서가 갈리면 라벨이 다른 층 위에 찍히므로 순서를 명시한다.
         # 합계 레이어는 계열 구분 없이 집계해야 하므로 순서를 물려받지 않는다.
@@ -264,19 +410,16 @@ def _vega_view(
         label_mark.update({"dy": -8, "baseline": "bottom"})
     else:
         label_mark["dy"] = -8
-    return {
-        "encoding": encoding,
-        "layer": [
-            {"mark": mark_map.get(ctype, "bar")},
-            {
-                "mark": label_mark,
-                "encoding": {
-                    "text": {"field": "value", "type": "quantitative", "format": ",.2~f"},
-                    "color": {"value": "#344054"},
-                },
+    layers: list[dict[str, Any]] = [{"mark": mark_map.get(ctype, "bar")}]
+    if chart.get("value_labels", True):
+        layers.append({
+            "mark": label_mark,
+            "encoding": {
+                "text": {"field": "value", "type": "quantitative", "format": ",.2~f"},
+                "color": {"value": "#344054"},
             },
-        ],
-    }
+        })
+    return {"encoding": encoding, "layer": layers}
 
 
 # 클라이언트가 직접 렌더링할 수 있는 표준 Vega-Lite spec을 만든다.
@@ -305,6 +448,9 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
             "value": record.get("value"),
             "series": record.get("series"),
         }
+        for field in ("label", "point_label"):
+            if record.get(field) is not None:
+                value[field] = record[field]
         if is_stacked:
             value["_stack_order"] = stack_order.get(record.get("series"), 0)
         if is_donut:

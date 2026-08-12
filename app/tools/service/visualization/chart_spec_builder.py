@@ -88,7 +88,7 @@ def _limit_series(records: list[dict[str, Any]], warnings: list[str]) -> list[di
 
 
 # 너무 많은 범주는 값 합계 기준 상위 범주만 남긴다.
-def _limit_categories(
+def limit_categories(
     records: list[dict[str, Any]],
     chart_type: str,
     x_is_year: bool,
@@ -139,7 +139,7 @@ def _chart_title(table: dict, subtitle: str | None = None) -> str:
 
 
 # LLM이 정한 표시 제목이 있으면 서버 자동 제목 대신 사용한다.
-def _apply_display_title(spec: dict[str, Any], title: str | None) -> dict[str, Any]:
+def apply_display_title(spec: dict[str, Any], title: str | None) -> dict[str, Any]:
     display_title = " ".join((title or "").split())
     if not display_title:
         return spec
@@ -250,7 +250,7 @@ def _drop_total_slices(records: list[dict[str, Any]], chart_type: str) -> list[d
 
 
 # 사용자가 질의에 값 기준 정렬 방향을 직접 적은 경우 도구 인자 누락을 보완한다.
-def _resolve_sort_order(
+def resolve_sort_order(
     sort_order: str,
     query: str | None,
     warnings: list[str],
@@ -282,7 +282,7 @@ def _resolve_sort_order(
 
 
 # 시간 축은 시간순으로, 요청된 값 정렬은 범주별 값 합계 순으로 레코드를 정렬한다.
-def _sort_records(
+def sort_records(
     records: list[dict[str, Any]],
     x_is_year: bool,
     chart_type: str,
@@ -306,6 +306,30 @@ def _sort_records(
         }
         return sorted(records, key=lambda record: category_order[record.get("x")])
     return records
+
+
+# 응답에 실을 통계표 출처 정보를 만든다.
+def stat_block(table: dict) -> dict[str, Any]:
+    return {
+        "stat_id": table["stat_id"],
+        "ref_id": table["ref_id"],
+        "publication_year": table["publication_year"],
+        "chapter_no": table.get("chapter_no"),
+        "section_no": table.get("section_no"),
+        "level3_no": table.get("level3_no"),
+        "level4_no": table.get("level4_no"),
+        "chapter": table.get("chapter"),
+        "section": table.get("section"),
+        "level3_title": table.get("level3_title"),
+        "level4_title": table.get("level4_title"),
+        "title_ko": table["title_ko"],
+        "title_en": table["title_en"],
+        "unit": table["unit"],
+        "base_date": table["base_date"],
+        "page_start": table.get("page_start"),
+        "table_seq": table["table_seq"],
+        "caption": table["caption"],
+    }
 
 
 # 모든 변환 경로가 공유하는 structuredContent 응답을 조립한다.
@@ -349,26 +373,7 @@ def _build_response(
         "version": "0.1",
         "library": "vega-lite",
         "renderer": "client",
-        "stat": {
-            "stat_id": table["stat_id"],
-            "ref_id": table["ref_id"],
-            "publication_year": table["publication_year"],
-            "chapter_no": table.get("chapter_no"),
-            "section_no": table.get("section_no"),
-            "level3_no": table.get("level3_no"),
-            "level4_no": table.get("level4_no"),
-            "chapter": table.get("chapter"),
-            "section": table.get("section"),
-            "level3_title": table.get("level3_title"),
-            "level4_title": table.get("level4_title"),
-            "title_ko": table["title_ko"],
-            "title_en": table["title_en"],
-            "unit": table["unit"],
-            "base_date": table["base_date"],
-            "page_start": table.get("page_start"),
-            "table_seq": table["table_seq"],
-            "caption": table["caption"],
-        },
+        "stat": stat_block(table),
         "request": {
             "query": query,
             "chart_type": chart_type,
@@ -395,7 +400,7 @@ def _build_response(
 
 
 # 복합 단위 표에서 선택한 지표 헤더를 기준으로 표시 단위를 좁힌다.
-def _metric_unit(column: str, table_unit: str | None) -> str:
+def metric_unit(column: str, table_unit: str | None) -> str:
     lowered = column.lower()
     if "비율" in column or "percentage" in lowered or "ratio" in lowered or "%" in column:
         return "%"
@@ -465,7 +470,7 @@ def _selection_plan_spec(
             validation_errors.append(f"선택 지표 컬럼 '{column}'이 중복되었습니다.")
             continue
 
-        inferred_unit = _metric_unit(column, table.get("unit"))
+        inferred_unit = metric_unit(column, table.get("unit"))
         valid_units = {part.strip() for part in str(table.get("unit") or "").split(",") if part.strip()}
         valid_units.add(inferred_unit)
         if requested_unit and requested_unit not in valid_units:
@@ -548,8 +553,8 @@ def _selection_plan_spec(
     )
     records = _drop_total_slices(records, selected_type)
     records = _limit_series(records, warnings)
-    records = _limit_categories(records, selected_type, bool(x_profile and x_profile["is_year"]), top_n, warnings)
-    records = _sort_records(
+    records = limit_categories(records, selected_type, bool(x_profile and x_profile["is_year"]), top_n, warnings)
+    records = sort_records(
         records,
         bool(x_profile and x_profile["is_year"]),
         selected_type,
@@ -816,8 +821,8 @@ def _wide_row_category_spec(
 
     selected_type = "donut" if requested_type == "donut" else "bar" if requested_type == "auto" else requested_type
     records = _drop_total_slices(records, selected_type)
-    records = _limit_categories(records, selected_type, False, top_n, warnings)
-    records = _sort_records(
+    records = limit_categories(records, selected_type, False, top_n, warnings)
+    records = sort_records(
         records,
         False,
         selected_type,
@@ -887,7 +892,7 @@ def build_plot_spec(
     sort_order: SortOrder = "auto",
 ) -> dict[str, Any]:
     columns, all_source_rows, warnings = body_to_rows(table["body"])
-    resolved_sort_order = _resolve_sort_order(sort_order, query, warnings)
+    resolved_sort_order = resolve_sort_order(sort_order, query, warnings)
     profiles = profile_columns(columns, all_source_rows)
     profile_map = profile_by_name(profiles)
     target_year = requested_year(year, query)
@@ -918,7 +923,7 @@ def build_plot_spec(
     }
 
     if metrics is not None:
-        return _apply_display_title(
+        return apply_display_title(
             _selection_plan_spec(
                 table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles,
                 metrics, warnings, target_year, request_hints,
@@ -931,14 +936,14 @@ def build_plot_spec(
         target_year, request_hints,
     )
     if wide_spec is not None:
-        return _apply_display_title(wide_spec, title)
+        return apply_display_title(wide_spec, title)
 
     wide_category_spec = _wide_row_category_spec(
         table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles, warnings,
         target_year, column_family_name, request_hints,
     )
     if wide_category_spec is not None:
-        return _apply_display_title(wide_category_spec, title)
+        return apply_display_title(wide_category_spec, title)
 
     family_validation_failed = bool(
         column_family_name and not column_family(column_family_name, profiles)
@@ -1010,8 +1015,8 @@ def build_plot_spec(
     records = _drop_total_slices(records, selected_type)
 
     x_is_year = bool(x_profile and x_profile["is_year"])
-    records = _limit_categories(records, selected_type, x_is_year, top_n, warnings)
-    records = _sort_records(records, x_is_year, selected_type, resolved_sort_order)
+    records = limit_categories(records, selected_type, x_is_year, top_n, warnings)
+    records = sort_records(records, x_is_year, selected_type, resolved_sort_order)
 
     chart = {
         "type": selected_type,
@@ -1024,7 +1029,7 @@ def build_plot_spec(
         "group": series_source if has_group else None,
         "unit": table["unit"],
     }
-    return _apply_display_title(
+    return apply_display_title(
         _build_response(
             table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
             records, source_rows, warnings,
