@@ -26,6 +26,7 @@ from .table_interpreter import (
     parse_number,
     parse_year,
     pick_column_from_query,
+    pick_focus_row,
     profile_by_name,
     profile_columns,
     resolve_column,
@@ -37,8 +38,6 @@ from .table_interpreter import (
 
 MAX_SOURCES = 5
 MAX_JOINED_ROWS = 60
-# 값 라벨이 이보다 많아지면 막대·점 위에서 서로 겹쳐 읽을 수 없다.
-MAX_VALUE_LABELS = 24
 # 두 계열의 크기 차이가 이보다 크면 한 축에 그렸을 때 작은 계열이 보이지 않는다.
 DUAL_AXIS_SCALE_RATIO = 20
 # 단위가 같은 계열은 되도록 한 축에 두지만, 이보다 벌어지면 작은 쪽이 선 한 줄로 뭉개진다.
@@ -158,11 +157,66 @@ def _hint_text(*values: str | None) -> str:
     return " ".join(value for value in values if value)
 
 
+# 행이 범주, 열이 연도인 표에서 다른 표와 맞댈 기준 행 하나를 고른다.
+def _wide_year_focus_row(
+    rows: list[dict[str, str]],
+    category_column: str,
+    query: str | None,
+) -> dict[str, str] | None:
+    if len(rows) == 1:
+        return rows[0]
+    matched = pick_focus_row(rows, category_column, query, None, None, None)
+    if matched is not None:
+        return matched
+    # 어느 행을 볼지 질의에 없으면 표 전체를 대표하는 합계 행으로 맞댄다.
+    totals = [row for row in rows if is_total_label(row.get(category_column))]
+    return totals[0] if len(totals) == 1 else None
+
+
+# 열이 연도인 표를 연도-값 두 컬럼짜리 표로 편다. 다른 표에 연도 컬럼이 있어도 이 표에는
+# 맞댈 연도 컬럼이 없어, 펴 두지 않으면 두 표를 이을 기준 자체가 생기지 않는다.
+def _flatten_wide_year_table(
+    columns: list[str],
+    rows: list[dict[str, str]],
+    profiles: list[dict[str, Any]],
+    query: str | None,
+    label: str,
+    warnings: list[str],
+) -> tuple[list[str], list[dict[str, str]], list[dict[str, Any]]] | None:
+    if any(profile["is_year"] for profile in profiles):
+        return None
+    year_columns = year_value_columns(profiles)
+    if len(year_columns) < 2:
+        return None
+    category_column = next(
+        (profile["name"] for profile in profiles if profile.get("is_categorical")), None,
+    )
+    if category_column is None:
+        return None
+
+    focus = _wide_year_focus_row(rows, category_column, query)
+    if focus is None:
+        return None
+
+    focus_label = display_category_label(focus.get(category_column)) or "값"
+    flattened = [
+        {"연도": str(year), focus_label: focus.get(column, "")}
+        for year, column in year_columns
+    ]
+    if len(rows) > 1:
+        warnings.append(
+            f"[{label}] 열이 연도인 표라 '{focus_label}' 행을 연도별 값으로 펴서 맞췄습니다."
+        )
+    flat_columns = ["연도", focus_label]
+    return flat_columns, flattened, profile_columns(flat_columns, flattened)
+
+
 # 표 본문을 읽고 연도·필터 조건을 적용한 원본 행을 준비한다.
 def _prepare_source(
     index: int,
     source: dict[str, Any],
     default_year: int | None,
+    query: str | None,
     warnings: list[str],
 ) -> dict[str, Any]:
     table = source["table"]
@@ -183,6 +237,11 @@ def _prepare_source(
     if filters:
         rows, applied_filters, filter_errors = apply_exact_filters(rows, profiles, filters)
         warnings.extend(f"[{label}] {error}" for error in filter_errors)
+
+    # 행을 좁힌 뒤에 펴야, 사용자가 고른 행이 그대로 기준 행이 된다.
+    flattened = _flatten_wide_year_table(columns, rows, profiles, query, label, warnings)
+    if flattened is not None:
+        columns, rows, profiles = flattened
 
     return {
         "index": index,
@@ -583,7 +642,7 @@ def build_multi_source_spec(
     warnings: list[str] = []
     resolved_sort_order = resolve_sort_order(sort_order, query, warnings)
     prepared = [
-        _prepare_source(index, source, year, warnings)
+        _prepare_source(index, source, year, query, warnings)
         for index, source in enumerate(sources)
     ]
     request: dict[str, Any] = {
@@ -755,8 +814,6 @@ def build_multi_source_spec(
             if key_is_year or selected_type == "scatter"
             else list(dict.fromkeys(record["x"] for record in records))
         ),
-        # 항목이 많으면 값 라벨이 서로 겹쳐 읽을 수 없으므로 tooltip에만 남긴다.
-        "value_labels": len(records) <= MAX_VALUE_LABELS,
     }
     if selected_type == "scatter":
         chart["point_label"] = True

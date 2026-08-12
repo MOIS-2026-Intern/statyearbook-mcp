@@ -573,12 +573,14 @@ def _selection_plan_spec(
     if not metrics:
         validation_errors.append("metrics에는 하나 이상의 숫자 컬럼을 지정해야 합니다.")
     for metric in metrics:
-        column = str(metric.get("column") or "").strip()
+        requested_column = str(metric.get("column") or "").strip()
         label = str(metric.get("label") or "").strip()
         requested_unit = str(metric.get("unit") or "").strip()
+        # 컬럼명은 영문 병기와 띄어쓰기가 섞여 있어 표기가 조금 달라도 같은 컬럼으로 본다.
+        column = resolve_column(requested_column, profiles) or requested_column
         profile = profile_map.get(column)
         if profile is None:
-            validation_errors.append(f"선택 지표 컬럼 '{column}'이 원본 표에 없습니다.")
+            validation_errors.append(f"선택 지표 컬럼 '{requested_column}'이 원본 표에 없습니다.")
             continue
         if not profile["is_numeric"]:
             validation_errors.append(f"선택 지표 컬럼 '{column}'은 숫자형이 아닙니다.")
@@ -602,8 +604,9 @@ def _selection_plan_spec(
             "unit": requested_unit or inferred_unit,
         })
 
-    if validation_errors or not source_rows:
-        warnings.extend(validation_errors)
+    # 지표 일부만 확인돼도 확인된 지표로 그린다. 확인하지 못한 지표는 경고로만 알리고 채우지 않는다.
+    warnings.extend(validation_errors)
+    if not validated or not source_rows:
         if not source_rows and not validation_errors:
             warnings.append("선택 조건에 맞는 원본 표 행이 없습니다.")
         chart = {
@@ -736,6 +739,101 @@ def _selection_plan_spec(
             "records": records,
             "provenance": provenance,
             "unit": chart_unit,
+        },
+    )
+
+
+# 행이 지표, 열이 연도인 표에서 사용자가 고른 행들을 연도 축 시계열로 편다.
+# 이런 표에서 연도는 계열이 아니라 x축이므로, 고른 행 하나하나가 계열이 된다.
+# 행을 직접 고른 요청에만 적용해, 표 전체를 그리는 기존 경로는 건드리지 않는다.
+def _wide_year_selected_rows_spec(
+    table: dict,
+    query: str | None,
+    chart_type: str,
+    x: str | None,
+    y: str | None,
+    group: str | None,
+    top_n: int | None,
+    total_mode: TotalMode,
+    source_rows: list[dict[str, str]],
+    profiles: list[dict[str, Any]],
+    metrics: list[dict[str, str | None]] | None,
+    warnings: list[str],
+    request_hints: dict[str, Any],
+) -> dict[str, Any] | None:
+    if len(source_rows) < 2:
+        return None
+    year_columns = year_value_columns(profiles)
+    if len(year_columns) < 2:
+        return None
+
+    if metrics is not None:
+        # 연도 컬럼을 지표로 받아 왔다면 그건 계열이 아니라 x축이다. 연도가 아닌 컬럼이
+        # 하나라도 섞여 있으면 지표를 고른 요청이므로 이 경로를 쓰지 않는다.
+        requested = [
+            resolve_column(str(metric.get("column") or ""), profiles) for metric in metrics
+        ]
+        year_columns = [item for item in year_columns if item[1] in set(requested)]
+        if len(year_columns) < 2 or len(year_columns) != len(requested):
+            return None
+
+    category_column = (resolve_column(x, profiles) if x else None) or next(
+        (profile["name"] for profile in profiles if profile.get("is_categorical", False)), None,
+    )
+    if category_column is None:
+        return None
+
+    records: list[dict[str, Any]] = []
+    labels: list[str] = []
+    for row in source_rows:
+        label = display_category_label(row.get(category_column))
+        for year, column in year_columns:
+            value = parse_number(row.get(column))
+            if value is not None:
+                records.append({"x": year, "value": value, "series": label})
+                if label not in labels:
+                    labels.append(label)
+    if len(labels) < 2:
+        return None
+
+    records = _limit_series(records, warnings)
+    year_profile = {"name": "year", "is_year": True, "is_numeric": False, "is_categorical": False}
+    selected_type, decision_source, reason = _select_chart(
+        chart_type, query, records, year_profile, True, warnings,
+    )
+    records = sort_records(records, True, selected_type, None)
+
+    # '수'와 '비율'처럼 행마다 단위가 다르면 한 축에 겹쳐 그릴 수 없다.
+    chart_series = [
+        {"label": label, "unit": metric_unit(label, table["unit"])}
+        for label in labels
+        if any(record.get("series") == label for record in records)
+    ]
+    selected_type, dual_axis = apply_axis_split(selected_type, chart_series)
+    if dual_axis:
+        reason = f"{reason} 행마다 단위가 달라 값 축을 좌우로 나누고 계열별로 mark를 달리했습니다."
+
+    chart = {
+        "type": selected_type,
+        "requested_type": chart_type,
+        "decision_source": decision_source,
+        "reason": f"행이 지표, 열이 연도인 표에서 고른 행을 연도별 계열로 폈습니다. {reason}",
+        "title": _chart_title(table),
+        "x": "year",
+        "y": "value",
+        "group": category_column,
+        "series": chart_series,
+        "dual_axis": dual_axis,
+        "unit": table["unit"],
+    }
+    return _build_response(
+        table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
+        records, source_rows, warnings,
+        request_hints=request_hints,
+        transform={
+            "type": "wide_year_selected_rows",
+            "category_column": category_column,
+            "year_columns": [{"year": year, "column": column} for year, column in year_columns],
         },
     )
 
@@ -1156,6 +1254,16 @@ def build_plot_spec(
         "selection": selection,
     }
 
+    # 행을 직접 골라 온 요청은 연도 축 시계열일 수 있다. 이 판정을 metrics보다 먼저 해야
+    # 연도 컬럼을 지표로 받았을 때 축이 뒤집히지 않는다.
+    if filters is not None and source_rows:
+        selected_rows_spec = _wide_year_selected_rows_spec(
+            table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles,
+            metrics, warnings, request_hints,
+        )
+        if selected_rows_spec is not None:
+            return apply_display_title(selected_rows_spec, title)
+
     if metrics is not None:
         return apply_display_title(
             _selection_plan_spec(
@@ -1186,19 +1294,20 @@ def build_plot_spec(
     if wide_category_spec is not None:
         return apply_display_title(wide_category_spec, title)
 
-    family_validation_failed = bool(
-        column_family_name and not column_family(column_family_name, profiles)
-    )
+    family_columns = column_family(column_family_name, profiles)
+    family_validation_failed = bool(column_family_name and not family_columns)
     if family_validation_failed:
         source_rows = []
 
     x_column = resolve_column(x, profiles) or pick_x_column(profiles, query)
     group_column = resolve_column(group, profiles)
 
+    # 상위 헤더를 지정했으면 그 아래 컬럼만 그린다. 지정하지 않으면 숫자 컬럼을 모두 쓴다.
     numeric_columns = [
         profile["name"]
         for profile in profiles
         if profile["is_numeric"] and profile["name"] not in {x_column, group_column}
+        and (not family_columns or profile["name"] in family_columns)
     ]
     y_column = resolve_column(y, profiles)
     if y_column and not profile_map[y_column]["is_numeric"]:
@@ -1224,6 +1333,10 @@ def build_plot_spec(
             })
     elif numeric_columns:
         y_source = "value"
+        # 상위 헤더로 좁힌 컬럼은 헤더가 이미 제목에 드러나므로 하위 항목명만 라벨로 쓴다.
+        def column_label(column: str) -> str:
+            return family_category_label(column) if family_columns else column
+
         if len(source_rows) == 1 and not group_column:
             x_column = "metric"
             x_profile = None
@@ -1232,7 +1345,7 @@ def build_plot_spec(
             for column in numeric_columns:
                 value = parse_number(row.get(column))
                 if value is not None:
-                    records.append({"x": column, "value": value, "series": None})
+                    records.append({"x": column_label(column), "value": value, "series": None})
         else:
             series_source = "metric" if not group_column else group_column
             for row in source_rows:
@@ -1240,7 +1353,7 @@ def build_plot_spec(
                 for column in numeric_columns:
                     value = parse_number(row.get(column))
                     if value is not None:
-                        series = row.get(group_column) if group_column else column
+                        series = row.get(group_column) if group_column else column_label(column)
                         records.append({"x": x_value, "value": value, "series": series})
 
     # 계열 제한 → 차트 선택 → 공통 필터 순서는 기존 응답을 보존한다.
