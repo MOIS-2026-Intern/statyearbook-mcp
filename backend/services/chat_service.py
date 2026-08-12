@@ -330,7 +330,16 @@ class ChatService:
         finally:
             pipeline_metrics["model_ms"] += _elapsed_ms(model_started)
             pipeline_metrics["model_calls"] += 1
-        return final_turn.text
+
+        if final_turn.text.strip():
+            return final_turn.text
+        # tool_choice를 받지 못하는 공급자에서는 마지막 턴이 답변 대신 또 도구를 부를 수 있다.
+        # 그대로 두면 사용자에게 빈 답이 나가므로 무엇이 막혔는지 남기고 안내로 갈음한다.
+        logger.warning(
+            "event=chat.final_turn outcome=no_text tools=%s",
+            ",".join(call.name or "unknown" for call in final_turn.tool_calls) or "none",
+        )
+        return _tool_round_limit_message()
 
     # 진행 콜백 오류가 실제 채팅 실행에 영향을 주지 않도록 격리해 전달한다.
     @staticmethod
@@ -644,6 +653,15 @@ def _search_tables_text(structured: dict[str, Any]) -> str:
             "없으므로, 수치가 필요하면 has_tables가 true인 다른 통계표를 확인하세요."
         )
     return "통계표 원문과 메타데이터를 조회했습니다."
+
+
+# 도구 호출 한도까지 갔는데도 본문이 오지 않았을 때 남길 종료 문구를 만든다.
+def _tool_round_limit_message() -> str:
+    return (
+        "자료는 확인했지만 답변 본문을 받지 못했습니다. 한 번의 질문에서 사용할 수 있는 "
+        "도구 호출 횟수를 모두 써서 정리 단계까지 가지 못했습니다. 질문을 조금 더 좁혀 "
+        "다시 물어보면 답변을 받을 수 있습니다."
+    )
 
 
 # 실패한 도구 이름과 반환된 원인을 사용자에게 설명하는 종료 문구를 만든다.

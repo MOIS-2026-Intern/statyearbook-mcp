@@ -43,6 +43,11 @@ _TERMINAL_STREAM_EVENTS = frozenset(
 # 값을 키우면 지연과 비용이 그만큼 늘어난다.
 _EMPTY_OUTPUT_RETRIES = 1
 
+# 게이트웨이가 모델별 어댑터로 요청을 옮기다 보면 공급자가 표현하지 못하는 파라미터가 있다.
+# 이 값들은 없어도 답변을 만들 수 있으므로, 거부당하면 빼고 다시 보낸다. 나머지 파라미터는
+# 빼면 요청의 뜻이 달라지므로 그대로 오류를 올린다.
+_DROPPABLE_PARAMS = frozenset({"tool_choice", "parallel_tool_calls", "reasoning"})
+
 
 @dataclass(frozen=True)
 class OpenAIContinuationState:
@@ -56,6 +61,8 @@ class OpenAICompatibleGateway:
         self._client = client
         # 공급자나 모델이 스트리밍을 거부하면 이후 요청은 곧바로 비스트리밍으로 보낸다.
         self._streaming_supported = settings.model_streaming
+        # 공급자가 표현하지 못한 파라미터는 한 번 확인한 뒤 다음 요청부터 아예 싣지 않는다.
+        self._unsupported_params: set[str] = set()
 
     # 여러 채팅 요청이 재사용한 HTTP 클라이언트의 연결 풀을 정리한다.
     async def close(self) -> None:
@@ -84,10 +91,12 @@ class OpenAICompatibleGateway:
             kwargs["tool_choice"] = tool_choice
         if reasoning is not None:
             kwargs["reasoning"] = reasoning
+        for name in self._unsupported_params:
+            kwargs.pop(name, None)
 
         started = perf_counter()
         try:
-            response, streamed = await self._request(kwargs, on_text_delta)
+            response, streamed = await self._send(kwargs, on_text_delta)
         except Exception as exc:
             logger.exception(
                 "event=model.error provider=%s model=%s duration_ms=%s error_type=%s",
@@ -131,6 +140,29 @@ class OpenAICompatibleGateway:
             )
         return response
 
+    # 공급자가 표현하지 못한 선택 파라미터를 하나씩 덜어내며 요청을 성사시킨다.
+    async def _send(
+        self,
+        kwargs: dict[str, Any],
+        on_text_delta: TextDeltaCallback | None,
+    ) -> tuple[Any, bool]:
+        while True:
+            try:
+                return await self._request(kwargs, on_text_delta)
+            except Exception as exc:
+                param = _unsupported_parameter(exc)
+                if param is None or param not in kwargs:
+                    raise
+                self._unsupported_params.add(param)
+                kwargs.pop(param)
+                logger.warning(
+                    "event=model.parameter_unsupported provider=%s model=%s param=%s error=%s",
+                    self._settings.model_provider,
+                    self._settings.chat_model,
+                    param,
+                    truncate_text(str(exc), 300),
+                )
+
     # 스트리밍을 먼저 시도하고 공급자가 거부하면 같은 요청을 비스트리밍으로 되돌린다.
     async def _request(
         self,
@@ -141,6 +173,10 @@ class OpenAICompatibleGateway:
             try:
                 return await self._stream_response(kwargs, on_text_delta), True
             except _StreamingUnsupportedError as exc:
+                # 파라미터를 못 옮겨 실패한 요청은 스트리밍 문제가 아니므로, 그 이유로
+                # 이후 요청의 스트리밍까지 끄면 안 된다.
+                if _unsupported_parameter(exc.cause):
+                    raise exc.cause from exc
                 # 조각을 하나도 내보내기 전에 실패했으므로 이번 요청부터 되돌릴 수 있다.
                 self._streaming_supported = False
                 logger.warning(
@@ -258,6 +294,31 @@ class OpenAICompatibleGateway:
             tool_calls=tool_calls,
             state=OpenAIContinuationState(input_items=input_items),
         )
+
+
+# 오류 본문에서 공급자가 지목한 파라미터 이름을 찾는다. 게이트웨이마다 error를 한 겹 더
+# 감싸기도 하므로 두 형태를 모두 본다.
+def _error_param(body: Any) -> str | None:
+    if not isinstance(body, dict):
+        return None
+    detail = body.get("error")
+    if isinstance(detail, dict):
+        return _error_param(detail)
+    param = body.get("param")
+    return param if isinstance(param, str) else None
+
+
+# 요청이 파라미터를 옮기지 못해 막힌 것인지 보고, 빼도 되는 파라미터면 그 이름을 준다.
+def _unsupported_parameter(exc: BaseException) -> str | None:
+    if getattr(exc, "status_code", None) not in {400, 422}:
+        return None
+
+    param = _error_param(getattr(exc, "body", None)) or getattr(exc, "param", None)
+    if isinstance(param, str):
+        # 공급자가 지목한 파라미터가 있으면 그 값만 믿는다.
+        return param if param in _DROPPABLE_PARAMS else None
+    message = str(exc)
+    return next((name for name in _DROPPABLE_PARAMS if f"'{name}'" in message), None)
 
 
 # 설정에 고정된 추론 강도를 Responses API reasoning 필드로 만든다. 값이 비어 있으면

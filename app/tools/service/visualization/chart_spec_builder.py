@@ -37,28 +37,45 @@ ChartType = Literal[
     "bar",
     "grouped_bar",
     "stacked_bar",
+    "stacked_bar_100",
+    "lollipop",
+    "diverging_bar",
+    "waterfall",
     "line",
     "area",
+    "slope",
+    "bump",
+    "combo",
     "scatter",
+    "dumbbell",
     "heatmap",
     "donut",
     "table",
 ]
 SortOrder = Literal["auto", "ascending", "descending"]
 
-VALID_CHART_TYPES = {
-    "auto",
+VALID_CHART_TYPES = set(ChartType.__args__)
+# 시간 축을 따라 읽는 차트는 값이 아니라 시점 순서로 늘어놓아야 한다.
+TIME_ORDERED_TYPES = {"line", "area", "scatter", "slope", "bump"}
+# 값 기준 정렬을 적용할 수 있는 범주형 차트다. 폭포 차트는 순서 자체가 뜻을 가져 제외한다.
+VALUE_SORTED_TYPES = {
     "bar",
     "grouped_bar",
     "stacked_bar",
-    "line",
-    "area",
-    "scatter",
-    "heatmap",
+    "stacked_bar_100",
+    "lollipop",
+    "diverging_bar",
+    "dumbbell",
+    "combo",
     "donut",
-    "table",
 }
+# 부분이 모여 전체를 이루는 차트는 합계 범주를 함께 그리면 두 번 세게 된다.
+PART_OF_WHOLE_TYPES = {"donut", "stacked_bar_100", "waterfall"}
+# 값의 수준이 아니라 값이 얼마나 움직였는지를 그리는 차트다.
+CHANGE_CHART_TYPES = {"diverging_bar", "waterfall"}
 SHARE_WORDS = ("비중", "구성", "구성비", "점유", "점유율", "분포", "share", "ratio", "composition")
+RANK_WORDS = ("순위", "랭킹", "등수", "rank")
+GAP_WORDS = ("격차", "차이", "간극", "gap", "difference")
 MAX_SERIES = 12
 _MISSING = object()
 CATEGORY_ALIASES = {"category", "classification", "label", "name", "구분", "분류"}
@@ -88,14 +105,14 @@ def _limit_series(records: list[dict[str, Any]], warnings: list[str]) -> list[di
 
 
 # 너무 많은 범주는 값 합계 기준 상위 범주만 남긴다.
-def _limit_categories(
+def limit_categories(
     records: list[dict[str, Any]],
     chart_type: str,
     x_is_year: bool,
     top_n: int | None,
     warnings: list[str],
 ) -> list[dict[str, Any]]:
-    if x_is_year or chart_type in {"line", "area", "scatter", "table"}:
+    if x_is_year or chart_type in TIME_ORDERED_TYPES or chart_type == "table":
         return records
     if top_n is not None and top_n <= 0:
         return records
@@ -110,22 +127,130 @@ def _limit_categories(
     if len(categories) <= limit:
         return records
 
-    totals: dict[Any, float] = {}
-    for record in records:
-        totals[record["x"]] = totals.get(record["x"], 0.0) + abs(float(record["value"]))
-    keep = {
-        name for name, _ in sorted(totals.items(), key=lambda item: item[1], reverse=True)[:limit]
-    }
+    if chart_type == "waterfall":
+        # 폭포 차트는 앞 단계의 누적 위에 다음 단계를 쌓으므로 중간을 빼면 값이 어긋난다.
+        keep = set(categories[:limit])
+    else:
+        totals: dict[Any, float] = {}
+        for record in records:
+            totals[record["x"]] = totals.get(record["x"], 0.0) + abs(float(record["value"]))
+        keep = {
+            name for name, _ in sorted(totals.items(), key=lambda item: item[1], reverse=True)[:limit]
+        }
     warnings.append(
         f"범주가 {len(categories)}개라 상위 {limit}개 범주만 표시했습니다. 전체를 보려면 top_n=0으로 요청하세요."
     )
     return [record for record in records if record["x"] in keep]
 
 
+# 질의에 해당 의도를 나타내는 말이 들어 있는지 본다.
+def wants_words(query: str | None, words: tuple[str, ...]) -> bool:
+    text = (query or "").lower()
+    return any(word in text for word in words)
+
+
 # 요청이 비중/구성비 차트를 의도하는지 판단한다.
 def _wants_share_chart(query: str | None) -> bool:
-    text = (query or "").lower()
-    return any(word in text for word in SHARE_WORDS)
+    return wants_words(query, SHARE_WORDS)
+
+
+# 축 라벨이 순서를 갖는지 본다. 숫자가 들어간 라벨(연도·연령대·금액 구간)은 이어 그려도 뜻이 통하지만,
+# 지역명처럼 순서가 없는 라벨을 선으로 이으면 없는 추세가 보인다.
+def ordered_categories(categories: list[Any]) -> bool:
+    labels = [str(category) for category in categories if category is not None]
+    return bool(labels) and all(any(char.isdigit() for char in label) for label in labels)
+
+
+# 차트 선택에 필요한 레코드 구조를 뽑는다.
+def _record_shape(records: list[dict[str, Any]]) -> tuple[list[Any], list[Any], bool]:
+    categories = list(dict.fromkeys(record.get("x") for record in records))
+    series = list(dict.fromkeys(
+        record.get("series") for record in records if record.get("series") is not None
+    ))
+    has_negative = any(float(record.get("value") or 0) < 0 for record in records)
+    return categories, series, has_negative
+
+
+# 차트 타입을 지정하지 않은 요청에서 데이터 구조와 질의 의도로 가장 잘 맞는 차트를 고른다.
+def _auto_chart(
+    query: str | None,
+    x_is_year: bool,
+    has_group: bool,
+    categories: list[Any],
+    series: list[Any],
+    has_negative: bool,
+) -> tuple[str, str, str]:
+    if _wants_share_chart(query) and has_group:
+        return "stacked_bar_100", "server_auto", "질의가 구성비를 요구하고 계열이 있어 항목마다 100%로 맞춘 누적 막대그래프를 선택했습니다."
+    if _wants_share_chart(query) and not x_is_year:
+        return "donut", "server_auto", "질의가 구성비/비중을 요구하고 단일 범주-값 구조라 도넛형을 선택했습니다."
+    if x_is_year and has_group and wants_words(query, RANK_WORDS):
+        return "bump", "server_auto", "질의가 순위 변화를 요구해 시점마다 순위를 매겨 잇는 그래프를 선택했습니다."
+    if x_is_year and has_group and len(categories) == 2:
+        return "slope", "server_auto", "비교할 시점이 둘뿐이라 항목별 변화 방향이 드러나는 기울기 그래프를 선택했습니다."
+    if x_is_year:
+        return "line", "server_auto", "연도 축이 있는 숫자 데이터라 추이 확인에 적합한 선그래프를 선택했습니다."
+    if len(series) == 2 and wants_words(query, GAP_WORDS):
+        return "dumbbell", "server_auto", "두 계열의 격차를 묻는 질의라 항목마다 두 값을 이어 벌어진 폭을 보여주는 아령 차트를 선택했습니다."
+    if has_negative and not has_group:
+        return "diverging_bar", "server_auto", "값에 음수가 섞여 있어 0을 기준으로 증감을 가르는 막대그래프를 선택했습니다."
+    if has_group:
+        return "grouped_bar", "server_auto", "범주와 계열을 함께 비교하기 위해 그룹 막대그래프를 선택했습니다."
+    return "bar", "server_auto", "범주별 숫자 비교에 적합한 막대그래프를 선택했습니다."
+
+
+# 클라이언트가 지정한 차트가 데이터 구조에 맞지 않으면 가장 가까운 차트로 바꾼다.
+def _correct_chart(
+    requested_type: str,
+    x_is_year: bool,
+    x_is_numeric: bool,
+    has_group: bool,
+    categories: list[Any],
+    series: list[Any],
+    has_negative: bool,
+) -> tuple[str, str] | None:
+    grouped = "grouped_bar" if has_group else "bar"
+    if requested_type == "donut" and (x_is_year or has_group):
+        return ("line" if x_is_year else "grouped_bar"), "도넛형은 단일 시점의 구성비에 적합해 요청 차트를 대체했습니다."
+    if requested_type == "scatter" and not x_is_numeric:
+        return ("line" if x_is_year else "bar"), "산점도에는 숫자형 x축이 필요해 요청 차트를 대체했습니다."
+    if requested_type == "heatmap" and not has_group:
+        return "bar", "히트맵에는 두 개의 범주 축이 필요해 막대그래프로 대체했습니다."
+    if requested_type in {"stacked_bar", "stacked_bar_100", "dumbbell", "bump", "slope", "combo"} and not has_group:
+        return ("line" if x_is_year else "bar"), "요청한 차트는 계열이 둘 이상 필요해 단일 계열 차트로 대체했습니다."
+    if requested_type == "dumbbell" and len(series) != 2:
+        return "grouped_bar", "아령 차트는 계열이 정확히 두 개여야 해 그룹 막대그래프로 대체했습니다."
+    if requested_type in {"bump", "slope"} and not x_is_year:
+        return grouped, "순위·기울기 그래프에는 시점 축이 필요해 요청 차트를 대체했습니다."
+    if requested_type == "slope" and len(categories) != 2:
+        return "line", "기울기 그래프는 두 시점을 견줄 때 쓰므로 선그래프로 대체했습니다."
+    if requested_type == "waterfall" and has_group:
+        return "stacked_bar", "폭포 차트는 한 계열의 증감을 쌓아 보여주므로 누적 막대그래프로 대체했습니다."
+    if requested_type == "lollipop" and has_group:
+        return "grouped_bar", "롤리팝 차트는 계열이 하나일 때 쓰므로 그룹 막대그래프로 대체했습니다."
+    if requested_type in {"line", "area"} and not x_is_year and not ordered_categories(categories):
+        return grouped, "선·영역그래프는 순서가 있는 축의 추이를 보여줄 때 적합해 막대그래프로 대체했습니다."
+    if requested_type == "bar" and has_group:
+        return "grouped_bar", "계열 컬럼이 있어 그룹 막대그래프로 보정했습니다."
+    if requested_type == "bar" and has_negative:
+        return "diverging_bar", "값에 음수가 섞여 있어 0 기준선이 있는 증감 막대그래프로 보정했습니다."
+    return None
+
+
+# 단위가 둘로 갈리는 계열은 한 축에 그리면 작은 쪽이 축 바닥에 눌려 보이지 않는다.
+# 값 축을 좌우로 나눌 수 있는 것은 두 종류까지라, 단위가 셋 이상이면 나누지 못한다.
+def needs_axis_split(series: list[dict[str, Any]]) -> bool:
+    units = [str(item.get("unit") or "").strip() for item in series]
+    return len(series) >= 2 and all(units) and len(set(units)) == 2
+
+
+# 단위가 갈리는 계열은 계열마다 mark를 달리하는 콤보로 바꿔 값 축을 좌우로 나눈다.
+def apply_axis_split(chart_type: str, series: list[dict[str, Any]]) -> tuple[str, bool]:
+    if chart_type not in {"bar", "grouped_bar", "line", "area", "combo"}:
+        return chart_type, False
+    if not needs_axis_split(series):
+        return chart_type, False
+    return "combo", True
 
 
 # 표 메타데이터와 선택 범주로 차트 제목을 만든다.
@@ -139,7 +264,7 @@ def _chart_title(table: dict, subtitle: str | None = None) -> str:
 
 
 # LLM이 정한 표시 제목이 있으면 서버 자동 제목 대신 사용한다.
-def _apply_display_title(spec: dict[str, Any], title: str | None) -> dict[str, Any]:
+def apply_display_title(spec: dict[str, Any], title: str | None) -> dict[str, Any]:
     display_title = " ".join((title or "").split())
     if not display_title:
         return spec
@@ -201,7 +326,7 @@ def _pick_column_family(
 def _select_chart(
     requested: str,
     query: str | None,
-    has_records: bool,
+    records: list[dict[str, Any]],
     x_profile: dict[str, Any] | None,
     has_group: bool,
     warnings: list[str],
@@ -213,35 +338,24 @@ def _select_chart(
     x_is_year = bool(x_profile and x_profile["is_year"])
     x_is_numeric = bool(x_profile and x_profile["is_numeric"])
 
-    if not has_records:
+    if not records:
         return "table", "server_fallback", "시각화 가능한 숫자 데이터가 없어 차트를 생성하지 않았습니다."
 
+    categories, series, has_negative = _record_shape(records)
     if requested_type == "auto":
-        if _wants_share_chart(query) and not x_is_year and not has_group:
-            return "donut", "server_auto", "질의가 구성비/비중을 요구하고 단일 범주-값 구조라 도넛형을 선택했습니다."
-        if x_is_year:
-            return "line", "server_auto", "연도 축이 있는 숫자 데이터라 추이 확인에 적합한 선그래프를 선택했습니다."
-        if has_group:
-            return "grouped_bar", "server_auto", "범주와 계열을 함께 비교하기 위해 그룹 막대그래프를 선택했습니다."
-        return "bar", "server_auto", "범주별 숫자 비교에 적합한 막대그래프를 선택했습니다."
+        return _auto_chart(query, x_is_year, has_group, categories, series, has_negative)
 
-    if requested_type == "donut" and (x_is_year or has_group):
-        fallback = "line" if x_is_year else "grouped_bar"
-        return fallback, "server_fallback", "도넛형은 단일 시점의 구성비에 적합해 요청 차트를 대체했습니다."
-    if requested_type == "scatter" and not x_is_numeric:
-        fallback = "line" if x_is_year else "bar"
-        return fallback, "server_fallback", "산점도에는 숫자형 x축이 필요해 요청 차트를 대체했습니다."
-    if requested_type == "heatmap" and not has_group:
-        return "bar", "server_fallback", "히트맵에는 두 개의 범주 축이 필요해 막대그래프로 대체했습니다."
-    if requested_type == "bar" and has_group:
-        return "grouped_bar", "server_fallback", "계열 컬럼이 있어 그룹 막대그래프로 보정했습니다."
-
+    corrected = _correct_chart(
+        requested_type, x_is_year, x_is_numeric, has_group, categories, series, has_negative,
+    )
+    if corrected is not None:
+        return corrected[0], "server_fallback", corrected[1]
     return requested_type, "client_spec_validated", "클라이언트가 지정한 차트 타입을 데이터 구조 검증 후 사용했습니다."
 
 
-# 도넛은 부분-전체 구성이라 합계 조각을 넣으면 중복 집계되므로 total_mode와 무관하게 제외한다.
+# 부분-전체 차트는 합계 조각을 넣으면 중복 집계되므로 total_mode와 무관하게 제외한다.
 def _drop_total_slices(records: list[dict[str, Any]], chart_type: str) -> list[dict[str, Any]]:
-    if chart_type != "donut":
+    if chart_type not in PART_OF_WHOLE_TYPES:
         return records
     return [
         record for record in records
@@ -250,7 +364,7 @@ def _drop_total_slices(records: list[dict[str, Any]], chart_type: str) -> list[d
 
 
 # 사용자가 질의에 값 기준 정렬 방향을 직접 적은 경우 도구 인자 누락을 보완한다.
-def _resolve_sort_order(
+def resolve_sort_order(
     sort_order: str,
     query: str | None,
     warnings: list[str],
@@ -282,15 +396,18 @@ def _resolve_sort_order(
 
 
 # 시간 축은 시간순으로, 요청된 값 정렬은 범주별 값 합계 순으로 레코드를 정렬한다.
-def _sort_records(
+def sort_records(
     records: list[dict[str, Any]],
     x_is_year: bool,
     chart_type: str,
     sort_order: Literal["ascending", "descending"] | None,
 ) -> list[dict[str, Any]]:
-    if x_is_year or chart_type in {"line", "area", "scatter"}:
+    if x_is_year or chart_type in TIME_ORDERED_TYPES:
         return sorted(records, key=lambda record: (record.get("x") is None, record.get("x"), str(record.get("series", ""))))
-    if sort_order and chart_type in {"bar", "grouped_bar", "stacked_bar", "donut"}:
+    if sort_order is None and chart_type == "diverging_bar":
+        # 증감 차트는 많이 줄어든 쪽에서 늘어난 쪽으로 늘어놓아야 변화의 방향이 한눈에 읽힌다.
+        sort_order = "ascending"
+    if sort_order and chart_type in VALUE_SORTED_TYPES:
         totals: dict[Any, float] = {}
         for record in records:
             totals[record.get("x")] = totals.get(record.get("x"), 0.0) + float(record["value"])
@@ -306,6 +423,30 @@ def _sort_records(
         }
         return sorted(records, key=lambda record: category_order[record.get("x")])
     return records
+
+
+# 응답에 실을 통계표 출처 정보를 만든다.
+def stat_block(table: dict) -> dict[str, Any]:
+    return {
+        "stat_id": table["stat_id"],
+        "ref_id": table["ref_id"],
+        "publication_year": table["publication_year"],
+        "chapter_no": table.get("chapter_no"),
+        "section_no": table.get("section_no"),
+        "level3_no": table.get("level3_no"),
+        "level4_no": table.get("level4_no"),
+        "chapter": table.get("chapter"),
+        "section": table.get("section"),
+        "level3_title": table.get("level3_title"),
+        "level4_title": table.get("level4_title"),
+        "title_ko": table["title_ko"],
+        "title_en": table["title_en"],
+        "unit": table["unit"],
+        "base_date": table["base_date"],
+        "page_start": table.get("page_start"),
+        "table_seq": table["table_seq"],
+        "caption": table["caption"],
+    }
 
 
 # 모든 변환 경로가 공유하는 structuredContent 응답을 조립한다.
@@ -349,26 +490,7 @@ def _build_response(
         "version": "0.1",
         "library": "vega-lite",
         "renderer": "client",
-        "stat": {
-            "stat_id": table["stat_id"],
-            "ref_id": table["ref_id"],
-            "publication_year": table["publication_year"],
-            "chapter_no": table.get("chapter_no"),
-            "section_no": table.get("section_no"),
-            "level3_no": table.get("level3_no"),
-            "level4_no": table.get("level4_no"),
-            "chapter": table.get("chapter"),
-            "section": table.get("section"),
-            "level3_title": table.get("level3_title"),
-            "level4_title": table.get("level4_title"),
-            "title_ko": table["title_ko"],
-            "title_en": table["title_en"],
-            "unit": table["unit"],
-            "base_date": table["base_date"],
-            "page_start": table.get("page_start"),
-            "table_seq": table["table_seq"],
-            "caption": table["caption"],
-        },
+        "stat": stat_block(table),
         "request": {
             "query": query,
             "chart_type": chart_type,
@@ -395,7 +517,7 @@ def _build_response(
 
 
 # 복합 단위 표에서 선택한 지표 헤더를 기준으로 표시 단위를 좁힌다.
-def _metric_unit(column: str, table_unit: str | None) -> str:
+def metric_unit(column: str, table_unit: str | None) -> str:
     lowered = column.lower()
     if "비율" in column or "percentage" in lowered or "ratio" in lowered or "%" in column:
         return "%"
@@ -465,7 +587,7 @@ def _selection_plan_spec(
             validation_errors.append(f"선택 지표 컬럼 '{column}'이 중복되었습니다.")
             continue
 
-        inferred_unit = _metric_unit(column, table.get("unit"))
+        inferred_unit = metric_unit(column, table.get("unit"))
         valid_units = {part.strip() for part in str(table.get("unit") or "").split(",") if part.strip()}
         valid_units.add(inferred_unit)
         if requested_unit and requested_unit not in valid_units:
@@ -504,12 +626,15 @@ def _selection_plan_spec(
 
     columns = [metric["column"] for metric in validated]
     labels = _metric_labels(columns, [metric.get("label") for metric in validated])
-    category_profiles = [profile for profile in profiles if profile.get("is_categorical")]
+    # 범주 컬럼이 없으면 연도 컬럼을 축으로 쓴다. 축을 못 찾으면 모든 행이 한 칸에 겹쳐 쌓인다.
+    axis_profiles = [
+        profile for profile in profiles if profile.get("is_categorical")
+    ] or [profile for profile in profiles if profile["is_year"]]
     x_column = resolve_column(x, profiles)
     if x_column and not profile_map[x_column].get("is_categorical") and not profile_map[x_column].get("is_year"):
         warnings.append(f"선택 계획의 x축 컬럼 '{x_column}'은 범주형 또는 연도형이 아닙니다.")
         x_column = None
-    x_column = x_column or (category_profiles[0]["name"] if category_profiles else None)
+    x_column = x_column or (axis_profiles[0]["name"] if axis_profiles else None)
     x_profile = profile_map.get(x_column) if x_column else None
 
     records: list[dict[str, Any]] = []
@@ -544,12 +669,12 @@ def _selection_plan_spec(
     provenance = [item for item in provenance if id(item["record"]) in allowed_record_ids]
     has_group = any(record.get("series") for record in records)
     selected_type, decision_source, _ = _select_chart(
-        chart_type, query, bool(records), x_profile if not single_row else None, has_group, warnings,
+        chart_type, query, records, x_profile if not single_row else None, has_group, warnings,
     )
     records = _drop_total_slices(records, selected_type)
     records = _limit_series(records, warnings)
-    records = _limit_categories(records, selected_type, bool(x_profile and x_profile["is_year"]), top_n, warnings)
-    records = _sort_records(
+    records = limit_categories(records, selected_type, bool(x_profile and x_profile["is_year"]), top_n, warnings)
+    records = sort_records(
         records,
         bool(x_profile and x_profile["is_year"]),
         selected_type,
@@ -562,6 +687,17 @@ def _selection_plan_spec(
     chart_unit = next(iter(units)) if len(units) == 1 else table.get("unit")
     if not records:
         warnings.append("선택한 행의 지표 값이 비어 있어 차트 데이터를 만들지 못했습니다.")
+
+    # 지표마다 단위가 달라도 한 축에 그리면 작은 단위 지표가 축 바닥에 눌린다.
+    chart_series = [
+        {"label": label, "unit": metric["unit"]}
+        for metric, label in zip(validated, labels)
+        if any(record.get("series") == label for record in records)
+    ]
+    if has_group:
+        selected_type, dual_axis = apply_axis_split(selected_type, chart_series)
+    else:
+        dual_axis = False
     chart = {
         "type": selected_type,
         "requested_type": chart_type,
@@ -574,12 +710,18 @@ def _selection_plan_spec(
             "선택한 원본 셀에 숫자 값이 없어 차트를 생성하지 않았습니다."
             if not records
             else "원본 표와 대조한 행·지표 선택 계획으로 차트 데이터를 구성했습니다."
+            + (
+                " 지표마다 단위가 달라 값 축을 좌우로 나누고 계열별로 mark를 달리했습니다."
+                if dual_axis else ""
+            )
         ),
         "title": _chart_title(table),
         "x": "metric" if single_row else x_column,
         "y": "value",
         "group": "metric" if has_group else None,
         "unit": chart_unit,
+        "series": chart_series if has_group else None,
+        "dual_axis": dual_axis,
     }
     return _build_response(
         table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
@@ -594,6 +736,89 @@ def _selection_plan_spec(
             "records": records,
             "provenance": provenance,
             "unit": chart_unit,
+        },
+    )
+
+
+# 행은 범주, 열은 연도인 표를 범주마다 한 줄씩 갖는 시계열로 편다.
+# 한 행만 골라 펴는 _wide_year_time_series_spec과 달리 여러 범주의 움직임을 함께 본다.
+def _wide_year_multi_series_spec(
+    table: dict,
+    query: str | None,
+    chart_type: str,
+    x: str | None,
+    y: str | None,
+    group: str | None,
+    top_n: int | None,
+    total_mode: TotalMode,
+    source_rows: list[dict[str, str]],
+    profiles: list[dict[str, Any]],
+    warnings: list[str],
+    request_hints: dict[str, Any],
+) -> dict[str, Any] | None:
+    requested_type = chart_type if chart_type in VALID_CHART_TYPES else "auto"
+    wants_rank = wants_words(query, RANK_WORDS)
+    if requested_type not in {"bump", "slope"} and not (requested_type == "auto" and wants_rank):
+        return None
+
+    year_columns = year_value_columns(profiles)
+    if len(year_columns) < 2:
+        return None
+    category_column = resolve_column(x, profiles) if x else None
+    category_column = category_column or next(
+        (profile["name"] for profile in profiles if profile.get("is_categorical", False)), None,
+    )
+    if category_column is None:
+        return None
+
+    # 전국 합계 행은 개별 범주와 나란히 두면 순위도 기울기도 뜻이 달라진다.
+    rows = source_rows
+    if resolve_total_mode(total_mode, query) != "include":
+        rows = [row for row in source_rows if not is_total_label(row.get(category_column))]
+    if len(rows) < 2:
+        return None
+
+    selected_type = "slope" if requested_type == "slope" else "bump"
+    # 기울기 그래프는 두 시점만 잇는다. 처음과 마지막 연도를 견준다.
+    selected_columns = (
+        [year_columns[0], year_columns[-1]] if selected_type == "slope" else year_columns
+    )
+    records: list[dict[str, Any]] = []
+    for row in rows:
+        label = display_category_label(row.get(category_column))
+        for year, column in selected_columns:
+            value = parse_number(row.get(column))
+            if value is not None:
+                records.append({"x": year, "value": value, "series": label})
+    if len(records) < 4:
+        return None
+
+    records = _limit_series(records, warnings)
+    records = sort_records(records, True, selected_type, None)
+    reason = (
+        "행이 범주, 열이 연도인 표를 펴서 처음과 마지막 연도 사이의 범주별 변화를 기울기로 그렸습니다."
+        if selected_type == "slope"
+        else "행이 범주, 열이 연도인 표를 펴서 연도마다 범주 순위를 매겨 이었습니다."
+    )
+    chart = {
+        "type": selected_type,
+        "requested_type": chart_type,
+        "decision_source": "server_auto" if requested_type == "auto" else "client_spec_validated",
+        "reason": reason,
+        "title": _chart_title(table),
+        "x": "year",
+        "y": "value",
+        "group": category_column,
+        "unit": table["unit"],
+    }
+    return _build_response(
+        table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
+        records, source_rows, warnings,
+        request_hints=request_hints,
+        transform={
+            "type": "wide_year_rows_to_series",
+            "category_column": category_column,
+            "year_columns": [{"year": year, "column": column} for year, column in selected_columns],
         },
     )
 
@@ -662,25 +887,31 @@ def _wide_year_time_series_spec(
         return None
 
     selected_category = display_category_label(focus_row.get(category_column))
-    selected_type = "area" if requested_type == "area" else "line"
-    if requested_type == "auto":
-        decision_source = "server_auto"
-        reason = "행이 범주, 열이 연도인 표에서 질의 대상 행을 찾아 연도별 추이 선그래프로 변환했습니다."
-    elif requested_type in {"line", "area"}:
-        decision_source = "client_spec_validated"
-        reason = "클라이언트가 지정한 추이 차트를 wide 연도 표 구조에 맞게 검증해 사용했습니다."
-    else:
-        decision_source = "server_fallback"
-        reason = "질의가 특정 범주의 연도별 추이를 요구해 요청 차트를 선그래프로 대체했습니다."
+    deltas = [
+        {"x": cur["x"], "value": cur["value"] - prev["value"], "series": "전년 대비 증감"}
+        for prev, cur in zip(records, records[1:])
+    ]
 
     delta_records: list[dict[str, Any]] = []
-    if wants_delta_chart(query):
-        for prev, cur in zip(records, records[1:]):
-            delta_records.append({
-                "x": cur["x"],
-                "value": cur["value"] - prev["value"],
-                "series": "전년 대비 증감",
-            })
+    if requested_type in CHANGE_CHART_TYPES and deltas:
+        # 값 자체가 아니라 변화를 그려 달라는 요청이라 전년 대비 증감을 본 차트로 세운다.
+        selected_type = requested_type
+        records = deltas
+        decision_source = "client_spec_validated"
+        reason = "연도별 값에서 전년 대비 증감을 계산해 요청한 변화 차트로 그렸습니다."
+    else:
+        selected_type = "area" if requested_type == "area" else "line"
+        if requested_type == "auto":
+            decision_source = "server_auto"
+            reason = "행이 범주, 열이 연도인 표에서 질의 대상 행을 찾아 연도별 추이 선그래프로 변환했습니다."
+        elif requested_type in {"line", "area"}:
+            decision_source = "client_spec_validated"
+            reason = "클라이언트가 지정한 추이 차트를 wide 연도 표 구조에 맞게 검증해 사용했습니다."
+        else:
+            decision_source = "server_fallback"
+            reason = "질의가 특정 범주의 연도별 추이를 요구해 요청 차트를 선그래프로 대체했습니다."
+        if wants_delta_chart(query):
+            delta_records = deltas
 
     chart: dict[str, Any] = {
         "type": selected_type,
@@ -814,10 +1045,18 @@ def _wide_row_category_spec(
     if len(records) < 2:
         return None
 
-    selected_type = "donut" if requested_type == "donut" else "bar" if requested_type == "auto" else requested_type
+    # 한 행의 지표들을 범주로 편 구조라 계열도 시간 축도 없다. 그 구조에 맞는 차트만 남긴다.
+    categories, series, has_negative = _record_shape(records)
+    if requested_type == "auto":
+        selected_type = _auto_chart(query, False, False, categories, series, has_negative)[0]
+    else:
+        corrected = _correct_chart(
+            requested_type, False, False, False, categories, series, has_negative,
+        )
+        selected_type = corrected[0] if corrected is not None else requested_type
     records = _drop_total_slices(records, selected_type)
-    records = _limit_categories(records, selected_type, False, top_n, warnings)
-    records = _sort_records(
+    records = limit_categories(records, selected_type, False, top_n, warnings)
+    records = sort_records(
         records,
         False,
         selected_type,
@@ -887,7 +1126,7 @@ def build_plot_spec(
     sort_order: SortOrder = "auto",
 ) -> dict[str, Any]:
     columns, all_source_rows, warnings = body_to_rows(table["body"])
-    resolved_sort_order = _resolve_sort_order(sort_order, query, warnings)
+    resolved_sort_order = resolve_sort_order(sort_order, query, warnings)
     profiles = profile_columns(columns, all_source_rows)
     profile_map = profile_by_name(profiles)
     target_year = requested_year(year, query)
@@ -918,7 +1157,7 @@ def build_plot_spec(
     }
 
     if metrics is not None:
-        return _apply_display_title(
+        return apply_display_title(
             _selection_plan_spec(
                 table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles,
                 metrics, warnings, target_year, request_hints,
@@ -926,19 +1165,26 @@ def build_plot_spec(
             title,
         )
 
+    multi_series_spec = _wide_year_multi_series_spec(
+        table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles, warnings,
+        request_hints,
+    )
+    if multi_series_spec is not None:
+        return apply_display_title(multi_series_spec, title)
+
     wide_spec = _wide_year_time_series_spec(
         table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles, warnings,
         target_year, request_hints,
     )
     if wide_spec is not None:
-        return _apply_display_title(wide_spec, title)
+        return apply_display_title(wide_spec, title)
 
     wide_category_spec = _wide_row_category_spec(
         table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles, warnings,
         target_year, column_family_name, request_hints,
     )
     if wide_category_spec is not None:
-        return _apply_display_title(wide_category_spec, title)
+        return apply_display_title(wide_category_spec, title)
 
     family_validation_failed = bool(
         column_family_name and not column_family(column_family_name, profiles)
@@ -1001,7 +1247,7 @@ def build_plot_spec(
     records = _limit_series(records, warnings)
     has_group = any(record.get("series") for record in records)
     selected_type, decision_source, reason = _select_chart(
-        chart_type, query, bool(records), x_profile, has_group, warnings,
+        chart_type, query, records, x_profile, has_group, warnings,
     )
     if not source_rows and (selection_warnings or filter_errors or family_validation_failed):
         decision_source = "server_validation"
@@ -1010,8 +1256,21 @@ def build_plot_spec(
     records = _drop_total_slices(records, selected_type)
 
     x_is_year = bool(x_profile and x_profile["is_year"])
-    records = _limit_categories(records, selected_type, x_is_year, top_n, warnings)
-    records = _sort_records(records, x_is_year, selected_type, resolved_sort_order)
+    records = limit_categories(records, selected_type, x_is_year, top_n, warnings)
+    records = sort_records(records, x_is_year, selected_type, resolved_sort_order)
+
+    # 계열이 지표 컬럼이면 컬럼마다 단위가 다를 수 있어 값 축을 좌우로 나눠야 한다.
+    chart_series = [
+        {"label": label, "unit": metric_unit(str(label), table["unit"])}
+        for label in dict.fromkeys(
+            record["series"] for record in records if record.get("series")
+        )
+    ] if has_group and series_source == "metric" else []
+    dual_axis = False
+    if chart_series:
+        selected_type, dual_axis = apply_axis_split(selected_type, chart_series)
+        if dual_axis:
+            reason = f"{reason} 지표마다 단위가 달라 값 축을 좌우로 나누고 계열별로 mark를 달리했습니다."
 
     chart = {
         "type": selected_type,
@@ -1019,12 +1278,14 @@ def build_plot_spec(
         "decision_source": decision_source,
         "reason": reason,
         "title": _chart_title(table),
+        "series": chart_series or None,
+        "dual_axis": dual_axis,
         "x": x_column,
         "y": y_source,
         "group": series_source if has_group else None,
         "unit": table["unit"],
     }
-    return _apply_display_title(
+    return apply_display_title(
         _build_response(
             table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
             records, source_rows, warnings,

@@ -69,7 +69,10 @@ class StubClient:
     async def create(self, **kwargs):
         self.calls += 1
         self.kwargs.append(kwargs)
-        return self._results.pop(0)
+        result = self._results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     async def close(self) -> None:
         return None
@@ -184,6 +187,112 @@ class ToolChoiceTests(unittest.TestCase):
         _run(client)
 
         self.assertNotIn("tool_choice", client.kwargs[0])
+
+
+# 게이트웨이가 모델별 어댑터로 요청을 옮기지 못해 400을 돌려주는 상황을 흉내 낸다.
+class StubBadRequest(Exception):
+    def __init__(self, param: str | None, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = {
+            "error": {
+                "code": "adapter_mapping_unavailable",
+                "message": message,
+                "param": param,
+                "type": "adapter_mapping_unavailable",
+            }
+        }
+
+
+ADAPTER_MESSAGE = (
+    "Adapter mapping unavailable: Chat Completions parameter 'tool_choice' cannot be "
+    "represented by provider adapter Anthropic: request_parameter_mapping_unavailable"
+)
+
+
+class UnsupportedParameterTests(unittest.TestCase):
+    # 공급자가 옮기지 못하는 파라미터는 빼고 다시 보내야 답변이 끊기지 않는다.
+    def test_retries_without_the_rejected_parameter(self) -> None:
+        client = StubClient([
+            StubBadRequest("tool_choice", ADAPTER_MESSAGE),
+            StubResponse(MESSAGE_OUTPUT, "정상 답변"),
+        ])
+
+        turn = _run(client, tool_choice="none")
+
+        self.assertEqual(turn.text, "정상 답변")
+        self.assertEqual(client.kwargs[0]["tool_choice"], "none")
+        self.assertNotIn("tool_choice", client.kwargs[1])
+
+    # param 필드가 비어 있어도 메시지에 적힌 파라미터 이름을 찾아내야 한다.
+    def test_finds_the_parameter_in_the_message(self) -> None:
+        client = StubClient([
+            StubBadRequest(None, ADAPTER_MESSAGE),
+            StubResponse(MESSAGE_OUTPUT, "정상 답변"),
+        ])
+
+        turn = _run(client, tool_choice="none")
+
+        self.assertEqual(turn.text, "정상 답변")
+        self.assertNotIn("tool_choice", client.kwargs[1])
+
+    # 한 번 거부당한 파라미터는 다음 요청부터 아예 싣지 않는다.
+    def test_remembers_the_rejected_parameter(self) -> None:
+        client = StubClient([
+            StubBadRequest("tool_choice", ADAPTER_MESSAGE),
+            StubResponse(MESSAGE_OUTPUT, "첫 답변"),
+            StubResponse(MESSAGE_OUTPUT, "다음 답변"),
+        ])
+        gateway = OpenAICompatibleGateway(Settings(), client)
+        gateway._streaming_supported = False
+
+        async def two_turns():
+            for _ in range(2):
+                await gateway.create_turn(
+                    instructions="지시",
+                    messages=[ModelMessage(role="user", content="질문")],
+                    tools=[],
+                    tool_choice="none",
+                )
+
+        asyncio.run(two_turns())
+
+        self.assertEqual(client.calls, 3)
+        self.assertNotIn("tool_choice", client.kwargs[2])
+
+    # 파라미터 문제로 실패한 요청 때문에 이후 요청의 스트리밍까지 끄면 안 된다.
+    def test_keeps_streaming_enabled_after_a_parameter_error(self) -> None:
+        client = StubClient([
+            StubBadRequest("tool_choice", ADAPTER_MESSAGE),
+            StubStream([
+                StubEvent("response.output_text.delta", delta="정상 답변"),
+                StubEvent("response.completed", response=StubResponse(MESSAGE_OUTPUT, "정상 답변")),
+            ]),
+        ])
+        gateway = OpenAICompatibleGateway(Settings(), client)
+        gateway._streaming_supported = True
+
+        turn = asyncio.run(
+            gateway.create_turn(
+                instructions="지시",
+                messages=[ModelMessage(role="user", content="질문")],
+                tools=[],
+                tool_choice="none",
+                on_text_delta=lambda _text: None,
+            )
+        )
+
+        self.assertEqual(turn.text, "정상 답변")
+        self.assertTrue(gateway._streaming_supported)
+
+    # 파라미터 문제가 아닌 오류까지 삼키면 진짜 실패가 묻힌다.
+    def test_raises_other_bad_requests(self) -> None:
+        client = StubClient([StubBadRequest("input", "input is invalid")])
+
+        with self.assertRaises(StubBadRequest):
+            _run(client, tool_choice="none")
+
+        self.assertEqual(client.calls, 1)
 
 
 class ReasoningEffortTests(unittest.TestCase):
