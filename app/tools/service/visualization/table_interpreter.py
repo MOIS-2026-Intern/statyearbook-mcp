@@ -207,21 +207,79 @@ def normalize_key(value: Any) -> str:
     return re.sub(r"[^\w가-힣]+", "", str(value or "").lower())
 
 
-# 한국어 라벨 내부의 불필요한 띄어쓰기를 줄인다.
+# 한국어 라벨 내부의 불필요한 띄어쓰기를 줄인다. '2 급'처럼 숫자와 붙는 경우도 함께 줄인다.
 def _compact_korean_spacing(value: Any) -> str:
     text = clean_label(value)
-    return re.sub(r"(?<=[가-힣])\s+(?=[가-힣])", "", text)
+    return re.sub(r"(?<=[가-힣0-9])\s+(?=[가-힣])", "", text)
+
+
+# '1급 Grade 1'처럼 한국어 뒤에 영문 이름이 붙은 라벨에서 한국어 부분만 남긴다.
+def _korean_head(value: Any) -> str:
+    cleaned = clean_label(value)
+    if not re.search(r"[가-힣]", cleaned):
+        return cleaned
+    bilingual = re.match(r"^(.+?)\s+(?=[A-Za-z]+(?:\s|$)|\d+s\b)", cleaned)
+    return clean_label(bilingual.group(1)) if bilingual else cleaned
 
 
 # 차트에 표시할 범주 라벨을 보기 좋게 다듬는다.
 def display_category_label(value: Any) -> str:
-    text = _compact_korean_spacing(value)
+    text = _compact_korean_spacing(_korean_head(value))
     match = re.match(r"([가-힣･·ㆍ\s]+)", text)
     if match:
         korean = clean_label(match.group(1))
         if len(re.sub(r"[^가-힣]", "", korean)) >= 2:
             return korean
     return text
+
+
+# 라벨을 맞대어 볼 때 쓰는 정규화 키. 영문 병기와 띄어쓰기 차이를 흡수한다.
+# 평탄화된 헤더는 조각마다 영문을 떼어, '연령별 Age_16~19세 Aged 16~19'를 '연령별_16~19세'로도 찾는다.
+def label_keys(value: Any) -> set[str]:
+    cleaned = clean_label(value)
+    parts = [_compact_korean_spacing(_korean_head(part)) for part in cleaned.split("_")]
+    keys = {
+        normalize_key(cleaned),
+        normalize_key(_compact_korean_spacing(_korean_head(cleaned))),
+        normalize_key("_".join(parts)),
+    }
+    return {key for key in keys if key}
+
+
+# 상위 헤더를 뗀 마지막 조각의 키. '성별 Sex_남성 Men'을 '남성'만으로 가리킬 때 쓴다.
+def label_leaf_key(value: Any) -> str:
+    parts = clean_label(value).split("_")
+    if len(parts) < 2:
+        return ""
+    return normalize_key(_compact_korean_spacing(_korean_head(parts[-1])))
+
+
+# LLM이 적어 보낸 셀 값을 원본 표의 실제 값 하나로 해석한다.
+# 맞는 값을 찾으면 (실제 값, []), 찾지 못하면 (None, 엇갈린 후보들)을 돌려준다.
+def resolve_cell_value(requested: Any, values: list[str]) -> tuple[str | None, list[str]]:
+    text = clean_label(requested)
+    distinct = list(dict.fromkeys(clean_label(value) for value in values if clean_label(value)))
+    if not text:
+        return None, []
+    if text in distinct:
+        return text, []
+
+    keys = label_keys(text)
+    matched = [value for value in distinct if label_keys(value) & keys]
+    if len(matched) == 1:
+        return matched[0], []
+    if matched:
+        return None, matched
+
+    # 표기가 더 자세한 값('서울' → '서울특별시')은 후보가 하나로 좁혀질 때만 받아들인다.
+    key = normalize_key(text)
+    if len(key) >= 2:
+        partial = [value for value in distinct if any(key in item for item in label_keys(value))]
+        if len(partial) == 1:
+            return partial[0], []
+        if partial:
+            return None, partial
+    return None, []
 
 
 # 각 컬럼의 숫자형/연도형 여부를 계산한다.
@@ -279,6 +337,14 @@ def resolve_column(requested: str | None, profiles: list[dict[str, Any]]) -> str
     key = normalize_key(requested)
     for profile in profiles:
         if normalize_key(profile["name"]) == key:
+            return profile["name"]
+    keys = label_keys(requested)
+    for profile in profiles:
+        if label_keys(profile["name"]) & keys:
+            return profile["name"]
+    for profile in profiles:
+        leaf = label_leaf_key(profile["name"])
+        if leaf and leaf in keys:
             return profile["name"]
     for profile in profiles:
         label = normalize_key(profile["name"])
@@ -434,22 +500,24 @@ def select_source_rows(
 
 
 # LLM이 원본 표에서 고른 행 조건을, 같은 컬럼의 여러 값은 OR·다른 컬럼끼리는 AND로 대조한다.
+# 한 컬럼의 값 중 일부만 맞으면 맞은 행만 남기고 나머지는 경고로 알린다. 어느 값도 맞지 않아야
+# 전체를 버리며, 확인하지 못한 값을 원본 표 전체로 대체하지는 않는다.
 def apply_exact_filters(
     rows: list[dict[str, str]],
     profiles: list[dict[str, Any]],
     filters: list[dict[str, str]],
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]], list[str]]:
-    columns = {profile["name"] for profile in profiles}
     applied: list[dict[str, Any]] = []
     errors: list[str] = []
 
     grouped: dict[str, list[str]] = {}
     order: list[str] = []
     for item in filters:
-        column = clean_label(item.get("column"))
+        requested_column = clean_label(item.get("column"))
         value = clean_label(item.get("value"))
-        if column not in columns:
-            errors.append(f"선택 조건의 컬럼 '{column}'이 원본 표에 없습니다.")
+        column = resolve_column(requested_column, profiles)
+        if column is None:
+            errors.append(f"선택 조건의 컬럼 '{requested_column}'이 원본 표에 없습니다.")
             continue
         if not value:
             errors.append(f"선택 조건 '{column}'의 값이 비어 있습니다.")
@@ -459,20 +527,40 @@ def apply_exact_filters(
             order.append(column)
         grouped[column].append(value)
 
+    # 조건을 달았는데 쓸 수 있는 조건이 하나도 남지 않으면 표 전체를 그리지 않는다.
+    if filters and not order:
+        return [], applied, errors
+
     selected = list(rows)
     for column in order:
         candidates = selected
+        column_values = [row.get(column, "") for row in candidates]
+        keep: set[str] = set()
         for value in grouped[column]:
-            count = sum(1 for row in candidates if clean_label(row.get(column)) == value)
-            applied.append({"column": column, "value": value, "matched_row_count": count})
-            if count == 0:
-                errors.append(f"원본 표의 '{column}' 컬럼에서 값 '{value}'을 찾지 못했습니다.")
-        selected = [
-            row for row in candidates
-            if any(clean_label(row.get(column)) == value for value in grouped[column])
-        ]
+            resolved, ambiguous = resolve_cell_value(value, column_values)
+            if resolved is None:
+                if ambiguous:
+                    labels = ", ".join(ambiguous[:3])
+                    errors.append(
+                        f"선택 조건 '{column}'의 값 '{value}'이 여러 행({labels})과 일치해 "
+                        "하나를 고르지 못했습니다."
+                    )
+                else:
+                    errors.append(f"원본 표의 '{column}' 컬럼에서 값 '{value}'을 찾지 못했습니다.")
+                continue
+            count = sum(1 for text in column_values if clean_label(text) == resolved)
+            applied.append({
+                "column": column,
+                "value": resolved,
+                "requested": value,
+                "matched_row_count": count,
+            })
+            keep.add(resolved)
+        if not keep:
+            return [], applied, errors
+        selected = [row for row in candidates if clean_label(row.get(column)) in keep]
 
-    return ([] if errors else selected), applied, errors
+    return selected, applied, errors
 
 
 # 평탄화된 헤더를 첫 '_' 앞의 최상위 헤더별 컬럼군으로 묶는다.
@@ -513,9 +601,9 @@ def family_category_label(column: str) -> str:
     # 다국어·복합 헤더 조각에서 사람이 읽기 좋은 표시명을 고른다.
     def part_label(part: str) -> str:
         cleaned = clean_label(part)
-        bilingual = re.match(r"^(.+?)\s+(?=[A-Za-z]+(?:\s|$)|\d+s\b)", cleaned)
-        if bilingual:
-            return clean_label(bilingual.group(1))
+        head = _korean_head(cleaned)
+        if head != cleaned:
+            return head
         if re.fullmatch(r"[0-9가-힣･·ㆍ\s]+", cleaned) and re.search(r"[가-힣]", cleaned):
             return cleaned
         korean = re.match(r"([가-힣･·ㆍ\s]+)", cleaned)
@@ -678,4 +766,5 @@ def row_x_value(row: dict[str, str], x_column: str | None, profile: dict[str, An
     if profile and profile["is_year"]:
         return parse_year(raw) or raw
     parsed = parse_number(raw) if profile and profile["is_numeric"] else None
-    return parsed if parsed is not None else raw
+    # 범주 라벨은 영문 병기와 띄어쓰기를 다듬어야 축에 읽기 좋게 놓인다.
+    return parsed if parsed is not None else display_category_label(raw)

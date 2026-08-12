@@ -24,9 +24,9 @@ GAP_RULE_COLOR = "#cbd5e1"
 MIN_SHARE_LABEL = 0.05
 # 두 시점만 잇는 기울기 차트는 양 끝 라벨이 들어갈 여백이 필요하다.
 SLOPE_SCALE_PADDING = 0.45
-# 라벨 겹침을 재는 기준이 되는 프론트엔드 기본 차트 높이와 라벨 사이 최소 간격이다.
-SLOPE_VIEW_HEIGHT_PX = 340
-SLOPE_LABEL_MIN_GAP_PX = 15
+# 라벨 겹침을 재는 기준이 되는 프론트엔드 기본 차트 높이와 라벨 사이 최소 세로 간격이다.
+VIEW_HEIGHT_PX = 340
+LABEL_MIN_GAP_PX = 15
 # 0 아래로 뻗은 막대의 값 라벨이 눈금 라벨과 겹치지 않도록 증감 축에 남기는 여백이다.
 DIVERGING_AXIS_PADDING_PX = 22
 # 아령 차트는 점 위아래에 값을 적으므로 그만큼의 여백이 더 필요하다.
@@ -39,12 +39,112 @@ STACK_LABEL_MIN_HEIGHT_PX = 18
 STACK_LABEL_CHAR_WIDTH_PX = 7
 STACK_LABEL_SIDE_PADDING_PX = 12
 
+# 프론트엔드가 차트에 주는 가로 폭. 값 라벨이 들어갈 자리를 이 폭으로 가늠한다.
+VIEW_WIDTH_PX = 640
+# 값 라벨 한 글자의 대략적인 폭과 이웃 라벨 사이에 남겨야 할 여백.
+LABEL_CHAR_WIDTH_PX = 7
+LABEL_GAP_PX = 6
+# 가로 막대는 값을 막대 오른쪽에 적으므로 이만큼 떨어뜨리고, 축 끝에 라벨 자리를 남긴다.
+HORIZONTAL_LABEL_DX_PX = 8
+MAX_VALUE_HEADROOM = 0.4
+# 값을 그대로 라벨로 붙이는 차트. 순위·구성비처럼 라벨 규칙이 따로 있는 차트는 뺀다.
+VALUE_LABEL_CHARTS = frozenset({
+    "bar", "grouped_bar", "line", "area", "scatter",
+    "combo", "lollipop", "diverging_bar", "waterfall", "dumbbell",
+})
+# 라벨을 줄일 때 쓰는 큰 수 단위. 큰 단위부터 본다.
+COMPACT_UNITS = ((10**12, "조"), (10**8, "억"), (10**4, "만"))
+# 부호를 붙여 읽는 증감 차트는 라벨 형식이 달라 줄이지 않고, 자리가 없으면 접기만 한다.
+SIGNED_LABEL_CHARTS = frozenset({"diverging_bar", "waterfall"})
+# 가로로 눕힐 수 있는 차트. 선·콤보는 방향을 바꿀 수 없어 가로 막대를 권하지 않는다.
+HORIZONTAL_CAPABLE_CHARTS = frozenset({
+    "bar", "grouped_bar", "lollipop", "diverging_bar", "waterfall", "dumbbell",
+})
+# 계열이 여럿이어도 라벨이 가로로 갈라지지 않는 차트. 그룹 막대와 달리 같은 x 위에 겹쳐 놓인다.
+STACKED_LABEL_CHARTS = frozenset({"line", "area", "scatter"})
+
 
 # 범례와 Vega-Lite text mark가 같은 형태의 숫자를 보여주도록 포맷한다.
 def _format_number(value: float) -> str:
     if value.is_integer():
         return f"{value:,.0f}"
     return f"{value:,.2f}".rstrip("0").rstrip(".")
+
+
+# 값 라벨 하나에 돌아가는 가로 폭을 어림한다. 가로 막대는 범주마다 높이를 늘려 잡고 라벨을
+# 막대 오른쪽에 한 줄씩 두므로 폭을 따질 필요가 없다.
+def _label_slot_width(chart: dict[str, Any], values: list[dict[str, Any]]) -> float:
+    if chart.get("orientation") == "horizontal":
+        return float("inf")
+    slots = len({value.get("x") for value in values}) or 1
+    width = VIEW_WIDTH_PX / slots
+    if chart["type"] in {"grouped_bar", "combo"}:
+        # 그룹 막대는 범주 한 칸을 계열 수만큼 나눠 쓴다. 콤보는 막대 값과 선 값이 한 칸에서
+        # 같은 높이로 만나기 쉬워, 나란히 놓이지 않더라도 같은 자리를 다투는 것으로 본다.
+        width /= max(len(values) / slots, 1)
+    return width
+
+
+# 가장 긴 라벨이 주어진 폭 안에 들어가는지 본다.
+def _labels_fit(labels: list[str], width: float) -> bool:
+    if not labels:
+        return True
+    return max(len(label) for label in labels) * LABEL_CHAR_WIDTH_PX + LABEL_GAP_PX <= width
+
+
+# 만·억 단위로 줄인 값의 자릿수를 정한다. 세 자리 정도만 남겨 라벨을 짧게 유지한다.
+def _scaled_label(scaled: float) -> str:
+    if abs(scaled) >= 100:
+        return f"{scaled:,.0f}"
+    if abs(scaled) >= 10:
+        return f"{scaled:,.1f}"
+    return f"{scaled:,.2f}"
+
+
+# 자리가 빠듯할 때 쓸 짧은 라벨을 만든다. 한 차트는 한 단위만 쓰며, 값 하나라도 그 단위에
+# 못 미치면(0.12만처럼) 읽기 어려워지므로 줄이지 않는다.
+def _compact_labels(values: list[dict[str, Any]]) -> list[str] | None:
+    numbers = [float(value.get("value") or 0) for value in values]
+    magnitudes = [abs(number) for number in numbers if number]
+    if not magnitudes:
+        return None
+    for size, name in COMPACT_UNITS:
+        if min(magnitudes) >= size:
+            return [f"{_scaled_label(number / size)}{name}" for number in numbers]
+    return None
+
+
+# 계열이 여럿이면 같은 x에 라벨이 겹쳐 놓인다. 값이 비슷한 계열끼리는 세로로도 가까워
+# 서로를 가리므로, 값이 큰 쪽을 남기고 가까이 붙는 라벨은 비운다(값은 tooltip에 남는다).
+def _blank_overlapping_labels(values: list[dict[str, Any]], labels: list[str]) -> bool:
+    top = max((float(value.get("value") or 0) for value in values), default=0)
+    if top <= 0:
+        return False
+
+    groups: dict[Any, list[int]] = {}
+    for index, value in enumerate(values):
+        groups.setdefault(value.get("x"), []).append(index)
+
+    blanked = False
+    for indexes in groups.values():
+        if len(indexes) < 2:
+            continue
+        placed: list[float] = []
+        for index in sorted(indexes, key=lambda item: -float(values[item].get("value") or 0)):
+            position = VIEW_HEIGHT_PX * (1 - float(values[index].get("value") or 0) / top)
+            if any(abs(position - other) < LABEL_MIN_GAP_PX for other in placed):
+                labels[index] = ""
+                blanked = True
+            else:
+                placed.append(position)
+    return blanked
+
+
+# 값 라벨의 text 인코딩. 자리가 빠듯하거나 서로 겹치면 서버가 미리 손본 라벨을 그대로 쓴다.
+def _value_text(chart: dict[str, Any]) -> dict[str, Any]:
+    if chart.get("text_labels"):
+        return {"field": "_label", "type": "nominal"}
+    return {"field": "value", "type": "quantitative", "format": VALUE_FORMAT}
 
 
 # x축이 연도인지 판별한다(Vega 축 타입 결정용).
@@ -264,7 +364,20 @@ def _combo_view(chart: dict[str, Any], x_is_year: bool) -> dict[str, Any]:
         if kind == "bar" and len(group) > 1:
             # 한 축을 나눠 쓰는 막대는 서로 겹치지 않게 옆으로 민다.
             mark_encoding["xOffset"] = {"field": "series", "sort": group_labels}
-        marks: list[dict[str, Any]] = [{"mark": _combo_mark(kind), "encoding": mark_encoding}]
+        # 라벨이 겹쳐 접히는 차트가 있으므로 값은 언제나 tooltip으로도 읽을 수 있어야 한다.
+        tooltip = [
+            {"field": "x", "type": "ordinal" if x_is_year else "nominal", "title": ""},
+            {"field": "series", "type": "nominal", "title": ""},
+            {
+                "field": "value",
+                "type": "quantitative",
+                "title": _group_axis_title(group) if dual else shared_title,
+                "format": VALUE_FORMAT,
+            },
+        ]
+        marks: list[dict[str, Any]] = [
+            {"mark": _combo_mark(kind), "encoding": {**mark_encoding, "tooltip": tooltip}},
+        ]
         if chart.get("value_labels", True):
             # 막대 값은 막대 위에, 겹쳐 그린 계열의 값은 점 오른쪽에 둔다.
             # 축을 나누면 두 계열이 같은 높이에 놓이기 쉬워 라벨을 같은 자리에 두면 서로 가린다.
@@ -276,7 +389,7 @@ def _combo_view(chart: dict[str, Any], x_is_year: bool) -> dict[str, Any]:
                 "mark": {"type": "text", "fontSize": LABEL_FONT_SIZE, **placement},
                 "encoding": {
                     **mark_encoding,
-                    "text": {"field": "value", "type": "quantitative", "format": VALUE_FORMAT},
+                    "text": _value_text(chart),
                 },
             })
         layers.append({
@@ -412,7 +525,7 @@ def _lollipop_view(
             "mark": _label_mark(horizontal),
             "encoding": {
                 **encoding,
-                "text": {"field": "value", "type": "quantitative", "format": VALUE_FORMAT},
+                "text": _value_text(chart),
                 "color": {"value": LABEL_COLOR},
             },
         })
@@ -636,7 +749,7 @@ def _dumbbell_view(
                 },
                 "encoding": {
                     **points["encoding"],
-                    "text": {"field": "value", "type": "quantitative", "format": VALUE_FORMAT},
+                    "text": _value_text(chart),
                     "color": {"value": LABEL_COLOR},
                 },
             })
@@ -771,7 +884,7 @@ def _vega_view(chart: dict[str, Any], has_series: bool, x_is_year: bool) -> dict
                             "type": "quantitative",
                             "scale": None,
                         },
-                        "text": {"field": "value", "type": "quantitative", "format": ",.2~f"},
+                        "text": _value_text(chart),
                         "color": {"value": "#111827"},
                     },
                 },
@@ -789,7 +902,7 @@ def _vega_view(chart: dict[str, Any], has_series: bool, x_is_year: bool) -> dict
                 {
                     "mark": {"type": "text", "fontSize": 11},
                     "encoding": {
-                        "text": {"field": "value", "type": "quantitative", "format": ",.2~f"},
+                        "text": _value_text(chart),
                         "color": {"value": "#111827"},
                     },
                 },
@@ -818,6 +931,9 @@ def _vega_view(chart: dict[str, Any], has_series: bool, x_is_year: bool) -> dict
         "type": "quantitative",
         "title": chart.get("y_title") or unit,
     }
+    if horizontal and chart.get("value_axis_max"):
+        # 0에서 시작하는 축이라 padding 대신 축 끝을 늘려야 막대가 축선에 붙은 채로 자리가 생긴다.
+        value_axis["scale"] = {"domainMax": chart["value_axis_max"]}
     if chart.get("category_order"):
         # 서버가 축 순서를 정한 차트는 그 순서를 그대로 domain으로 넘긴다.
         category_axis["sort"] = chart["category_order"]
@@ -852,12 +968,26 @@ def _vega_view(chart: dict[str, Any], has_series: bool, x_is_year: bool) -> dict
         label_mark.update({"dy": -8, "baseline": "bottom"})
     else:
         label_mark["dy"] = -8
-    layers: list[dict[str, Any]] = [{"mark": mark_map.get(ctype, "bar")}]
+    # 라벨이 겹쳐 접히는 차트가 있으므로 값은 언제나 tooltip으로도 읽을 수 있어야 한다.
+    tooltip: list[dict[str, Any]] = [
+        {"field": "x", "type": x_type, "title": chart.get("x_title") or ""},
+        {
+            "field": "value",
+            "type": "quantitative",
+            "title": chart.get("y_title") or unit,
+            "format": VALUE_FORMAT,
+        },
+    ]
+    if has_series:
+        tooltip.insert(1, {"field": "series", "type": "nominal", "title": ""})
+    layers: list[dict[str, Any]] = [
+        {"mark": mark_map.get(ctype, "bar"), "encoding": {"tooltip": tooltip}},
+    ]
     if chart.get("value_labels", True):
         layers.append({
             "mark": label_mark,
             "encoding": {
-                "text": {"field": "value", "type": "quantitative", "format": ",.2~f"},
+                "text": _value_text(chart),
                 "color": {"value": "#344054"},
             },
         })
@@ -921,8 +1051,8 @@ def _mark_edges(values: list[dict[str, Any]]) -> None:
 # 값 범위를 차트 세로 픽셀 위치로 바꾼다(위가 큰 값).
 def _slope_label_y(value: float, low: float, high: float) -> float:
     if high <= low:
-        return SLOPE_VIEW_HEIGHT_PX / 2
-    return SLOPE_VIEW_HEIGHT_PX - (value - low) / (high - low) * SLOPE_VIEW_HEIGHT_PX
+        return VIEW_HEIGHT_PX / 2
+    return VIEW_HEIGHT_PX - (value - low) / (high - low) * VIEW_HEIGHT_PX
 
 
 # 기울기 차트는 선이 겹쳐 범례로 계열을 찾기 어려우므로 시작점에 이름을 함께 적는다.
@@ -941,7 +1071,7 @@ def _add_slope_labels(values: list[dict[str, Any]]) -> None:
         for value in ranked:
             number = float(value["value"] or 0)
             position = _slope_label_y(number, low, high)
-            if any(abs(position - other) < SLOPE_LABEL_MIN_GAP_PX for other in placed):
+            if any(abs(position - other) < LABEL_MIN_GAP_PX for other in placed):
                 value["_edge_label"] = ""
                 continue
             placed.append(position)
@@ -1017,6 +1147,57 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
             })
             cumulative += numeric_value
         values.append(value)
+
+    # 라벨이 들어갈 자리는 최종 레코드 수와 방향이 정해진 여기서야 알 수 있다. 자리가 모자라면
+    # 만·억 단위로 줄여 보고, 그래도 안 들어가면 라벨을 접고 값은 tooltip에 남긴다.
+    if values and chart.get("value_labels") is None and chart["type"] in VALUE_LABEL_CHARTS:
+        width = _label_slot_width(chart, values)
+        labels: list[str] | None = [
+            _format_number(float(value.get("value") or 0)) for value in values
+        ]
+        custom = False
+        if not _labels_fit(labels, width):
+            # 축을 나눈 차트는 계열마다 값의 자릿수가 달라 한 단위로 줄이면 한쪽이 0에 눌린다.
+            compact = (
+                None
+                if chart.get("dual_axis") or chart["type"] in SIGNED_LABEL_CHARTS
+                else _compact_labels(values)
+            )
+            if compact and _labels_fit(compact, width):
+                labels, custom = compact, True
+            else:
+                labels = None
+                chart["value_labels"] = False
+                advice = (
+                    " 가로 막대로 요청하면 값을 함께 표시할 수 있습니다."
+                    if chart["type"] in HORIZONTAL_CAPABLE_CHARTS
+                    else ""
+                )
+                spec.setdefault("warnings", []).append(
+                    f"항목이 {len({value.get('x') for value in values})}개라 값 라벨이 서로 겹쳐 "
+                    f"숨겼습니다. 값은 차트에 마우스를 올리면 볼 수 있습니다.{advice}"
+                )
+        # 축을 나눈 차트는 계열마다 눈금이 달라 값만으로 라벨 높이를 가늠할 수 없다.
+        if labels is not None and chart["type"] in STACKED_LABEL_CHARTS and not chart.get("dual_axis"):
+            custom = _blank_overlapping_labels(values, labels) or custom
+        if labels is not None and custom:
+            chart["text_labels"] = True
+            for value, label in zip(values, labels):
+                value["_label"] = label
+
+        # 가로 막대의 값은 막대 오른쪽으로 뻗으므로 축 끝에 가장 긴 라벨이 들어갈 자리를 남긴다.
+        if chart.get("value_labels") is not False and chart.get("orientation") == "horizontal":
+            largest = max((float(value.get("value") or 0) for value in values), default=0)
+            if largest > 0:
+                texts = [
+                    value.get("_label") or _format_number(float(value.get("value") or 0))
+                    for value in values
+                ]
+                reserved = max(len(text) for text in texts) * LABEL_CHAR_WIDTH_PX
+                share = min(
+                    (reserved + HORIZONTAL_LABEL_DX_PX) / VIEW_WIDTH_PX, MAX_VALUE_HEADROOM,
+                )
+                chart["value_axis_max"] = largest / (1 - share)
 
     chart = {**chart, **_add_derived_fields(chart["type"], values)}
     if chart["type"] == "combo" and not chart.get("series"):
