@@ -4,11 +4,33 @@ from typing import Any
 
 
 VALUE_FORMAT = ",.2~f"
+# 증감 차트는 부호가 곧 정보라 항상 +/- 를 붙여 읽는다.
+SIGNED_VALUE_FORMAT = "+,.2~f"
+SHARE_FORMAT = ".1%"
 LABEL_COLOR = "#344054"
 ON_MARK_LABEL_COLOR = "#111827"
 LABEL_FONT_SIZE = 11
+# 계열마다 mark를 달리 그리는 차트는 색도 계열마다 못 박아 mark·축·라벨을 같은 색으로 묶는다.
+COMBO_COLORS = ("#4c78a8", "#f58518", "#54a24b", "#e45756")
 # 값 축을 좌우로 나눌 때 축 제목과 mark 색을 맞춰 어느 축이 어느 계열인지 드러낸다.
-DUAL_AXIS_COLORS = ("#4c78a8", "#f58518")
+DUAL_AXIS_COLORS = COMBO_COLORS[:2]
+# 증감을 그리는 차트에서 늘어난 값과 줄어든 값을 색으로 가른다.
+POSITIVE_COLOR = "#2a78d6"
+NEGATIVE_COLOR = "#e34948"
+BASELINE_COLOR = "#98a2b3"
+# 두 값을 잇는 아령 차트의 연결선은 양 끝 점보다 눈에 덜 띄어야 한다.
+GAP_RULE_COLOR = "#cbd5e1"
+# 100% 누적 막대에서 이보다 얇은 층은 라벨이 층 밖으로 삐져나온다.
+MIN_SHARE_LABEL = 0.05
+# 두 시점만 잇는 기울기 차트는 양 끝 라벨이 들어갈 여백이 필요하다.
+SLOPE_SCALE_PADDING = 0.45
+# 라벨 겹침을 재는 기준이 되는 프론트엔드 기본 차트 높이와 라벨 사이 최소 간격이다.
+SLOPE_VIEW_HEIGHT_PX = 340
+SLOPE_LABEL_MIN_GAP_PX = 15
+# 0 아래로 뻗은 막대의 값 라벨이 눈금 라벨과 겹치지 않도록 증감 축에 남기는 여백이다.
+DIVERGING_AXIS_PADDING_PX = 22
+# 아령 차트는 점 위아래에 값을 적으므로 그만큼의 여백이 더 필요하다.
+GAP_AXIS_PADDING_PX = 26
 # 막대 꼭대기의 합계는 층 값보다 눈에 먼저 들어오도록 굵게 쓴다.
 TOTAL_LABEL_FONT_WEIGHT = 700
 # 세로 막대는 글자 높이에 위아래 여백을 더한 만큼, 가로 막대는 글자 수만큼의 폭이 있어야
@@ -105,6 +127,16 @@ def _stacked_label_layers(
     ]
 
 
+# 레이어마다 쌓는 순서가 갈리면 라벨이 다른 층 위에 찍히므로 순서를 명시한다.
+# 세로형은 첫 계열이 맨 위, 가로형은 첫 계열이 맨 왼쪽에 오는 기본 모양을 유지한다.
+def _stack_order_encoding(horizontal: bool) -> dict[str, Any]:
+    return {
+        "field": "_stack_order",
+        "type": "quantitative",
+        "sort": "descending" if horizontal else "ascending",
+    }
+
+
 # 계열별 쌓는 순서를 정한다. 색상 범례는 계열명 오름차순이라, 첫 계열이 맨 위에 오도록
 # 내림차순 순위를 매겨 Vega-Lite 기본 누적 순서와 같은 모양을 유지한다.
 def _stack_order(records: list[dict[str, Any]]) -> dict[Any, int]:
@@ -114,59 +146,109 @@ def _stack_order(records: list[dict[str, Any]]) -> dict[Any, int]:
     return {name: index for index, name in enumerate(series_names)}
 
 
-# 범주를 막대 합계 기준으로 정렬한 순서를 만든다(값이 같으면 원래 순서를 유지한다).
-def _category_order(records: list[dict[str, Any]], sort_order: str | None) -> list[Any] | None:
-    if sort_order not in {"ascending", "descending"}:
-        return None
-    totals: dict[Any, float] = {}
-    for record in records:
-        key = record.get("x")
-        totals[key] = totals.get(key, 0.0) + float(record.get("value") or 0)
-    return [
-        key for key, _ in sorted(
-            totals.items(), key=lambda item: item[1], reverse=sort_order == "descending",
-        )
-    ]
+# 범주(또는 연도) 축 인코딩을 만든다. 축 순서는 서버가 정한 순서를 그대로 따른다.
+def _category_axis(chart: dict[str, Any], x_is_year: bool) -> dict[str, Any]:
+    axis: dict[str, Any] = {
+        "field": "x",
+        "type": "ordinal" if x_is_year else "nominal",
+        "title": chart.get("x_title") or "",
+    }
+    if chart.get("category_order"):
+        axis["sort"] = chart["category_order"]
+    return axis
 
 
-# 여러 표를 겹쳐 그릴 때 계열마다 값 축을 따로 두는 뷰를 만든다.
+# 값 축 인코딩을 만든다.
+def _value_axis(chart: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "field": "value",
+        "type": "quantitative",
+        "title": chart.get("y_title") or chart.get("unit") or "값",
+    }
+
+
+# 계열 이름과 단위를 합쳐 값 축 제목을 만든다.
+def _series_axis_title(item: dict[str, Any]) -> str:
+    unit = item.get("unit")
+    return f"{item['label']} ({unit})" if unit else item["label"]
+
+
+# 값 라벨 text mark를 만든다(막대·점 바깥쪽에 붙인다).
+def _label_mark(horizontal: bool, negative: bool = False) -> dict[str, Any]:
+    mark: dict[str, Any] = {"type": "text", "fontSize": LABEL_FONT_SIZE}
+    if horizontal:
+        mark.update({
+            "dx": -8 if negative else 8,
+            "align": "right" if negative else "left",
+            "baseline": "middle",
+        })
+    else:
+        mark.update({"dy": 8 if negative else -8, "baseline": "top" if negative else "bottom"})
+    return mark
+
+
+# 계열 이름을 색으로 나누는 인코딩을 만든다. 계열 순서는 요청한 순서를 그대로 쓴다.
+def _series_color(
+    labels: list[str],
+    colors: tuple[str, ...] | None = None,
+    legend: bool = True,
+) -> dict[str, Any]:
+    color: dict[str, Any] = {"field": "series", "type": "nominal", "title": ""}
+    if labels:
+        scale: dict[str, Any] = {"domain": labels}
+        if colors:
+            scale["range"] = list(colors[: len(labels)])
+        color["scale"] = scale
+    if not legend:
+        # 선 끝에 계열 이름을 직접 적는 차트는 범례가 같은 말을 되풀이한다.
+        color["legend"] = None
+    return color
+
+
+# 콤보 차트에서 계열 성격에 맞는 mark를 만든다.
+def _combo_mark(kind: str) -> dict[str, Any]:
+    if kind == "bar":
+        return {"type": "bar", "cornerRadiusEnd": 3}
+    if kind == "area":
+        return {"type": "area", "opacity": 0.55}
+    if kind == "point":
+        return {"type": "point", "filled": True, "size": 110}
+    return {"type": "line", "point": True, "strokeWidth": 2.5}
+
+
+# 성격이 다른 지표를 한 그래프에 놓을 때 계열마다 mark를 나눠 그린다.
 # 계열별 mark와 값 라벨을 한 겹으로 묶어야 라벨이 자기 계열의 축을 따라간다.
-def _dual_axis_view(chart: dict[str, Any], x_is_year: bool) -> dict[str, Any]:
+def _combo_view(chart: dict[str, Any], x_is_year: bool) -> dict[str, Any]:
     series = chart["series"]
     labels = [item["label"] for item in series]
-    # 요청이 선그래프가 아니면 첫 계열을 막대로 그려 어느 축을 읽어야 하는지 눈에 띄게 한다.
-    combo = chart.get("requested_type") not in {"line", "area"}
-    color_scale = {"domain": labels, "range": list(DUAL_AXIS_COLORS[: len(labels)])}
+    dual = bool(chart.get("dual_axis"))
+    shared_title = chart.get("y_title") or chart.get("unit") or "값"
 
     layers: list[dict[str, Any]] = []
     for index, item in enumerate(series):
-        color = DUAL_AXIS_COLORS[index % len(DUAL_AXIS_COLORS)]
-        unit = item.get("unit")
-        value_axis = {
+        color = COMBO_COLORS[index % len(COMBO_COLORS)]
+        value_axis: dict[str, Any] = {
             "field": "value",
             "type": "quantitative",
-            "title": f"{item['label']} ({unit})" if unit else item["label"],
-            "axis": {
+            "title": _series_axis_title(item) if dual else shared_title,
+        }
+        if dual:
+            value_axis["axis"] = {
                 "orient": "left" if index == 0 else "right",
                 "titleColor": color,
                 "labelColor": color,
-            },
-        }
-        is_bar = combo and index == 0
-        mark = (
-            {"type": "bar", "cornerRadiusEnd": 3}
-            if is_bar
-            else {"type": "line", "point": True, "strokeWidth": 2.5}
-        )
-        marks: list[dict[str, Any]] = [{"mark": mark}]
+            }
+        kind = item.get("mark") or ("bar" if index == 0 else "line")
+        marks: list[dict[str, Any]] = [{"mark": _combo_mark(kind)}]
         if chart.get("value_labels", True):
+            # 막대 값은 막대 위에, 겹쳐 그린 계열의 값은 점 오른쪽에 둔다.
+            # 축을 나누면 두 계열이 같은 높이에 놓이기 쉬워 라벨을 같은 자리에 두면 서로 가린다.
+            placement = (
+                {"dy": -8, "baseline": "bottom"} if kind == "bar"
+                else {"dx": 9, "align": "left", "baseline": "middle"}
+            )
             marks.append({
-                "mark": {
-                    "type": "text",
-                    "fontSize": LABEL_FONT_SIZE,
-                    "dy": -8,
-                    "baseline": "bottom",
-                },
+                "mark": {"type": "text", "fontSize": LABEL_FONT_SIZE, **placement},
                 "encoding": {
                     "text": {"field": "value", "type": "quantitative", "format": VALUE_FORMAT},
                     "color": {"value": color},
@@ -176,28 +258,364 @@ def _dual_axis_view(chart: dict[str, Any], x_is_year: bool) -> dict[str, Any]:
             "transform": [{"filter": {"field": "series", "equal": item["label"]}}],
             "encoding": {
                 "y": value_axis,
-                "color": {
-                    "field": "series",
-                    "type": "nominal",
-                    "title": "",
-                    "scale": color_scale,
-                },
+                "color": _series_color(labels, COMBO_COLORS),
             },
             "layer": marks,
         })
 
-    category_axis: dict[str, Any] = {
-        "field": "x",
-        "type": "ordinal" if x_is_year else "nominal",
-        "title": "",
+    # 겹쳐 그린 계열의 값 라벨이 점 오른쪽에 붙으므로 축 양 끝에 라벨이 들어갈 자리를 남긴다.
+    category_axis = {**_category_axis(chart, x_is_year), "scale": {"paddingOuter": 0.35}}
+    view: dict[str, Any] = {"encoding": {"x": category_axis}, "layer": layers}
+    if dual:
+        view["resolve"] = {"scale": {"y": "independent"}}
+    return view
+
+
+# 늘어난 값과 줄어든 값을 0 기준선 양쪽으로 갈라 그린다.
+def _diverging_bar_view(
+    chart: dict[str, Any], x_is_year: bool, horizontal: bool,
+) -> dict[str, Any]:
+    value_channel = "x" if horizontal else "y"
+    encoding: dict[str, Any] = {
+        "y" if horizontal else "x": _category_axis(chart, x_is_year),
+        # 가장 긴 막대의 값 라벨이 눈금 라벨과 겹치지 않도록 축 양 끝에 여백을 둔다.
+        value_channel: {**_value_axis(chart), "scale": {"padding": DIVERGING_AXIS_PADDING_PX}},
+        "color": {
+            "condition": {"test": "datum.value < 0", "value": NEGATIVE_COLOR},
+            "value": POSITIVE_COLOR,
+        },
     }
-    if chart.get("category_order"):
-        category_axis["sort"] = chart["category_order"]
+    layers: list[dict[str, Any]] = [
+        {"mark": {"type": "bar", "cornerRadiusEnd": 3}, "encoding": encoding},
+        # 기준선은 범주와 무관하게 축을 가로질러야 해서 범주 인코딩을 물려받지 않는다.
+        {
+            "mark": {"type": "rule", "color": BASELINE_COLOR, "strokeWidth": 1},
+            "encoding": {value_channel: {"datum": 0}},
+        },
+    ]
+    if chart.get("value_labels", True):
+        for negative in (False, True):
+            layers.append({
+                "transform": [{"filter": f"datum.value {'<' if negative else '>='} 0"}],
+                "mark": _label_mark(horizontal, negative),
+                "encoding": {
+                    **encoding,
+                    "text": {
+                        "field": "value",
+                        "type": "quantitative",
+                        "format": SIGNED_VALUE_FORMAT,
+                    },
+                    "color": {"value": LABEL_COLOR},
+                },
+            })
+    return {"layer": layers}
+
+
+# 증감이 쌓여 마지막 값에 이르는 과정을 단계별 막대로 그린다.
+def _waterfall_view(
+    chart: dict[str, Any], x_is_year: bool, horizontal: bool,
+) -> dict[str, Any]:
+    value_channel = "x" if horizontal else "y"
+    step_axis = {**_value_axis(chart), "field": "_start"}
+    encoding: dict[str, Any] = {
+        "y" if horizontal else "x": _category_axis(chart, x_is_year),
+        value_channel: step_axis,
+        f"{value_channel}2": {"field": "_end"},
+        "color": {
+            "condition": {"test": "datum.value < 0", "value": NEGATIVE_COLOR},
+            "value": POSITIVE_COLOR,
+        },
+        "tooltip": [
+            {"field": "x", "type": "nominal", "title": ""},
+            {
+                "field": "value",
+                "type": "quantitative",
+                "title": "증감",
+                "format": SIGNED_VALUE_FORMAT,
+            },
+            {"field": "_end", "type": "quantitative", "title": "누적", "format": VALUE_FORMAT},
+        ],
+    }
+    layers: list[dict[str, Any]] = [{"mark": {"type": "bar"}, "encoding": encoding}]
+    if chart.get("value_labels", True):
+        # 라벨은 막대의 바깥쪽 끝에 붙여야 줄어든 단계에서도 막대를 가리지 않는다.
+        label_encoding = {
+            key: value for key, value in encoding.items() if key != f"{value_channel}2"
+        }
+        layers.append({
+            "mark": _label_mark(horizontal),
+            "encoding": {
+                **label_encoding,
+                value_channel: {**step_axis, "field": "_label_at"},
+                "text": {
+                    "field": "value",
+                    "type": "quantitative",
+                    "format": SIGNED_VALUE_FORMAT,
+                },
+                "color": {"value": LABEL_COLOR},
+            },
+        })
+    return {"layer": layers}
+
+
+# 값 크기를 선과 점으로 표시해 막대보다 가볍게 순위를 비교한다.
+def _lollipop_view(
+    chart: dict[str, Any], x_is_year: bool, horizontal: bool,
+) -> dict[str, Any]:
+    value_channel = "x" if horizontal else "y"
+    encoding: dict[str, Any] = {
+        "y" if horizontal else "x": _category_axis(chart, x_is_year),
+        value_channel: _value_axis(chart),
+    }
+    layers: list[dict[str, Any]] = [
+        {
+            "mark": {"type": "rule", "strokeWidth": 2, "color": DUAL_AXIS_COLORS[0]},
+            "encoding": {**encoding, f"{value_channel}2": {"datum": 0}},
+        },
+        {
+            "mark": {
+                "type": "point",
+                "filled": True,
+                "size": 110,
+                "color": DUAL_AXIS_COLORS[0],
+            },
+            "encoding": encoding,
+        },
+    ]
+    if chart.get("value_labels", True):
+        layers.append({
+            "mark": _label_mark(horizontal),
+            "encoding": {
+                **encoding,
+                "text": {"field": "value", "type": "quantitative", "format": VALUE_FORMAT},
+                "color": {"value": LABEL_COLOR},
+            },
+        })
+    return {"layer": layers}
+
+
+# 막대 길이를 100%로 맞춰 항목마다 구성비만 비교한다.
+def _stacked_share_view(
+    chart: dict[str, Any],
+    x_is_year: bool,
+    horizontal: bool,
+    stack_order: dict[str, Any],
+) -> dict[str, Any]:
+    value_channel = "x" if horizontal else "y"
+    share_axis: dict[str, Any] = {
+        "field": "value",
+        "type": "quantitative",
+        "title": "구성비",
+        "stack": "normalize",
+        "axis": {"format": ".0%"},
+    }
+    encoding: dict[str, Any] = {
+        "y" if horizontal else "x": _category_axis(chart, x_is_year),
+        value_channel: share_axis,
+        "color": {"field": "series", "type": "nominal", "title": ""},
+        "tooltip": [
+            {"field": "x", "type": "nominal", "title": ""},
+            {"field": "series", "type": "nominal", "title": ""},
+            {
+                "field": "value",
+                "type": "quantitative",
+                "title": chart.get("unit") or "값",
+                "format": VALUE_FORMAT,
+            },
+            {"field": "_share", "type": "quantitative", "title": "구성비", "format": SHARE_FORMAT},
+        ],
+    }
+    series_order = [item["label"] for item in chart.get("series") or []]
+    if series_order:
+        encoding["color"]["scale"] = {"domain": series_order}
     return {
-        "encoding": {"x": category_axis},
-        "layer": layers,
-        "resolve": {"scale": {"y": "independent"}},
+        "encoding": encoding,
+        "layer": [
+            {"mark": "bar", "encoding": {"order": stack_order}},
+            {
+                # 얇은 층에 라벨을 넣으면 층 밖으로 삐져나오므로 비율이 큰 층만 표시한다.
+                "transform": [{"filter": f"datum._share >= {MIN_SHARE_LABEL}"}],
+                "mark": {
+                    "type": "text",
+                    "fontSize": LABEL_FONT_SIZE,
+                    "align": "center",
+                    "baseline": "middle",
+                },
+                "encoding": {
+                    value_channel: {**share_axis, "bandPosition": 0.5},
+                    "order": stack_order,
+                    "text": {"field": "_share", "type": "quantitative", "format": SHARE_FORMAT},
+                    "color": {"value": ON_MARK_LABEL_COLOR},
+                },
+            },
+        ],
     }
+
+
+# 두 시점 사이에서 항목마다 값이 어느 방향으로 얼마나 움직였는지 기울기로 보여준다.
+def _slope_view(chart: dict[str, Any]) -> dict[str, Any]:
+    labels = [item["label"] for item in chart.get("series") or []]
+    encoding: dict[str, Any] = {
+        # 양 끝 라벨이 잘리지 않도록 point 척도로 안쪽 여백을 준다.
+        "x": {
+            "field": "x",
+            "type": "ordinal",
+            "title": "",
+            "scale": {"type": "point", "padding": SLOPE_SCALE_PADDING},
+        },
+        # 기울기 차트가 보여주는 것은 값의 수준이 아니라 움직임이라 축을 0까지 늘리지 않는다.
+        "y": {**_value_axis(chart), "scale": {"zero": False}},
+        "color": _series_color(labels, legend=False),
+        "detail": {"field": "series", "type": "nominal"},
+        "tooltip": [
+            {"field": "series", "type": "nominal", "title": ""},
+            {"field": "x", "type": "ordinal", "title": ""},
+            {
+                "field": "value",
+                "type": "quantitative",
+                "title": chart.get("unit") or "값",
+                "format": VALUE_FORMAT,
+            },
+        ],
+    }
+    layers: list[dict[str, Any]] = [
+        {"mark": {"type": "line", "strokeWidth": 2.5}},
+        {"mark": {"type": "point", "filled": True, "size": 80}},
+    ]
+    for edge, align, offset in (("start", "right", -10), ("end", "left", 10)):
+        layers.append({
+            "transform": [{"filter": f"datum._edge === '{edge}'"}],
+            "mark": {
+                "type": "text",
+                "fontSize": LABEL_FONT_SIZE,
+                "align": align,
+                "baseline": "middle",
+                "dx": offset,
+            },
+            "encoding": {"text": {"field": "_edge_label", "type": "nominal"}},
+        })
+    return {"encoding": encoding, "layer": layers}
+
+
+# 값 자체 대신 순위를 이어 시점마다 자리가 어떻게 바뀌었는지 보여준다.
+def _bump_view(chart: dict[str, Any]) -> dict[str, Any]:
+    labels = [item["label"] for item in chart.get("series") or []]
+    encoding: dict[str, Any] = {
+        "x": {"field": "x", "type": "ordinal", "title": "", "scale": {"padding": 0.2}},
+        # 1위가 위로 오도록 축을 뒤집고, 없는 순위(0위)가 눈금에 끼지 않도록 범위를 못 박는다.
+        "y": {
+            "field": "_rank",
+            "type": "quantitative",
+            "title": "순위",
+            "scale": {
+                "reverse": True,
+                "nice": False,
+                "domain": [0.5, (chart.get("rank_count") or 1) + 0.5],
+            },
+            "axis": {"tickMinStep": 1, "format": "d"},
+        },
+        "color": _series_color(labels, legend=False),
+        "tooltip": [
+            {"field": "series", "type": "nominal", "title": ""},
+            {"field": "x", "type": "ordinal", "title": ""},
+            {"field": "_rank", "type": "quantitative", "title": "순위", "format": "d"},
+            {
+                "field": "value",
+                "type": "quantitative",
+                "title": chart.get("unit") or "값",
+                "format": VALUE_FORMAT,
+            },
+        ],
+    }
+    layers: list[dict[str, Any]] = [
+        {"mark": {"type": "line", "strokeWidth": 2.5, "interpolate": "monotone"}},
+        {"mark": {"type": "point", "filled": True, "size": 110}},
+        {
+            "mark": {
+                "type": "text",
+                "fontSize": LABEL_FONT_SIZE - 1,
+                "baseline": "middle",
+            },
+            "encoding": {
+                "text": {"field": "_rank", "type": "quantitative", "format": "d"},
+                "color": {"value": "#ffffff"},
+            },
+        },
+        {
+            "transform": [{"filter": "datum._edge === 'end'"}],
+            "mark": {
+                "type": "text",
+                "fontSize": LABEL_FONT_SIZE,
+                "align": "left",
+                "baseline": "middle",
+                "dx": 12,
+            },
+            "encoding": {"text": {"field": "series", "type": "nominal"}},
+        },
+    ]
+    return {"encoding": encoding, "layer": layers}
+
+
+# 항목마다 두 값을 점으로 찍고 그 사이를 이어 격차를 길이로 보여준다.
+def _dumbbell_view(
+    chart: dict[str, Any], x_is_year: bool, horizontal: bool,
+) -> dict[str, Any]:
+    value_channel = "x" if horizontal else "y"
+    labels = [item["label"] for item in chart.get("series") or []]
+    # 아령 차트가 보여주는 것은 두 값 사이의 폭이라 축을 0까지 늘리지 않는다.
+    # 대신 위아래로 붙는 값 라벨이 눈금 라벨과 겹치지 않도록 양 끝에 여백을 둔다.
+    value_axis = {
+        **_value_axis(chart),
+        "scale": {"zero": False, "nice": False, "padding": GAP_AXIS_PADDING_PX},
+    }
+    category_axis = _category_axis(chart, x_is_year)
+    connector: dict[str, Any] = {
+        "mark": {"type": "rule", "color": GAP_RULE_COLOR, "strokeWidth": 3},
+        "encoding": {
+            "y" if horizontal else "x": category_axis,
+            value_channel: {**value_axis, "aggregate": "min"},
+            f"{value_channel}2": {"field": "value", "aggregate": "max"},
+        },
+    }
+    points: dict[str, Any] = {
+        "mark": {"type": "point", "filled": True, "size": 130},
+        "encoding": {
+            "y" if horizontal else "x": category_axis,
+            value_channel: value_axis,
+            "color": _series_color(labels, DUAL_AXIS_COLORS) if labels else {
+                "field": "series", "type": "nominal", "title": "",
+            },
+            "tooltip": [
+                {"field": "x", "type": "nominal", "title": ""},
+                {"field": "series", "type": "nominal", "title": ""},
+                {
+                    "field": "value",
+                    "type": "quantitative",
+                    "title": chart.get("unit") or "값",
+                    "format": VALUE_FORMAT,
+                },
+            ],
+        },
+    }
+    layers = [connector, points]
+    if chart.get("value_labels", True):
+        # 두 점이 가까우면 라벨이 겹치므로 위쪽 값은 위에, 아래쪽 값은 아래에 붙인다.
+        for is_top in (True, False):
+            layers.append({
+                "transform": [{"filter": f"datum._is_top === {str(is_top).lower()}"}],
+                "mark": {
+                    "type": "text",
+                    "fontSize": LABEL_FONT_SIZE,
+                    "dy": -12 if is_top else 12,
+                    "baseline": "bottom" if is_top else "top",
+                },
+                "encoding": {
+                    **points["encoding"],
+                    "text": {"field": "value", "type": "quantitative", "format": VALUE_FORMAT},
+                    "color": {"value": LABEL_COLOR},
+                },
+            })
+    return {"layer": layers}
 
 
 # 여러 표에서 짝지은 두 지표를 항목 이름과 함께 점으로 그린다.
@@ -252,19 +670,32 @@ def _relation_scatter_view(chart: dict[str, Any]) -> dict[str, Any]:
 
 
 # 내부 차트 타입을 Vega-Lite mark/encoding 뷰로 변환한다.
-def _vega_view(
-    chart: dict[str, Any],
-    has_series: bool,
-    x_is_year: bool,
-    category_order: list[Any] | None = None,
-) -> dict[str, Any]:
+def _vega_view(chart: dict[str, Any], has_series: bool, x_is_year: bool) -> dict[str, Any]:
     ctype = chart["type"]
     unit = chart.get("unit") or "값"
+    # 막대 계열 차트만 방향을 바꾼다. 나머지는 세로 배치가 고정이다.
+    horizontal = chart.get("orientation") == "horizontal"
 
     if ctype == "scatter" and chart.get("point_label"):
         return _relation_scatter_view(chart)
-    if chart.get("dual_axis") and chart.get("series"):
-        return _dual_axis_view(chart, x_is_year)
+    if (ctype == "combo" or chart.get("dual_axis")) and chart.get("series"):
+        return _combo_view(chart, x_is_year)
+    if ctype == "diverging_bar":
+        return _diverging_bar_view(chart, x_is_year, horizontal)
+    if ctype == "waterfall":
+        return _waterfall_view(chart, x_is_year, horizontal)
+    if ctype == "lollipop":
+        return _lollipop_view(chart, x_is_year, horizontal)
+    if ctype == "stacked_bar_100" and has_series:
+        return _stacked_share_view(
+            chart, x_is_year, horizontal, _stack_order_encoding(horizontal),
+        )
+    if ctype == "slope":
+        return _slope_view(chart)
+    if ctype == "bump":
+        return _bump_view(chart)
+    if ctype == "dumbbell" and has_series:
+        return _dumbbell_view(chart, x_is_year, horizontal)
 
     if ctype == "donut":
         return {
@@ -350,7 +781,7 @@ def _vega_view(
     }
     is_bar = ctype in {"bar", "grouped_bar", "stacked_bar"}
     # 막대는 기본 세로형이고 orientation=horizontal일 때만 값·범주 축을 교환한다.
-    horizontal = is_bar and chart.get("orientation") == "horizontal"
+    horizontal = is_bar and horizontal
     x_type = "quantitative" if ctype == "scatter" else "ordinal" if x_is_year else "nominal"
     category_axis: dict[str, Any] = {
         "field": "x",
@@ -362,17 +793,9 @@ def _vega_view(
         "type": "quantitative",
         "title": chart.get("y_title") or unit,
     }
-    sort_order = chart.get("sort_order")
     if chart.get("category_order"):
         # 서버가 축 순서를 정한 차트는 그 순서를 그대로 domain으로 넘긴다.
         category_axis["sort"] = chart["category_order"]
-    elif is_bar and sort_order in {"ascending", "descending"}:
-        # 누적 막대는 라벨 레이어마다 데이터셋이 갈려 op 기반 정렬이 무시되므로 미리 계산한 순서를 쓴다.
-        category_axis["sort"] = category_order or {
-            "field": "value",
-            "op": "sum",
-            "order": sort_order,
-        }
     encoding: dict[str, Any] = (
         {"x": value_axis, "y": category_axis} if horizontal
         else {"x": category_axis, "y": value_axis}
@@ -388,14 +811,8 @@ def _vega_view(
         if ctype == "grouped_bar":
             encoding["yOffset" if horizontal else "xOffset"] = offset
     if ctype == "stacked_bar" and has_series:
-        # 레이어마다 쌓는 순서가 갈리면 라벨이 다른 층 위에 찍히므로 순서를 명시한다.
         # 합계 레이어는 계열 구분 없이 집계해야 하므로 순서를 물려받지 않는다.
-        # 세로형은 첫 계열이 맨 위, 가로형은 첫 계열이 맨 왼쪽에 오는 기본 모양을 유지한다.
-        stack_order = {
-            "field": "_stack_order",
-            "type": "quantitative",
-            "sort": "descending" if horizontal else "ascending",
-        }
+        stack_order = _stack_order_encoding(horizontal)
         return {
             "encoding": encoding,
             "layer": [
@@ -422,6 +839,113 @@ def _vega_view(
     return {"encoding": encoding, "layer": layers}
 
 
+# 항목마다 계열이 차지하는 비중을 미리 구한다(Vega-Lite 정규화 축은 라벨 값을 주지 않는다).
+def _add_shares(values: list[dict[str, Any]]) -> None:
+    totals: dict[Any, float] = {}
+    for value in values:
+        totals[value["x"]] = totals.get(value["x"], 0.0) + max(float(value["value"] or 0), 0)
+    for value in values:
+        total = totals.get(value["x"]) or 0.0
+        value["_share"] = max(float(value["value"] or 0), 0) / total if total > 0 else 0.0
+
+
+# 각 단계가 어디서 시작해 어디서 끝나는지 누적해 폭포 차트의 막대 구간을 만든다.
+def _add_waterfall_steps(values: list[dict[str, Any]]) -> None:
+    running = 0.0
+    for value in values:
+        value["_start"] = running
+        running += float(value["value"] or 0)
+        value["_end"] = running
+        value["_label_at"] = max(value["_start"], value["_end"])
+
+
+# 시점마다 값이 큰 계열부터 1위를 매기고, 가장 낮은 순위를 돌려준다.
+def _add_ranks(values: list[dict[str, Any]]) -> int:
+    groups: dict[Any, list[dict[str, Any]]] = {}
+    for value in values:
+        groups.setdefault(value["x"], []).append(value)
+    for group in groups.values():
+        ordered = sorted(group, key=lambda item: float(item["value"] or 0), reverse=True)
+        for rank, item in enumerate(ordered, start=1):
+            item["_rank"] = rank
+    return max((len(group) for group in groups.values()), default=1)
+
+
+# 항목마다 어느 쪽 값이 위에 놓이는지 표시해 두 라벨을 위아래로 갈라 붙일 수 있게 한다.
+def _mark_top_values(values: list[dict[str, Any]]) -> None:
+    tops: dict[Any, float] = {}
+    for value in values:
+        number = float(value["value"] or 0)
+        tops[value["x"]] = max(tops.get(value["x"], number), number)
+    for value in values:
+        value["_is_top"] = float(value["value"] or 0) >= tops[value["x"]]
+
+
+# 양 끝 시점을 표시해 그 자리에만 계열 이름과 값을 붙일 수 있게 한다.
+def _mark_edges(values: list[dict[str, Any]]) -> None:
+    positions = list(dict.fromkeys(value["x"] for value in values))
+    if not positions:
+        return
+    first, last = positions[0], positions[-1]
+    for value in values:
+        value["_edge"] = (
+            "start" if value["x"] == first else "end" if value["x"] == last else ""
+        )
+
+
+# 값 범위를 차트 세로 픽셀 위치로 바꾼다(위가 큰 값).
+def _slope_label_y(value: float, low: float, high: float) -> float:
+    if high <= low:
+        return SLOPE_VIEW_HEIGHT_PX / 2
+    return SLOPE_VIEW_HEIGHT_PX - (value - low) / (high - low) * SLOPE_VIEW_HEIGHT_PX
+
+
+# 기울기 차트는 선이 겹쳐 범례로 계열을 찾기 어려우므로 시작점에 이름을 함께 적는다.
+# 값이 몰린 구간에서는 라벨이 서로 덮으므로 큰 값부터 남기고 나머지는 비운다(값은 tooltip에 남는다).
+def _add_slope_labels(values: list[dict[str, Any]]) -> None:
+    _mark_edges(values)
+    numbers = [float(value["value"] or 0) for value in values]
+    low, high = (min(numbers), max(numbers)) if numbers else (0.0, 0.0)
+    for edge in ("start", "end"):
+        placed: list[float] = []
+        ranked = sorted(
+            (value for value in values if value["_edge"] == edge),
+            key=lambda item: float(item["value"] or 0),
+            reverse=True,
+        )
+        for value in ranked:
+            number = float(value["value"] or 0)
+            position = _slope_label_y(number, low, high)
+            if any(abs(position - other) < SLOPE_LABEL_MIN_GAP_PX for other in placed):
+                value["_edge_label"] = ""
+                continue
+            placed.append(position)
+            text = _format_number(number)
+            value["_edge_label"] = (
+                f"{value.get('series') or ''} {text}".strip() if edge == "start" else text
+            )
+    for value in values:
+        value.setdefault("_edge_label", "")
+
+
+# 차트 종류마다 Vega-Lite 식으로는 계산할 수 없는 파생 값을 미리 채우고,
+# 축을 세우는 데 필요한 값을 chart에 되돌려 준다.
+def _add_derived_fields(chart_type: str, values: list[dict[str, Any]]) -> dict[str, Any]:
+    if chart_type == "stacked_bar_100":
+        _add_shares(values)
+    elif chart_type == "waterfall":
+        _add_waterfall_steps(values)
+    elif chart_type == "bump":
+        rank_count = _add_ranks(values)
+        _mark_edges(values)
+        return {"rank_count": rank_count}
+    elif chart_type == "slope":
+        _add_slope_labels(values)
+    elif chart_type == "dumbbell":
+        _mark_top_values(values)
+    return {}
+
+
 # 클라이언트가 직접 렌더링할 수 있는 표준 Vega-Lite spec을 만든다.
 def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
     chart = spec["chart"]
@@ -432,7 +956,7 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
     has_series = any(record.get("series") for record in records)
     x_is_year = _vega_x_is_year(spec)
     is_donut = chart["type"] == "donut"
-    is_stacked = chart["type"] == "stacked_bar" and has_series
+    is_stacked = chart["type"] in {"stacked_bar", "stacked_bar_100"} and has_series
     stack_order = _stack_order(records) if is_stacked else {}
     positive_total = (
         sum(max(float(record.get("value") or 0), 0) for record in records)
@@ -469,8 +993,20 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
             cumulative += numeric_value
         values.append(value)
 
-    category_order = _category_order(records, chart.get("sort_order")) if is_stacked else None
-    view = _vega_view(chart, has_series, x_is_year, category_order)
+    chart = {**chart, **_add_derived_fields(chart["type"], values)}
+    if chart["type"] == "combo" and not chart.get("series"):
+        # 한 표 안의 계열을 콤보로 그릴 때는 계열 목록을 레코드에서 세운다.
+        chart["series"] = [
+            {"label": label, "unit": chart.get("unit")}
+            for label in dict.fromkeys(
+                record["series"] for record in records if record.get("series")
+            )
+        ]
+    if chart["type"] != "scatter" and not chart.get("category_order"):
+        # 축 순서를 두지 않으면 Vega-Lite가 가나다순으로 다시 늘어놓아 표에 실린 순서도,
+        # 서버가 값 기준으로 다시 세운 순서도 사라진다. 폭포 차트는 누적까지 어긋난다.
+        chart["category_order"] = list(dict.fromkeys(record.get("x") for record in records))
+    view = _vega_view(chart, has_series, x_is_year)
     view["data"] = {"values": values}
 
     root: dict[str, Any] = {
@@ -481,27 +1017,11 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
     delta_records = spec["data"].get("delta_records") or []
     if delta_records:
         unit = chart.get("unit") or "값"
-        delta_view = {
-            "title": f"전년 대비 증감 ({unit})",
-            "data": {"values": [{"x": r["x"], "value": r["value"]} for r in delta_records]},
-            "encoding": {
-                "x": {"field": "x", "type": "ordinal", "title": ""},
-                "y": {"field": "value", "type": "quantitative", "title": unit},
-                "color": {
-                    "condition": {"test": "datum.value < 0", "value": "#e34948"},
-                    "value": "#2a78d6",
-                },
-            },
-            "layer": [
-                {"mark": "bar"},
-                {
-                    "mark": {"type": "text", "fontSize": 11, "dy": -8, "baseline": "bottom"},
-                    "encoding": {
-                        "text": {"field": "value", "type": "quantitative", "format": ",.2~f"},
-                        "color": {"value": "#344054"},
-                    },
-                },
-            ],
+        # 보조 증감 차트도 본 차트와 같은 증감 막대 규칙(0 기준선·부호 색)을 따른다.
+        delta_view = _diverging_bar_view({"type": "diverging_bar", "unit": unit}, True, False)
+        delta_view["title"] = f"전년 대비 증감 ({unit})"
+        delta_view["data"] = {
+            "values": [{"x": record["x"], "value": record["value"]} for record in delta_records]
         }
         root["vconcat"] = [view, delta_view]
     else:

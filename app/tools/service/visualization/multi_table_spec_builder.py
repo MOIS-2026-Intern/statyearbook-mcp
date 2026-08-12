@@ -4,12 +4,16 @@ import re
 from typing import Any, Literal
 
 from .chart_spec_builder import (
+    GAP_WORDS,
+    RANK_WORDS,
     VALID_CHART_TYPES,
     apply_display_title,
     limit_categories,
     metric_unit,
+    ordered_categories,
     resolve_sort_order,
     stat_block,
+    wants_words,
 )
 from .table_interpreter import (
     TotalMode,
@@ -351,17 +355,25 @@ def _wants_relation_chart(query: str | None) -> bool:
     return any(word in text for word in RELATION_WORDS)
 
 
+# 계열들이 같은 단위를 쓰는지 확인한다.
+def _same_unit(series: list[dict[str, Any]]) -> bool:
+    units = {clean_label(item.get("unit")) for item in series}
+    return len(units) == 1 and bool(next(iter(units)))
+
+
 # 요청과 계열 구조를 바탕으로 여러 표를 함께 그릴 차트 타입을 결정한다.
 def _select_multi_chart(
     requested: str,
     query: str | None,
     key_is_year: bool,
-    series_count: int,
+    series: list[dict[str, Any]],
+    axis_labels: list[Any],
     warnings: list[str],
 ) -> tuple[str, str, str]:
     requested_type = requested if requested in VALID_CHART_TYPES else "auto"
     if requested_type != requested:
         warnings.append(f"지원하지 않는 차트 타입 '{requested}' 대신 auto를 사용했습니다.")
+    series_count = len(series)
 
     if requested_type == "scatter" or (
         requested_type == "auto" and series_count == 2 and not key_is_year and _wants_relation_chart(query)
@@ -378,33 +390,53 @@ def _select_multi_chart(
     if requested_type == "donut":
         warnings.append("도넛형은 한 표의 구성비에 적합해 여러 표 비교에는 사용하지 않았습니다.")
         requested_type = "auto"
+    if requested_type in {"line", "area", "slope", "bump"} and not key_is_year and not ordered_categories(axis_labels):
+        warnings.append(
+            "선을 잇는 차트는 시간처럼 순서가 있는 축에서 추이를 보여줄 때 적합해 막대그래프로 바꿨습니다."
+        )
+        requested_type = "auto"
+    if requested_type == "dumbbell" and (series_count != 2 or not _same_unit(series)):
+        warnings.append("아령 차트는 단위가 같은 지표 두 개가 필요해 다른 차트로 대체했습니다.")
+        requested_type = "auto"
 
     if requested_type == "auto":
+        if key_is_year and _same_unit(series) and wants_words(query, RANK_WORDS):
+            return "bump", "server_multi_source", "순위 변화를 묻는 요청이라 시점마다 순위를 매겨 잇는 그래프를 선택했습니다."
         if key_is_year:
             return "line", "server_multi_source", "연도를 공통 축으로 맞춰 표별 추이를 선그래프로 겹쳤습니다."
-        chart = "grouped_bar" if series_count > 1 else "bar"
-        return chart, "server_multi_source", "공통 항목을 축으로 표별 값을 나란히 비교하는 막대그래프를 선택했습니다."
+        if series_count == 2 and _same_unit(series) and wants_words(query, GAP_WORDS):
+            return "dumbbell", "server_multi_source", "두 지표의 격차를 묻는 요청이라 항목마다 두 값을 이어 벌어진 폭을 보여주는 아령 차트를 선택했습니다."
+        if series_count > 1:
+            return "grouped_bar", "server_multi_source", "같은 기준 항목을 두고 지표별 막대를 나란히 놓아 크기를 바로 견주게 했습니다."
+        return "bar", "server_multi_source", "공통 항목을 축으로 표별 값을 비교하는 막대그래프를 선택했습니다."
 
     if requested_type == "bar" and series_count > 1:
         return "grouped_bar", "server_fallback", "표가 둘 이상이라 그룹 막대그래프로 보정했습니다."
     return requested_type, "client_spec_validated", "클라이언트가 지정한 차트 타입을 여러 표 구조에서 검증해 사용했습니다."
 
 
-# 단위나 값 크기가 크게 다른 두 계열은 축을 나눠야 작은 계열이 보인다.
-def _needs_dual_axis(chart_type: str, series: list[dict[str, Any]]) -> bool:
-    if chart_type not in {"bar", "grouped_bar", "line", "area"} or len(series) != 2:
-        return False
-    units = [clean_label(item.get("unit")) for item in series]
-    if all(units) and units[0] != units[1]:
-        return True
-
+# 두 계열의 최댓값이 몇 배나 벌어져 있는지 잰다.
+def _scale_ratio(series: list[dict[str, Any]]) -> float:
     scales = []
     for item in series:
         values = [abs(value) for value in item["points"]["values"].values() if value]
         scales.append(max(values) if values else 0.0)
-    if min(scales) <= 0:
+    if len(scales) != 2 or min(scales) <= 0:
+        return 1.0
+    return max(scales) / min(scales)
+
+
+# 단위가 다른 두 계열은 축을 나눠야 작은 계열이 보인다.
+# 반대로 단위가 같으면 규모가 벌어져도 한 축에 둔다. 축을 나누면 눈금이 달라져
+# 막대 높이를 그대로 견주는 읽기가 어긋나기 때문이다.
+def _needs_dual_axis(chart_type: str, series: list[dict[str, Any]]) -> bool:
+    if chart_type not in {"bar", "grouped_bar", "line", "area", "combo"} or len(series) != 2:
         return False
-    return max(scales) / min(scales) >= DUAL_AXIS_SCALE_RATIO
+    units = [clean_label(item.get("unit")) for item in series]
+    if all(units):
+        return units[0] != units[1]
+    # 단위를 알 수 없을 때만 값의 규모 차이로 판단한다.
+    return _scale_ratio(series) >= DUAL_AXIS_SCALE_RATIO
 
 
 # 축에 표시할 계열 이름과 단위를 합친다.
@@ -611,8 +643,11 @@ def build_multi_source_spec(
         )
     _unique_labels(series)
 
+    all_labels = list(dict.fromkeys(
+        label for item in series for label in item["points"]["axis_values"].values()
+    ))
     selected_type, decision_source, reason = _select_multi_chart(
-        chart_type, query, key_is_year, len(series), warnings,
+        chart_type, query, key_is_year, series, all_labels, warnings,
     )
     shared_keys = set(series[0]["points"]["values"])
     for item in series[1:]:
@@ -677,6 +712,14 @@ def build_multi_source_spec(
 
     units = {item["unit"] for item in series}
     dual_axis = selected_type != "scatter" and _needs_dual_axis(selected_type, series)
+    if dual_axis:
+        # 값 축을 나누면 막대를 나란히 둘 수 없다. 계열마다 mark를 달리하는 콤보 차트로 바꾼다.
+        selected_type = "combo"
+    elif _same_unit(series) and _scale_ratio(series) >= DUAL_AXIS_SCALE_RATIO:
+        warnings.append(
+            "두 지표의 규모 차이가 커서 작은 쪽 막대가 낮게 보입니다. 단위가 같아 축은 하나로 두었으니, "
+            "작은 쪽을 자세히 보려면 그 표만 따로 그려 주세요."
+        )
     chart: dict[str, Any] = {
         "type": selected_type,
         "requested_type": chart_type,
@@ -707,7 +750,12 @@ def build_multi_source_spec(
         chart["y_title"] = _axis_title(series[1])
     elif dual_axis:
         chart["y_title"] = _axis_title(series[0])
-        chart["reason"] = f"{chart['reason']} 두 계열의 단위·규모가 달라 값 축을 좌우로 나눴습니다."
+        # 값 축을 나누면 mark도 바뀌므로 원래 이유를 덧붙이지 않고 다시 쓴다.
+        axis_label = "연도" if key_is_year else "표끼리 공통인 항목"
+        chart["reason"] = (
+            f"{axis_label}을 축으로 맞추되, 두 계열의 단위가 달라 한 축에 나란히 두면 작은 쪽이 "
+            "보이지 않으므로 값 축을 좌우로 나누고 첫 계열은 막대, 나머지는 선으로 겹쳤습니다."
+        )
 
     spec = {
         "ok": True,

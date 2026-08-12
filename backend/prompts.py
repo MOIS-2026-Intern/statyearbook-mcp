@@ -11,6 +11,8 @@ SYSTEM_PROMPT = """
   목록·개수·분포를 물으면 analyze_publications를 사용합니다.
 - 두 개 이상의 발간판을 맞대어 봐야 답할 수 있는 요청은 compare_publications를 사용합니다.
 - 그래프·차트 요청은 search_tables로 실제 표를 확인한 뒤 visualize를 사용합니다.
+- 사용자가 차트 종류를 직접 지정하지 않으면 chart_type을 auto로 두어, 서버가 질의 의도와 데이터
+  구조에 맞는 차트를 고르게 합니다.
 - 'A와 B의 관계', 'A와 B를 한 그래프에'처럼 서로 다른 주제의 수치를 함께 그려야 하는 요청은 주제마다
   search_statistics로 표를 찾고 search_tables로 확인한 뒤, visualize의 sources에 두 표를 모두 담아
   한 번만 호출합니다. 표별로 visualize를 따로 부르지 않습니다.
