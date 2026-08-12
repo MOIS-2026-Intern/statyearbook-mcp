@@ -705,6 +705,34 @@ class ValueLabelTests(unittest.TestCase):
         self.assertEqual(tooltip_fields, ["x", "series", "value"])
         self.assertTrue(any("겹쳐" in warning for warning in spec["warnings"]))
 
+    # 선그래프는 같은 연도의 라벨이 한 자리에 겹치므로 값이 붙은 쪽을 비워야 한다.
+    def test_line_chart_blanks_labels_that_land_on_each_other(self) -> None:
+        # 2023년 두 값은 서로 붙어 있고, 2021년 두 값은 축 위아래로 멀리 떨어져 있다.
+        close_table = {
+            **YEAR_SERIES_TABLE,
+            "body": body(YEAR_SERIES_COLUMNS, [
+                ["2021", "서울", "950"],
+                ["2021", "부산", "330"],
+                ["2023", "서울", "980"],
+                ["2023", "부산", "1000"],
+            ]),
+        }
+        spec = build_plot_spec(
+            close_table, "연도별 지역 인구 추이", "line",
+            YEAR_SERIES_COLUMNS[0], YEAR_SERIES_COLUMNS[2], YEAR_SERIES_COLUMNS[1],
+            None, "exclude",
+        )
+        vega_lite = build_vega_lite_spec(spec)
+
+        labels = {
+            (value["x"], value["series"]): value["_label"]
+            for value in vega_lite["data"]["values"]
+        }
+        self.assertEqual(labels[(2023, "부산")], "1,000")
+        self.assertEqual(labels[(2023, "서울")], "")
+        self.assertEqual(labels[(2021, "서울")], "950")
+        self.assertEqual(labels[(2021, "부산")], "330")
+
     # 가로 막대는 범주마다 줄이 따로 있어 라벨을 접지 않고, 축 끝에 라벨 자리를 남긴다.
     def test_horizontal_chart_keeps_labels_with_axis_headroom(self) -> None:
         spec, vega_lite = self._spec(17, orientation="horizontal")

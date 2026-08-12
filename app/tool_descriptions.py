@@ -246,7 +246,10 @@ METRIC_SELECTION_FIELDS = {
 }
 SERIES_SOURCE_FIELDS = {
     "stat_id": "이 계열을 읽어 올 통계표의 stat_id",
-    "table_handle": "그 stat_id에 대해 직전 search_tables가 발급한 캐시 핸들",
+    "table_handle": (
+        "그 stat_id에 대해 이번 요청의 search_tables가 발급한 캐시 핸들. "
+        "이전 요청에서 받은 핸들은 쓰지 않는다"
+    ),
     "label": (
         "차트 범례와 축에 쓸 짧은 한글 계열명. 예: '주민등록인구', '지방자치단체 채무'. "
         "생략하면 통계표 제목을 사용한다"
@@ -291,7 +294,11 @@ VISUALIZE_FIELDS = {
         "scatter=두 지표의 관계, dumbbell=단위가 같은 두 지표의 항목별 격차, "
         "heatmap=두 범주 축에 걸친 값의 분포, donut=한 시점의 구성비, table=차트 없이 표만"
     ),
-    "table_handle": "직전 search_tables가 해당 표에 발급한 캐시 핸들",
+    "table_handle": (
+        "이번 요청에서 search_tables가 그 표에 발급한 캐시 핸들. 핸들은 요청이 끝나면 사라지므로 "
+        "이전 요청에서 받은 값을 다시 쓰지 않고, 이번 요청에서 받지 않았으면 생략한다. "
+        "표는 stat_id로도 읽으므로 stat_id는 언제나 함께 전달한다"
+    ),
     "table_seq": (
         "쪽이 나뉜 표는 이미 하나로 합쳐져 있으므로 기본값 1을 그대로 둔다. "
         "search_tables 응답의 seq는 원문 쪽 번호일 뿐이며, 이 값을 바꿔도 다른 컬럼이 나오지 "

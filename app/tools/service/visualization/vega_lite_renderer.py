@@ -24,9 +24,9 @@ GAP_RULE_COLOR = "#cbd5e1"
 MIN_SHARE_LABEL = 0.05
 # 두 시점만 잇는 기울기 차트는 양 끝 라벨이 들어갈 여백이 필요하다.
 SLOPE_SCALE_PADDING = 0.45
-# 라벨 겹침을 재는 기준이 되는 프론트엔드 기본 차트 높이와 라벨 사이 최소 간격이다.
-SLOPE_VIEW_HEIGHT_PX = 340
-SLOPE_LABEL_MIN_GAP_PX = 15
+# 라벨 겹침을 재는 기준이 되는 프론트엔드 기본 차트 높이와 라벨 사이 최소 세로 간격이다.
+VIEW_HEIGHT_PX = 340
+LABEL_MIN_GAP_PX = 15
 # 0 아래로 뻗은 막대의 값 라벨이 눈금 라벨과 겹치지 않도록 증감 축에 남기는 여백이다.
 DIVERGING_AXIS_PADDING_PX = 22
 # 아령 차트는 점 위아래에 값을 적으므로 그만큼의 여백이 더 필요하다.
@@ -60,6 +60,8 @@ SIGNED_LABEL_CHARTS = frozenset({"diverging_bar", "waterfall"})
 HORIZONTAL_CAPABLE_CHARTS = frozenset({
     "bar", "grouped_bar", "lollipop", "diverging_bar", "waterfall", "dumbbell",
 })
+# 계열이 여럿이어도 라벨이 가로로 갈라지지 않는 차트. 그룹 막대와 달리 같은 x 위에 겹쳐 놓인다.
+STACKED_LABEL_CHARTS = frozenset({"line", "area", "scatter"})
 
 
 # 범례와 Vega-Lite text mark가 같은 형태의 숫자를 보여주도록 포맷한다.
@@ -112,9 +114,35 @@ def _compact_labels(values: list[dict[str, Any]]) -> list[str] | None:
     return None
 
 
-# 값 라벨의 text 인코딩. 자리가 빠듯하면 서버가 미리 줄여 둔 라벨을 그대로 쓴다.
+# 계열이 여럿이면 같은 x에 라벨이 겹쳐 놓인다. 값이 비슷한 계열끼리는 세로로도 가까워
+# 서로를 가리므로, 값이 큰 쪽을 남기고 가까이 붙는 라벨은 비운다(값은 tooltip에 남는다).
+def _blank_overlapping_labels(values: list[dict[str, Any]], labels: list[str]) -> bool:
+    top = max((float(value.get("value") or 0) for value in values), default=0)
+    if top <= 0:
+        return False
+
+    groups: dict[Any, list[int]] = {}
+    for index, value in enumerate(values):
+        groups.setdefault(value.get("x"), []).append(index)
+
+    blanked = False
+    for indexes in groups.values():
+        if len(indexes) < 2:
+            continue
+        placed: list[float] = []
+        for index in sorted(indexes, key=lambda item: -float(values[item].get("value") or 0)):
+            position = VIEW_HEIGHT_PX * (1 - float(values[index].get("value") or 0) / top)
+            if any(abs(position - other) < LABEL_MIN_GAP_PX for other in placed):
+                labels[index] = ""
+                blanked = True
+            else:
+                placed.append(position)
+    return blanked
+
+
+# 값 라벨의 text 인코딩. 자리가 빠듯하거나 서로 겹치면 서버가 미리 손본 라벨을 그대로 쓴다.
 def _value_text(chart: dict[str, Any]) -> dict[str, Any]:
-    if chart.get("compact_labels"):
+    if chart.get("text_labels"):
         return {"field": "_label", "type": "nominal"}
     return {"field": "value", "type": "quantitative", "format": VALUE_FORMAT}
 
@@ -1023,8 +1051,8 @@ def _mark_edges(values: list[dict[str, Any]]) -> None:
 # 값 범위를 차트 세로 픽셀 위치로 바꾼다(위가 큰 값).
 def _slope_label_y(value: float, low: float, high: float) -> float:
     if high <= low:
-        return SLOPE_VIEW_HEIGHT_PX / 2
-    return SLOPE_VIEW_HEIGHT_PX - (value - low) / (high - low) * SLOPE_VIEW_HEIGHT_PX
+        return VIEW_HEIGHT_PX / 2
+    return VIEW_HEIGHT_PX - (value - low) / (high - low) * VIEW_HEIGHT_PX
 
 
 # 기울기 차트는 선이 겹쳐 범례로 계열을 찾기 어려우므로 시작점에 이름을 함께 적는다.
@@ -1043,7 +1071,7 @@ def _add_slope_labels(values: list[dict[str, Any]]) -> None:
         for value in ranked:
             number = float(value["value"] or 0)
             position = _slope_label_y(number, low, high)
-            if any(abs(position - other) < SLOPE_LABEL_MIN_GAP_PX for other in placed):
+            if any(abs(position - other) < LABEL_MIN_GAP_PX for other in placed):
                 value["_edge_label"] = ""
                 continue
             placed.append(position)
@@ -1124,8 +1152,11 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
     # 만·억 단위로 줄여 보고, 그래도 안 들어가면 라벨을 접고 값은 tooltip에 남긴다.
     if values and chart.get("value_labels") is None and chart["type"] in VALUE_LABEL_CHARTS:
         width = _label_slot_width(chart, values)
-        full = [_format_number(float(value.get("value") or 0)) for value in values]
-        if not _labels_fit(full, width):
+        labels: list[str] | None = [
+            _format_number(float(value.get("value") or 0)) for value in values
+        ]
+        custom = False
+        if not _labels_fit(labels, width):
             # 축을 나눈 차트는 계열마다 값의 자릿수가 달라 한 단위로 줄이면 한쪽이 0에 눌린다.
             compact = (
                 None
@@ -1133,10 +1164,9 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
                 else _compact_labels(values)
             )
             if compact and _labels_fit(compact, width):
-                chart["compact_labels"] = True
-                for value, label in zip(values, compact):
-                    value["_label"] = label
+                labels, custom = compact, True
             else:
+                labels = None
                 chart["value_labels"] = False
                 advice = (
                     " 가로 막대로 요청하면 값을 함께 표시할 수 있습니다."
@@ -1147,6 +1177,13 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
                     f"항목이 {len({value.get('x') for value in values})}개라 값 라벨이 서로 겹쳐 "
                     f"숨겼습니다. 값은 차트에 마우스를 올리면 볼 수 있습니다.{advice}"
                 )
+        # 축을 나눈 차트는 계열마다 눈금이 달라 값만으로 라벨 높이를 가늠할 수 없다.
+        if labels is not None and chart["type"] in STACKED_LABEL_CHARTS and not chart.get("dual_axis"):
+            custom = _blank_overlapping_labels(values, labels) or custom
+        if labels is not None and custom:
+            chart["text_labels"] = True
+            for value, label in zip(values, labels):
+                value["_label"] = label
 
         # 가로 막대의 값은 막대 오른쪽으로 뻗으므로 축 끝에 가장 긴 라벨이 들어갈 자리를 남긴다.
         if chart.get("value_labels") is not False and chart.get("orientation") == "horizontal":

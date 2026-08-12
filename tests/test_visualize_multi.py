@@ -85,6 +85,21 @@ DAMAGE_BY_REGION = table(
     ["지역", "재산피해"],
     [["서 울 Seoul", "1,204"], ["부 산 Busan", "3,517"]],
 )
+# 연도가 행인 표. 같은 주제를 다루는 아래 표와 행·열 방향이 서로 다르다.
+QUOTA_BY_YEAR = table(
+    433, "연도별 지방공무원 정원", "명",
+    ["구 분 Classification 연도 Year", "지방공무원 정원 Number of Civil Servants"],
+    [["2019", "345,992"], ["2020", "359,588"], ["2021", "372,446"]],
+)
+# 연도가 열인 표. 연도로 맞대려면 서버가 한 행을 골라 펴야 한다.
+STAFF_BY_YEAR_COLUMNS = table(
+    437, "연도별 지방공무원 현원", "명",
+    ["연도 Year 구분 Classification", "2019", "2020", "2021"],
+    [
+        ["계 Total", "337,084", "292,182", "301,930"],
+        ["시･도 Metropolitan City/Province", "104,442", "53,104", "54,593"],
+    ],
+)
 # 단위 표기는 같은데 실제 수치가 천 배 가까이 큰 표(원본 단위 표기가 어긋난 경우).
 INFLATED_DAMAGE = table(
     612, "지역별 자연재난 피해", "백만원",
@@ -355,6 +370,43 @@ class MultiSourceVisualizeTests(unittest.TestCase):
         self.assertEqual(
             [(source["title_ko"], source["unit"]) for source in spec["sources"]],
             [("지역별 주민등록인구", "명"), ("지역별 지방자치단체 채무", "억원")],
+        )
+
+    # 연도가 행인 표와 열인 표를 맞댈 때, 열이 연도인 쪽을 펴서 연도로 이어야 한다.
+    def test_joins_row_years_with_column_years(self) -> None:
+        spec = build(
+            [(QUOTA_BY_YEAR, {"label": "정원"}), (STAFF_BY_YEAR_COLUMNS, {"label": "현원"})],
+            query="연도별 지방공무원 정원 대비 현원 격차",
+        )
+
+        self.assertTrue(spec["ok"])
+        self.assertEqual(
+            spec["data"]["joined_rows"],
+            [
+                {"항목": 2019, "정원": 345992.0, "현원": 337084.0},
+                {"항목": 2020, "정원": 359588.0, "현원": 292182.0},
+                {"항목": 2021, "정원": 372446.0, "현원": 301930.0},
+            ],
+        )
+        # 어느 행을 폈는지 밝혀야 사용자가 시･도 행이 아님을 알 수 있다.
+        self.assertTrue(any("'계' 행" in warning for warning in spec["warnings"]))
+
+    # 열이 연도인 표에서 행을 직접 고르면 그 행을 편다.
+    def test_column_year_table_flattens_the_filtered_row(self) -> None:
+        spec = build(
+            [
+                (QUOTA_BY_YEAR, {"label": "정원"}),
+                (STAFF_BY_YEAR_COLUMNS, {
+                    "label": "시도 현원",
+                    "filters": [{"column": "구분", "value": "시･도"}],
+                }),
+            ],
+            query="연도별 지방공무원 정원과 시도 현원",
+        )
+
+        self.assertEqual(
+            [row["시도 현원"] for row in spec["data"]["joined_rows"]],
+            [104442.0, 53104.0, 54593.0],
         )
 
 
