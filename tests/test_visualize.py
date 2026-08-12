@@ -148,6 +148,18 @@ FAMILY_TABLE = {
         ["2025", "99.2", "99.5", "98.9", "99.9", "97.9"],
     ]),
 }
+WIDE_METRIC_COLUMNS = ["연도 Year 구분 Classification", "2023", "2024", "2025"]
+# 행이 지표, 열이 연도인 모양. 지표마다 단위가 달라 한 축에 겹칠 수 없다.
+WIDE_METRIC_TABLE = {
+    **TABLE,
+    "title_ko": "여성 지방공무원",
+    "unit": "명, %",
+    "body": body(WIDE_METRIC_COLUMNS, [
+        ["전 체 Total", "313,296", "315,205", "313,924"],
+        ["여 성 Female", "157,935", "161,710", "163,328"],
+        ["여성비율 Female Percent(%)", "50.4", "51.3", "52"],
+    ]),
+}
 DELTA_COLUMNS = ["지역 Region", "전년 대비 증감 Change"]
 DELTA_TABLE = {
     **TABLE,
@@ -577,6 +589,61 @@ class SubsetSelectionTests(unittest.TestCase):
             ["20대", "60~74세"],
         )
 
+    # 행이 지표, 열이 연도인 표에서 두 행을 고르면 연도가 x축, 고른 행이 계열이어야 한다.
+    def test_wide_year_rows_become_series_over_years(self) -> None:
+        spec = build_plot_spec(
+            WIDE_METRIC_TABLE, "여성 지방공무원 수와 비율의 추이를 함께", "auto",
+            None, None, None, None, "exclude",
+            filters=[
+                {"column": "구분", "value": "여성"},
+                {"column": "구분", "value": "여성비율"},
+            ],
+        )
+
+        self.assertEqual(spec["chart"]["x"], "year")
+        self.assertEqual([record["x"] for record in spec["data"]["records"][:2]], [2023, 2023])
+        self.assertEqual(
+            sorted({record["series"] for record in spec["data"]["records"]}),
+            ["여성", "여성비율"],
+        )
+        # 명과 %가 섞여 있으므로 값 축을 좌우로 나눈 콤보가 되어야 한다.
+        self.assertEqual(spec["chart"]["type"], "combo")
+        self.assertTrue(spec["chart"]["dual_axis"])
+
+    # 연도 컬럼을 metrics로 받아도 연도는 계열이 아니라 x축이어야 한다.
+    def test_year_columns_as_metrics_do_not_flip_axes(self) -> None:
+        spec = build_plot_spec(
+            WIDE_METRIC_TABLE, "여성 지방공무원 수와 비율의 추이를 함께", "combo",
+            None, None, None, None, "exclude",
+            filters=[
+                {"column": "구분", "value": "여성"},
+                {"column": "구분", "value": "여성비율"},
+            ],
+            metrics=[{"column": year} for year in ("2023", "2024", "2025")],
+        )
+
+        self.assertEqual(spec["chart"]["x"], "year")
+        self.assertEqual(
+            sorted({record["series"] for record in spec["data"]["records"]}),
+            ["여성", "여성비율"],
+        )
+
+    # 연도 컬럼 하나만 고른 요청은 그 해의 지표 비교이므로 지표가 x축이어야 한다.
+    def test_single_year_column_stays_a_metric_comparison(self) -> None:
+        spec = build_plot_spec(
+            WIDE_METRIC_TABLE, "2025년 여성 지방공무원 수", "auto",
+            None, None, None, None, "exclude",
+            filters=[
+                {"column": "구분", "value": "여성"},
+                {"column": "구분", "value": "여성비율"},
+            ],
+            metrics=[{"column": "2025"}],
+        )
+
+        self.assertEqual(
+            [record["x"] for record in spec["data"]["records"]], ["여성", "여성비율"],
+        )
+
     # 상위 헤더 이름이 표에 없으면 전체 컬럼으로 대체하지 않아야 한다.
     def test_unknown_column_family_draws_nothing(self) -> None:
         spec = build_plot_spec(
@@ -585,6 +652,67 @@ class SubsetSelectionTests(unittest.TestCase):
         )
 
         self.assertEqual(spec["data"]["records"], [])
+
+
+# 값 라벨이 서로 겹칠 때 줄이거나 접는 규칙을 검증한다.
+class ValueLabelTests(unittest.TestCase):
+    # 시도 수만 바꿔 가며 같은 모양의 남녀 인구 표를 만든다.
+    @staticmethod
+    def _table(regions: int) -> dict:
+        columns = ["지역 Region", "남 Male", "여 Female"]
+        return {
+            **TABLE,
+            "title_ko": "지역별 주민등록인구",
+            "body": body(columns, [
+                [f"지역{index}", str(6_894_990 - index * 300_000), str(6_835_145 - index * 300_000)]
+                for index in range(regions)
+            ]),
+        }
+
+    def _spec(self, regions: int, orientation: str = "vertical") -> tuple[dict, dict]:
+        spec = build_plot_spec(
+            self._table(regions), "지역별 남녀 인구", "grouped_bar",
+            "지역", None, None, 0, "exclude",
+            metrics=[{"column": "남", "label": "남"}, {"column": "여", "label": "여"}],
+        )
+        # 방향은 서비스가 spec을 만든 뒤에 붙이므로 여기서도 같은 순서로 붙인다.
+        spec["chart"]["orientation"] = orientation
+        return spec, build_vega_lite_spec(spec)
+
+    # 자리가 넉넉하면 값을 그대로 적는다.
+    def test_sparse_chart_keeps_exact_values(self) -> None:
+        _, vega_lite = self._spec(3)
+
+        label_layer = vega_lite["layer"][1]
+        self.assertEqual(label_layer["encoding"]["text"]["field"], "value")
+
+    # 자리가 빠듯하면 만 단위로 줄여서라도 값을 보여준다.
+    def test_crowded_chart_shortens_values(self) -> None:
+        spec, vega_lite = self._spec(6)
+
+        label_layer = vega_lite["layer"][1]
+        self.assertEqual(label_layer["encoding"]["text"]["field"], "_label")
+        self.assertEqual(vega_lite["data"]["values"][0]["_label"], "689만")
+        self.assertIsNone(spec["chart"].get("value_labels"))
+
+    # 줄여도 들어가지 않으면 라벨을 접고 값은 tooltip에 남긴다.
+    def test_too_crowded_chart_drops_labels_and_keeps_tooltip(self) -> None:
+        spec, vega_lite = self._spec(17)
+
+        self.assertIs(spec["chart"]["value_labels"], False)
+        self.assertEqual(len(vega_lite["layer"]), 1)
+        tooltip_fields = [item["field"] for item in vega_lite["layer"][0]["encoding"]["tooltip"]]
+        self.assertEqual(tooltip_fields, ["x", "series", "value"])
+        self.assertTrue(any("겹쳐" in warning for warning in spec["warnings"]))
+
+    # 가로 막대는 범주마다 줄이 따로 있어 라벨을 접지 않고, 축 끝에 라벨 자리를 남긴다.
+    def test_horizontal_chart_keeps_labels_with_axis_headroom(self) -> None:
+        spec, vega_lite = self._spec(17, orientation="horizontal")
+
+        self.assertIsNone(spec["chart"].get("value_labels"))
+        self.assertEqual(vega_lite["layer"][1]["encoding"]["text"]["field"], "value")
+        largest = max(value["value"] for value in vega_lite["data"]["values"])
+        self.assertGreater(vega_lite["encoding"]["x"]["scale"]["domainMax"], largest)
 
 
 if __name__ == "__main__":

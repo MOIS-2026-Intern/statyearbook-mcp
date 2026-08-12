@@ -743,6 +743,101 @@ def _selection_plan_spec(
     )
 
 
+# 행이 지표, 열이 연도인 표에서 사용자가 고른 행들을 연도 축 시계열로 편다.
+# 이런 표에서 연도는 계열이 아니라 x축이므로, 고른 행 하나하나가 계열이 된다.
+# 행을 직접 고른 요청에만 적용해, 표 전체를 그리는 기존 경로는 건드리지 않는다.
+def _wide_year_selected_rows_spec(
+    table: dict,
+    query: str | None,
+    chart_type: str,
+    x: str | None,
+    y: str | None,
+    group: str | None,
+    top_n: int | None,
+    total_mode: TotalMode,
+    source_rows: list[dict[str, str]],
+    profiles: list[dict[str, Any]],
+    metrics: list[dict[str, str | None]] | None,
+    warnings: list[str],
+    request_hints: dict[str, Any],
+) -> dict[str, Any] | None:
+    if len(source_rows) < 2:
+        return None
+    year_columns = year_value_columns(profiles)
+    if len(year_columns) < 2:
+        return None
+
+    if metrics is not None:
+        # 연도 컬럼을 지표로 받아 왔다면 그건 계열이 아니라 x축이다. 연도가 아닌 컬럼이
+        # 하나라도 섞여 있으면 지표를 고른 요청이므로 이 경로를 쓰지 않는다.
+        requested = [
+            resolve_column(str(metric.get("column") or ""), profiles) for metric in metrics
+        ]
+        year_columns = [item for item in year_columns if item[1] in set(requested)]
+        if len(year_columns) < 2 or len(year_columns) != len(requested):
+            return None
+
+    category_column = (resolve_column(x, profiles) if x else None) or next(
+        (profile["name"] for profile in profiles if profile.get("is_categorical", False)), None,
+    )
+    if category_column is None:
+        return None
+
+    records: list[dict[str, Any]] = []
+    labels: list[str] = []
+    for row in source_rows:
+        label = display_category_label(row.get(category_column))
+        for year, column in year_columns:
+            value = parse_number(row.get(column))
+            if value is not None:
+                records.append({"x": year, "value": value, "series": label})
+                if label not in labels:
+                    labels.append(label)
+    if len(labels) < 2:
+        return None
+
+    records = _limit_series(records, warnings)
+    year_profile = {"name": "year", "is_year": True, "is_numeric": False, "is_categorical": False}
+    selected_type, decision_source, reason = _select_chart(
+        chart_type, query, records, year_profile, True, warnings,
+    )
+    records = sort_records(records, True, selected_type, None)
+
+    # '수'와 '비율'처럼 행마다 단위가 다르면 한 축에 겹쳐 그릴 수 없다.
+    chart_series = [
+        {"label": label, "unit": metric_unit(label, table["unit"])}
+        for label in labels
+        if any(record.get("series") == label for record in records)
+    ]
+    selected_type, dual_axis = apply_axis_split(selected_type, chart_series)
+    if dual_axis:
+        reason = f"{reason} 행마다 단위가 달라 값 축을 좌우로 나누고 계열별로 mark를 달리했습니다."
+
+    chart = {
+        "type": selected_type,
+        "requested_type": chart_type,
+        "decision_source": decision_source,
+        "reason": f"행이 지표, 열이 연도인 표에서 고른 행을 연도별 계열로 폈습니다. {reason}",
+        "title": _chart_title(table),
+        "x": "year",
+        "y": "value",
+        "group": category_column,
+        "series": chart_series,
+        "dual_axis": dual_axis,
+        "unit": table["unit"],
+    }
+    return _build_response(
+        table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
+        records, source_rows, warnings,
+        request_hints=request_hints,
+        transform={
+            "type": "wide_year_selected_rows",
+            "category_column": category_column,
+            "year_columns": [{"year": year, "column": column} for year, column in year_columns],
+        },
+    )
+
+
 # 행은 범주, 열은 연도인 표를 범주마다 한 줄씩 갖는 시계열로 편다.
 # 한 행만 골라 펴는 _wide_year_time_series_spec과 달리 여러 범주의 움직임을 함께 본다.
 def _wide_year_multi_series_spec(
@@ -1158,6 +1253,16 @@ def build_plot_spec(
         "resolved_year": target_year,
         "selection": selection,
     }
+
+    # 행을 직접 골라 온 요청은 연도 축 시계열일 수 있다. 이 판정을 metrics보다 먼저 해야
+    # 연도 컬럼을 지표로 받았을 때 축이 뒤집히지 않는다.
+    if filters is not None and source_rows:
+        selected_rows_spec = _wide_year_selected_rows_spec(
+            table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles,
+            metrics, warnings, request_hints,
+        )
+        if selected_rows_spec is not None:
+            return apply_display_title(selected_rows_spec, title)
 
     if metrics is not None:
         return apply_display_title(
