@@ -109,6 +109,45 @@ MIXED_UNIT_TABLE = {
         ["2025", "1,565,834", "1,326,261", "84.7"],
     ]),
 }
+GRADE_COLUMNS = [
+    "구분 Classification 기관 Organization",
+    "계 Total",
+    "행 정 부 Executive Branch_국가 State",
+    "행 정 부 Executive Branch_지방 Local",
+]
+# 급수 행과 직종 행이 한 표에 섞여 있고, 행 라벨의 띄어쓰기가 들쭉날쭉한 모양.
+GRADE_TABLE = {
+    **TABLE,
+    "title_ko": "계급별 공무원 정원",
+    "body": body(GRADE_COLUMNS, [
+        ["계 Total", "1,175,295", "753,689", "395,690"],
+        ["고위공무원 Senior Civil Servants", "1,195", "1,195", "-"],
+        ["1급 Grade 1", "14", "-", "11"],
+        ["1･2급 Grade 1･2", "14", "-", "4"],
+        ["2 급 Grade 2", "90", "-", "45"],
+        ["3 급 Grade 3", "683", "-", "605"],
+        ["경 찰 직 Police Service", "143,666", "143,503", "163"],
+        ["교 육 직 Education Service", "371,962", "362,982", "8,980"],
+    ]),
+}
+FAMILY_COLUMNS = [
+    "연도 Year 구분 Classification",
+    "전체 Total",
+    "성별 Sex_남성 Men",
+    "성별 Sex_여성 Women",
+    "연령별 Age_20대 20s",
+    "연령별 Age_60~74세 Aged 60~74",
+]
+# 상위 헤더가 성별과 연령별로 갈리는 모양. 한쪽 헤더만 그려 달라는 요청이 흔하다.
+FAMILY_TABLE = {
+    **TABLE,
+    "title_ko": "전자정부서비스 인지도",
+    "unit": "%",
+    "body": body(FAMILY_COLUMNS, [
+        ["2024", "98.5", "98.9", "98.0", "99.9", "96.1"],
+        ["2025", "99.2", "99.5", "98.9", "99.9", "97.9"],
+    ]),
+}
 DELTA_COLUMNS = ["지역 Region", "전년 대비 증감 Change"]
 DELTA_TABLE = {
     **TABLE,
@@ -141,9 +180,10 @@ class VisualizeTests(unittest.TestCase):
         self.assertEqual(spec["chart"]["unit"], "명")
         self.assertEqual(spec["chart"]["x"], COLUMNS[0])
         self.assertEqual(spec["chart"]["y"], COLUMNS[1])
+        # 축 라벨은 영문 병기를 뗀 한국어 부분만 남는다.
         self.assertEqual(
             {record["x"]: record["value"] for record in spec["data"]["records"]},
-            {"1급 Grade 1": 1.0, "2급 Grade 2": 9.0, "3급 Grade 3": 90.0},
+            {"1급": 1.0, "2급": 9.0, "3급": 90.0},
         )
         self.assertEqual(len(vega_lite["data"]["values"]), 3)
 
@@ -456,6 +496,95 @@ class ChartSelectionTests(unittest.TestCase):
         )
 
         self.assertEqual(spec["chart"]["type"], "line")
+
+
+# 표에서 요청한 행·열만 골라 그리는 경로를 검증한다.
+class SubsetSelectionTests(unittest.TestCase):
+    # 급수 행만 그려 달라는 요청은 같은 컬럼의 여러 조건을 OR로 묶어 직종 행을 빼야 한다.
+    def test_row_subset_keeps_only_requested_rows(self) -> None:
+        spec = build_plot_spec(
+            GRADE_TABLE, "공무원 정원을 급수별로", "auto", None, None, None, None, "exclude",
+            filters=[{"column": "구분", "value": f"{n}급"} for n in (1, 2, 3)],
+            metrics=[{"column": "계", "label": "정원"}],
+        )
+
+        # 라벨 띄어쓰기가 달라도 급수 행만 남고, '1･2급'처럼 다른 행은 섞이지 않는다.
+        self.assertEqual(
+            [record["x"] for record in spec["data"]["records"]], ["1급", "2급", "3급"],
+        )
+        self.assertEqual([record["value"] for record in spec["data"]["records"]], [14.0, 90.0, 683.0])
+        self.assertEqual(spec["warnings"], [])
+
+    # 표에 없는 값이 섞여도 확인된 행은 그리고, 빠진 값은 경고로 알려야 한다.
+    def test_row_subset_keeps_verified_rows_and_warns_on_the_rest(self) -> None:
+        spec = build_plot_spec(
+            GRADE_TABLE, "급수별 정원", "auto", None, None, None, None, "exclude",
+            filters=[{"column": "구분", "value": value} for value in ("1급", "2급", "10급")],
+            metrics=[{"column": "계", "label": "정원"}],
+        )
+
+        self.assertEqual([record["x"] for record in spec["data"]["records"]], ["1급", "2급"])
+        self.assertTrue(any("'10급'" in warning for warning in spec["warnings"]))
+
+    # 어느 조건도 맞지 않으면 표 전체로 대체하지 않고 차트를 만들지 않아야 한다.
+    def test_row_subset_without_any_match_draws_nothing(self) -> None:
+        spec = build_plot_spec(
+            GRADE_TABLE, "급수별 정원", "auto", None, None, None, None, "exclude",
+            filters=[{"column": "구분", "value": "10급"}],
+            metrics=[{"column": "계", "label": "정원"}],
+        )
+
+        self.assertEqual(spec["chart"]["type"], "table")
+        self.assertEqual(spec["data"]["records"], [])
+
+    # 조건 컬럼 자체를 표에서 찾지 못해도 표 전체로 되돌아가면 안 된다.
+    def test_row_subset_with_unknown_column_draws_nothing(self) -> None:
+        spec = build_plot_spec(
+            GRADE_TABLE, "지역별 정원", "auto", None, None, None, None, "exclude",
+            filters=[{"column": "지역", "value": "서울"}],
+            metrics=[{"column": "계", "label": "정원"}],
+        )
+
+        self.assertEqual(spec["data"]["records"], [])
+        self.assertTrue(any("'지역'" in warning for warning in spec["warnings"]))
+
+    # 영문 병기를 뗀 짧은 컬럼명으로도 그릴 열을 고를 수 있어야 한다.
+    def test_metric_columns_resolve_from_short_names(self) -> None:
+        spec = build_plot_spec(
+            GRADE_TABLE, "급수별 국가·지방 정원", "auto", None, None, None, None, "exclude",
+            filters=[{"column": "구분", "value": f"{n}급"} for n in (2, 3)],
+            metrics=[
+                {"column": "행정부_국가", "label": "국가"},
+                {"column": "행정부_지방", "label": "지방"},
+            ],
+        )
+
+        self.assertEqual(spec["chart"]["type"], "grouped_bar")
+        self.assertEqual(
+            [(record["x"], record["series"], record["value"]) for record in spec["data"]["records"]],
+            [("2급", "지방", 45.0), ("3급", "지방", 605.0)],
+        )
+
+    # '성별 말고 연령대별로'는 그 상위 헤더에 속한 컬럼만 남겨야 한다.
+    def test_column_family_keeps_only_that_header(self) -> None:
+        spec = build_plot_spec(
+            FAMILY_TABLE, "연령대별 인지도", "heatmap", None, None, None, None, "exclude",
+            column_family_name="연령별",
+        )
+
+        self.assertEqual(
+            sorted({record["series"] for record in spec["data"]["records"]}),
+            ["20대", "60~74세"],
+        )
+
+    # 상위 헤더 이름이 표에 없으면 전체 컬럼으로 대체하지 않아야 한다.
+    def test_unknown_column_family_draws_nothing(self) -> None:
+        spec = build_plot_spec(
+            FAMILY_TABLE, "지역별 인지도", "auto", None, None, None, None, "exclude",
+            column_family_name="지역별",
+        )
+
+        self.assertEqual(spec["data"]["records"], [])
 
 
 if __name__ == "__main__":

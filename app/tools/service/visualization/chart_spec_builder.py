@@ -573,12 +573,14 @@ def _selection_plan_spec(
     if not metrics:
         validation_errors.append("metrics에는 하나 이상의 숫자 컬럼을 지정해야 합니다.")
     for metric in metrics:
-        column = str(metric.get("column") or "").strip()
+        requested_column = str(metric.get("column") or "").strip()
         label = str(metric.get("label") or "").strip()
         requested_unit = str(metric.get("unit") or "").strip()
+        # 컬럼명은 영문 병기와 띄어쓰기가 섞여 있어 표기가 조금 달라도 같은 컬럼으로 본다.
+        column = resolve_column(requested_column, profiles) or requested_column
         profile = profile_map.get(column)
         if profile is None:
-            validation_errors.append(f"선택 지표 컬럼 '{column}'이 원본 표에 없습니다.")
+            validation_errors.append(f"선택 지표 컬럼 '{requested_column}'이 원본 표에 없습니다.")
             continue
         if not profile["is_numeric"]:
             validation_errors.append(f"선택 지표 컬럼 '{column}'은 숫자형이 아닙니다.")
@@ -602,8 +604,9 @@ def _selection_plan_spec(
             "unit": requested_unit or inferred_unit,
         })
 
-    if validation_errors or not source_rows:
-        warnings.extend(validation_errors)
+    # 지표 일부만 확인돼도 확인된 지표로 그린다. 확인하지 못한 지표는 경고로만 알리고 채우지 않는다.
+    warnings.extend(validation_errors)
+    if not validated or not source_rows:
         if not source_rows and not validation_errors:
             warnings.append("선택 조건에 맞는 원본 표 행이 없습니다.")
         chart = {
@@ -1186,19 +1189,20 @@ def build_plot_spec(
     if wide_category_spec is not None:
         return apply_display_title(wide_category_spec, title)
 
-    family_validation_failed = bool(
-        column_family_name and not column_family(column_family_name, profiles)
-    )
+    family_columns = column_family(column_family_name, profiles)
+    family_validation_failed = bool(column_family_name and not family_columns)
     if family_validation_failed:
         source_rows = []
 
     x_column = resolve_column(x, profiles) or pick_x_column(profiles, query)
     group_column = resolve_column(group, profiles)
 
+    # 상위 헤더를 지정했으면 그 아래 컬럼만 그린다. 지정하지 않으면 숫자 컬럼을 모두 쓴다.
     numeric_columns = [
         profile["name"]
         for profile in profiles
         if profile["is_numeric"] and profile["name"] not in {x_column, group_column}
+        and (not family_columns or profile["name"] in family_columns)
     ]
     y_column = resolve_column(y, profiles)
     if y_column and not profile_map[y_column]["is_numeric"]:
@@ -1224,6 +1228,10 @@ def build_plot_spec(
             })
     elif numeric_columns:
         y_source = "value"
+        # 상위 헤더로 좁힌 컬럼은 헤더가 이미 제목에 드러나므로 하위 항목명만 라벨로 쓴다.
+        def column_label(column: str) -> str:
+            return family_category_label(column) if family_columns else column
+
         if len(source_rows) == 1 and not group_column:
             x_column = "metric"
             x_profile = None
@@ -1232,7 +1240,7 @@ def build_plot_spec(
             for column in numeric_columns:
                 value = parse_number(row.get(column))
                 if value is not None:
-                    records.append({"x": column, "value": value, "series": None})
+                    records.append({"x": column_label(column), "value": value, "series": None})
         else:
             series_source = "metric" if not group_column else group_column
             for row in source_rows:
@@ -1240,7 +1248,7 @@ def build_plot_spec(
                 for column in numeric_columns:
                     value = parse_number(row.get(column))
                     if value is not None:
-                        series = row.get(group_column) if group_column else column
+                        series = row.get(group_column) if group_column else column_label(column)
                         records.append({"x": x_value, "value": value, "series": series})
 
     # 계열 제한 → 차트 선택 → 공통 필터 순서는 기존 응답을 보존한다.
