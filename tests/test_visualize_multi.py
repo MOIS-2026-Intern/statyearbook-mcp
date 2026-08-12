@@ -73,6 +73,24 @@ HEAT_BY_YEAR = table(
     ["연도", "합 계 Total"],
     [["2021", "1,376"], ["2022", "1,564"], ["2023", "2,818"]],
 )
+# 피해액과 단위·규모가 같아 한 축에 함께 올릴 수 있는 표.
+RECOVERY_BY_YEAR = table(
+    287, "연도별 자연재난 복구액", "백만원",
+    ["연도", "합 계 Total"],
+    [["2020", "2,914,027"], ["2021", "153,110"], ["2022", "1,281,392"]],
+)
+# 재난관리기금과 단위가 같아 나란히 견줄 수 있는 표.
+DAMAGE_BY_REGION = table(
+    285, "지역별 자연재난 피해", "백만원",
+    ["지역", "재산피해"],
+    [["서 울 Seoul", "1,204"], ["부 산 Busan", "3,517"]],
+)
+# 단위 표기는 같은데 실제 수치가 천 배 가까이 큰 표(원본 단위 표기가 어긋난 경우).
+INFLATED_DAMAGE = table(
+    612, "지역별 자연재난 피해", "백만원",
+    ["지역", "재산피해"],
+    [["서 울 Seoul", "417,860,381"], ["부 산 Busan", "213,179,459"]],
+)
 
 
 # build_multi_source_spec 호출 인자를 간단히 구성한다.
@@ -90,7 +108,8 @@ class MultiSourceVisualizeTests(unittest.TestCase):
         )
 
         self.assertTrue(spec["ok"])
-        self.assertEqual(spec["chart"]["type"], "grouped_bar")
+        # 명과 억원은 한 축에 못 올려 계열마다 mark를 나누는 콤보 차트가 된다.
+        self.assertEqual(spec["chart"]["type"], "combo")
         self.assertEqual([item["label"] for item in spec["chart"]["series"]], ["인구", "채무"])
         # 합계·전국 행은 개별 지역과 중복되므로 축에서 빠진다.
         self.assertEqual(
@@ -144,14 +163,17 @@ class MultiSourceVisualizeTests(unittest.TestCase):
         self.assertTrue(spec["chart"]["dual_axis"])
         self.assertEqual(vega_lite["resolve"], {"scale": {"y": "independent"}})
         first, second = vega_lite["layer"]
-        self.assertEqual(first["transform"][0]["filter"], {"field": "series", "equal": "인구"})
+        self.assertEqual(first["transform"][0]["filter"], {"field": "series", "oneOf": ["인구"]})
         self.assertEqual(first["encoding"]["y"]["title"], "인구 (명)")
         self.assertEqual(first["encoding"]["y"]["axis"]["orient"], "left")
         self.assertEqual(second["encoding"]["y"]["title"], "채무 (억원)")
         self.assertEqual(second["encoding"]["y"]["axis"]["orient"], "right")
-        # 요청이 막대면 첫 계열만 막대로 두고 둘째 계열은 선으로 겹친다.
+        # 첫 계열만 막대로 두고 둘째 계열은 선으로 겹쳐 어느 축을 읽어야 하는지 드러낸다.
         self.assertEqual(first["layer"][0]["mark"]["type"], "bar")
         self.assertEqual(second["layer"][0]["mark"]["type"], "line")
+        # 축을 나누면 두 계열이 같은 높이에 놓이기 쉬워 값 라벨 자리를 달리한다.
+        self.assertEqual(first["layer"][1]["mark"]["baseline"], "bottom")
+        self.assertEqual(second["layer"][1]["mark"]["align"], "left")
 
     # 단위가 같고 크기도 비슷하면 한 축에 나란히 그린다.
     def test_same_unit_keeps_single_value_axis(self) -> None:
@@ -179,14 +201,16 @@ class MultiSourceVisualizeTests(unittest.TestCase):
             "[적립액] 한 항목이 여러 행에 나뉘어 있어 합계로 집계했습니다.", spec["warnings"],
         )
 
-    # 연도가 공통 항목이면 연도순 선그래프로 겹치고 한쪽에만 있는 연도도 남긴다.
-    def test_year_key_builds_sorted_line_chart(self) -> None:
+    # 연도가 공통 항목이면 연도순으로 겹치고 한쪽에만 있는 연도도 남긴다.
+    def test_year_key_sorts_by_year_and_keeps_gaps(self) -> None:
         spec = build(
             [(DAMAGE_BY_YEAR, {"label": "피해액"}), (HEAT_BY_YEAR, {"label": "인명피해"})],
             query="연도별 자연재난 피해액과 폭염 인명피해",
         )
 
-        self.assertEqual(spec["chart"]["type"], "line")
+        # 백만원과 명은 축을 나눠야 해서 막대+선 콤보가 된다.
+        self.assertEqual(spec["chart"]["type"], "combo")
+        self.assertTrue(spec["chart"]["dual_axis"])
         self.assertEqual(spec["chart"]["x"], "year")
         self.assertIsNone(spec["chart"]["category_order"])
         self.assertEqual([row["항목"] for row in spec["data"]["joined_rows"]], [2020, 2021, 2022, 2023])
@@ -252,6 +276,73 @@ class MultiSourceVisualizeTests(unittest.TestCase):
         self.assertEqual(spec["chart"]["type"], "table")
         self.assertIn("공통", spec["chart"]["reason"])
         self.assertIsNone(build_vega_lite_spec(spec))
+
+    # 단위와 규모가 같은 두 지표는 축을 나누지 않고 막대를 나란히 놓아야 크기를 바로 견줄 수 있다.
+    def test_same_unit_region_values_use_grouped_bars(self) -> None:
+        spec = build(
+            [(FUND, {"label": "재난관리기금 적립액"}), (DAMAGE_BY_REGION, {"label": "자연재난 피해액"})],
+            query="재난관리기금 적립액과 자연재난 피해액을 한 그래프에 표시해줘",
+        )
+        vega_lite = build_vega_lite_spec(spec)
+
+        self.assertEqual(spec["chart"]["type"], "grouped_bar")
+        self.assertFalse(spec["chart"]["dual_axis"])
+        self.assertEqual(spec["chart"]["unit"], "백만원")
+        # 같은 축을 쓰므로 계열을 옆으로 밀어 막대를 짝지어 세운다.
+        self.assertEqual(
+            vega_lite["encoding"]["xOffset"]["sort"],
+            ["재난관리기금 적립액", "자연재난 피해액"],
+        )
+        # 축을 나누면 눈금이 갈려 높이를 그대로 견줄 수 없으므로, 대신 규모 차이를 알린다.
+        self.assertTrue(any("규모 차이가 커서" in warning for warning in spec["warnings"]))
+
+    # 단위가 같아도 규모가 백 배를 넘으면 작은 쪽이 아예 보이지 않아 축을 나눠야 한다.
+    def test_same_unit_but_huge_scale_gap_splits_the_axis(self) -> None:
+        spec = build(
+            [(FUND, {"label": "적립액"}), (INFLATED_DAMAGE, {"label": "피해액"})],
+            query="지역별 재난관리기금 적립액과 자연재난 피해액을 한 그래프에",
+        )
+
+        self.assertEqual(spec["chart"]["type"], "combo")
+        self.assertTrue(spec["chart"]["dual_axis"])
+        # 눈금이 갈렸다는 사실과, 그 원인이 단위 표기일 수 있다는 점을 함께 알린다.
+        self.assertTrue(any("눈금이 서로 다르므로" in warning for warning in spec["warnings"]))
+        self.assertTrue(any("단위가 실제 수치와 맞는지" in warning for warning in spec["warnings"]))
+
+    # 단위와 규모가 같은 연도 지표는 축을 나누지 않고 선그래프로 겹쳐야 한다.
+    def test_same_unit_year_values_stay_a_line_chart(self) -> None:
+        spec = build(
+            [(DAMAGE_BY_YEAR, {"label": "피해액"}), (RECOVERY_BY_YEAR, {"label": "복구액"})],
+            query="연도별 자연재난 피해액과 복구액",
+        )
+
+        self.assertEqual(spec["chart"]["type"], "line")
+        self.assertFalse(spec["chart"]["dual_axis"])
+
+    # 격차를 묻는 요청은 두 값을 이어 벌어진 폭을 보여주는 아령 차트여야 한다.
+    def test_gap_query_selects_dumbbell(self) -> None:
+        spec = build(
+            [(FUND, {"label": "적립액"}), (DAMAGE_BY_REGION, {"label": "피해액"})],
+            query="지역별 재난관리기금 적립액과 피해액의 격차",
+        )
+        vega_lite = build_vega_lite_spec(spec)
+
+        self.assertEqual(spec["chart"]["type"], "dumbbell")
+        connector, points = vega_lite["layer"][0], vega_lite["layer"][1]
+        self.assertEqual(connector["encoding"]["y"]["aggregate"], "min")
+        self.assertEqual(connector["encoding"]["y2"]["aggregate"], "max")
+        self.assertEqual(points["mark"]["type"], "point")
+
+    # 지역처럼 순서가 없는 축을 선으로 이으면 없는 추세가 보이므로 막대로 바꿔야 한다.
+    def test_line_request_on_region_axis_falls_back_to_bars(self) -> None:
+        spec = build(
+            [(FUND, {"label": "적립액"}), (DAMAGE_BY_REGION, {"label": "피해액"})],
+            query="지역별 재난관리기금 적립액과 피해액",
+            chart_type="line",
+        )
+
+        self.assertEqual(spec["chart"]["type"], "grouped_bar")
+        self.assertTrue(any("순서가 있는 축" in warning for warning in spec["warnings"]))
 
     # 여러 표를 그릴 때도 출처를 표마다 모두 남겨야 한다.
     def test_response_lists_every_source_table(self) -> None:

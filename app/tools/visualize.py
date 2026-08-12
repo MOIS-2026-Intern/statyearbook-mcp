@@ -70,7 +70,10 @@ def register(mcp: FastMCP) -> None:
             str | None,
             Field(description=VISUALIZE_FIELDS["title"], min_length=1, max_length=80),
         ] = None,
-        chart_type: ChartType = "auto",
+        chart_type: Annotated[
+            ChartType,
+            Field(description=VISUALIZE_FIELDS["chart_type"]),
+        ] = "auto",
         x: Annotated[str | None, Field(description=VISUALIZE_FIELDS["x"])] = None,
         y: Annotated[str | None, Field(description=VISUALIZE_FIELDS["y"])] = None,
         group: str | None = None,

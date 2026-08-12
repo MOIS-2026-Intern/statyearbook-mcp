@@ -293,12 +293,26 @@ function styleDonut(view: JsonRecord, size: number): JsonRecord {
   return styled;
 }
 
+// 방향을 판별할 encoding을 찾는다. 증감·폭포 막대처럼 레이어마다 축이 다른 차트는
+// 뷰가 아니라 개별 레이어가 축을 들고 있다.
+function primaryEncoding(view: JsonRecord) {
+  if (isRecord(view.encoding)) {
+    return view.encoding;
+  }
+  const layers = Array.isArray(view.layer) ? view.layer.filter(isRecord) : [];
+  const primary = layers.find((layer) => {
+    const type = markType(layer.mark);
+    return type !== "" && type !== "text";
+  });
+  return primary && isRecord(primary.encoding) ? primary.encoding : {};
+}
+
 // 서버가 정한 방향(기본 세로형)을 그대로 존중하며 막대 크기·모서리만 조정한다.
 function styleBar(view: JsonRecord, width: number) {
-  const encoding = isRecord(view.encoding) ? { ...view.encoding } : {};
   const count = categoryCount(view);
-  // 방향은 서버 encoding으로 판별한다(값 축이 x축이면 가로형). 여기서 방향을 바꾸지 않는다.
-  const horizontal = isRecord(encoding.x) && (encoding.x as JsonRecord).field === "value";
+  // 방향은 서버 encoding으로 판별한다(범주 필드가 y축에 있으면 가로형). 여기서 방향을 바꾸지 않는다.
+  const axes = primaryEncoding(view);
+  const horizontal = isRecord(axes.y) && (axes.y as JsonRecord).field === "x";
 
   return {
     ...view,
@@ -317,14 +331,16 @@ function styleBar(view: JsonRecord, width: number) {
           }),
         }
       : { mark: { type: "bar", cornerRadiusEnd: 3 } }),
-    encoding,
+    // 뷰에 없던 encoding을 새로 붙이면 모든 레이어가 그 축을 물려받아 그림이 달라진다.
+    ...(isRecord(view.encoding) ? { encoding: { ...view.encoding } } : {}),
   };
 }
 
 // mark 유형별로 화면 폭에 맞는 뷰 크기와 스타일을 적용한다.
 function styleView(view: JsonRecord, width: number): JsonRecord {
   const type = viewMarkType(view);
-  if (type === "bar") {
+  // 롤리팝·아령 차트도 범주마다 한 칸을 쓰므로 막대와 같은 규칙으로 높이를 잡는다.
+  if (type === "bar" || type === "rule") {
     return styleBar(view, width);
   }
   if (type === "arc") {
