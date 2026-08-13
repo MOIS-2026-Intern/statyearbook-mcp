@@ -999,23 +999,6 @@ button {
   padding: 0 10px;
 }
 
-.model-select select {
-  height: 34px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-soft);
-  cursor: pointer;
-  font-weight: 700;
-  outline: none;
-  padding: 0 6px;
-}
-
-.model-select select:hover {
-  border-color: var(--border);
-  background: var(--surface);
-}
-
 .send-button {
   border-color: #111827;
   background: #111827;
@@ -1026,6 +1009,28 @@ button {
   border-color: #d0d5dd;
   background: #d0d5dd;
   cursor: not-allowed;
+}
+
+/* 멈춤 버튼은 전송 버튼과 같은 자리를 쓰므로 같은 중립 계열을 유지한다. 상태는 색을 바꾸지
+   않고 한 단계씩 눌러 어둡게 하는 정도로만 알리고, 구분은 아이콘이 맡는다. */
+.send-button--stop {
+  border-color: var(--text);
+  background: var(--text);
+}
+
+.send-button--stop:hover {
+  border-color: #111827;
+  background: #111827;
+}
+
+.send-button--stop:active {
+  border-color: #0b1220;
+  background: #0b1220;
+}
+
+/* 중단 안내는 모델의 답변이 아니므로 본문과 구분되게 낮춘다. */
+.message__content--stopped {
+  color: var(--muted);
 }
 
 .mcp-inspector {

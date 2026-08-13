@@ -1,24 +1,24 @@
 import { FormEvent, KeyboardEvent, useState } from "react";
-import { BookOpen, DatabaseZap, FileText, Mic, Paperclip, SendHorizontal } from "lucide-react";
+import { BookOpen, DatabaseZap, FileText, Mic, Paperclip, SendHorizontal, Square } from "lucide-react";
 import type { PublicationKind } from "../types/chat";
 
 interface ComposerProps {
   disabled: boolean;
-  modelProfile: string;
+  sending: boolean;
   publicationKind: PublicationKind;
-  onModelProfileChange: (profile: string) => void;
   onPublicationKindChange: (kind: PublicationKind) => void;
   onSendMessage: (message: string) => void;
+  onStopMessage: () => void;
 }
 
-// 메시지 입력, 모델 프로필 선택, 전송 상태를 관리하는 작성기를 렌더링한다.
+// 메시지 입력, 발간물 선택, 전송 상태를 관리하는 작성기를 렌더링한다.
 export function Composer({
   disabled,
-  modelProfile,
+  sending,
   publicationKind,
-  onModelProfileChange,
   onPublicationKindChange,
   onSendMessage,
+  onStopMessage,
 }: ComposerProps) {
   const [value, setValue] = useState("");
 
@@ -90,20 +90,24 @@ export function Composer({
         </div>
 
         <div className="composer__actions">
-          <label className="model-select">
-            <span className="sr-only">모델 프로필</span>
-            <select value={modelProfile} onChange={(event) => onModelProfileChange(event.target.value)}>
-              <option value="balanced">기본</option>
-              <option value="fast">빠른 응답</option>
-              <option value="deep">깊은 분석</option>
-            </select>
-          </label>
           <button className="icon-button" type="button" aria-label="음성 입력" title="음성 입력">
             <Mic size={18} />
           </button>
-          <button className="send-button" type="submit" disabled={disabled || !value.trim()} aria-label="전송">
-            <SendHorizontal size={19} />
-          </button>
+          {sending ? (
+            <button
+              className="send-button send-button--stop"
+              type="button"
+              onClick={onStopMessage}
+              aria-label="응답 중단"
+              title="응답 중단"
+            >
+              <Square size={13} fill="currentColor" />
+            </button>
+          ) : (
+            <button className="send-button" type="submit" disabled={disabled || !value.trim()} aria-label="전송">
+              <SendHorizontal size={19} />
+            </button>
+          )}
         </div>
       </div>
     </form>

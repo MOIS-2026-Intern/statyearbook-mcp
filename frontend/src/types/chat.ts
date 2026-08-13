@@ -30,6 +30,8 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   traceIds?: string[];
+  // 사용자가 멈춘 턴은 기록으로만 남기고 다음 질의의 모델 입력에서는 제외한다.
+  stopped?: boolean;
 }
 
 export interface Conversation {
@@ -43,7 +45,6 @@ export interface Conversation {
 export interface ChatRequest {
   conversationId: string;
   message: string;
-  modelProfile: string;
   publicationKind: PublicationKind;
   includeMcpTrace: boolean;
   history: ChatMessage[];

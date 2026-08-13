@@ -460,6 +460,26 @@ class ChatToolRecoveryTests(unittest.TestCase):
         self.assertEqual(final_call["tools"], tools)
         self.assertEqual(final_call["tool_choice"], "none")
 
+    # tool_choice를 받지 못하는 공급자에서는 마지막 턴이 또 도구를 부르며 본문을 비울 수
+    # 있다. 그대로 두면 사용자에게 빈 답이 나가므로 안내 문구로 갈음해야 한다.
+    def test_final_turn_without_text_returns_a_message(self) -> None:
+        found = {
+            "content": [{"type": "text", "text": "후보 1건"}],
+            "structuredContent": {"count": 1, "results": [{"stat_id": 1}]},
+            "isError": False,
+        }
+        call = ModelTurn(text="", tool_calls=[ToolCall(
+            id="call-1", name="search_statistics", arguments={"query": "통계"})])
+        model = StubModelGateway([call, call, call])
+        mcp = StubMcpGateway([found, found])
+        service = ChatService(Settings(max_tool_rounds=2), model_gateway=model)
+
+        result = asyncio.run(service._run_model_loop(
+            request=_request(), mcp=mcp, traces=[], messages=_messages(), tools=[]))
+
+        self.assertIn("도구 호출 횟수", result)
+        self.assertIn("좁혀", result)
+
     # 도구를 부르는 도중의 턴까지 호출을 막으면 필요한 자료를 더 찾을 수 없다.
     def test_tool_rounds_leave_tool_choice_unset(self) -> None:
         model = StubModelGateway([ModelTurn(text="바로 답합니다.")])

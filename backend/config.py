@@ -36,6 +36,7 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8000
     reload: bool = True
+    graceful_shutdown_timeout_seconds: int = 5
     cors_origins: list[str] = field(
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"]
     )
@@ -43,11 +44,16 @@ class Settings:
     chat_model: str = "gpt-5-mini"
     model_timeout_seconds: float = 200.0
     model_max_output_tokens: int = 48000
+    # 공급자마다 허용하는 추론 강도 값이 다르므로 배포 환경에서 고정한다. 빈 값이면
+    # 필드 자체를 보내지 않아, 이 파라미터를 받지 않는 공급자도 그대로 쓸 수 있다.
+    model_reasoning_effort: str = "medium"
     model_streaming: bool = True
     openai_api_key: str | None = None
     bizrouter_api_key: str | None = None
     bizrouter_base_url: str = "https://api.bizrouter.ai/v1"
-    max_tool_rounds: int = 5
+    # 서로 다른 표를 한 그래프에 그리는 요청은 표마다 검색·조회가 필요해 5라운드로는
+    # 시각화까지 가지 못한다(검색 2 + 원문 2 + visualize 1 + 정리 1).
+    max_tool_rounds: int = 8
     tool_output_max_chars: int = 60_000
     mcp_server_label: str = "statyearbook"
     mcp_url: str = "http://127.0.0.1:8001/mcp"
@@ -107,6 +113,11 @@ class Settings:
             host=os.environ.get("STATYEARBOOK_BACKEND_HOST", "127.0.0.1"),
             port=int(os.environ.get("PORT") or os.environ.get("STATYEARBOOK_BACKEND_PORT", "8000")),
             reload=profile == "local",
+            graceful_shutdown_timeout_seconds=int(
+                os.environ.get(
+                    "STATYEARBOOK_BACKEND_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", "5"
+                )
+            ),
             cors_origins=_csv(
                 os.environ.get("STATYEARBOOK_BACKEND_CORS_ORIGINS"),
                 ["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -121,6 +132,9 @@ class Settings:
             model_max_output_tokens=int(
                 os.environ.get("STATYEARBOOK_BACKEND_MODEL_MAX_OUTPUT_TOKENS", "48000")
             ),
+            model_reasoning_effort=os.environ.get(
+                "STATYEARBOOK_BACKEND_MODEL_REASONING_EFFORT", "medium"
+            ).strip(),
             model_streaming=_flag(os.environ.get("STATYEARBOOK_BACKEND_MODEL_STREAMING"), True),
             openai_api_key=os.environ.get("STATYEARBOOK_BACKEND_OPENAI_API_KEY"),
             bizrouter_api_key=os.environ.get("STATYEARBOOK_BACKEND_BIZROUTER_API_KEY"),
@@ -129,7 +143,7 @@ class Settings:
                 "https://api.bizrouter.ai/v1",
             ).rstrip("/"),
             max_tool_rounds=int(
-                os.environ.get("STATYEARBOOK_BACKEND_MAX_TOOL_ROUNDS", "5")
+                os.environ.get("STATYEARBOOK_BACKEND_MAX_TOOL_ROUNDS", "8")
             ),
             tool_output_max_chars=int(
                 os.environ.get("STATYEARBOOK_BACKEND_TOOL_OUTPUT_MAX_CHARS", "60000")

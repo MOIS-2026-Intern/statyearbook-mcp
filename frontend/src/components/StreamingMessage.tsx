@@ -20,7 +20,7 @@ export function StreamingMessage({ text }: StreamingMessageProps) {
       <div className="message message--assistant message--streaming">
         <div className="message__content message__content--markdown">
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={[[remarkGfm, { singleTilde: false }]]}
             components={{
               a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
               table: ({ node: _node, ...props }) => (

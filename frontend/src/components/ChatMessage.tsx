@@ -40,23 +40,26 @@ function vegaLiteSpec(trace: McpTrace): ChartResult | null {
   return { key: JSON.stringify(args ?? {}), spec: structured.vega_lite };
 }
 
-// 한 메시지의 visualize 차트를 모으되 같은 호출(재시도·중복)은 마지막 결과만 남기고 서로 다른 시각화는 모두 유지한다.
-function messageCharts(traces: McpTrace[]): ChartResult[] {
-  const byKey = new Map<string, ChartResult>();
+// 한 메시지에서 visualize를 여러 번 불렀으면 마지막 결과만 그린다.
+// 한 질문에 대한 답은 차트 하나이고, 여러 번 부른 것은 앞선 차트가 어긋나 조건을 고쳐 다시 그린
+// 것이므로 마지막 호출이 사용자가 요청한 차트다. 앞선 시도까지 남기면 답변 문장이 설명하지 않는
+// 어긋난 차트가 함께 보인다. 실패한 호출에는 vega_lite가 없어 애초에 후보로 잡히지 않는다.
+function messageChart(traces: McpTrace[]): ChartResult | null {
+  let latest: ChartResult | null = null;
   for (const trace of traces) {
     const chart = vegaLiteSpec(trace);
     if (chart) {
-      byKey.set(chart.key, chart);
+      latest = chart;
     }
   }
-  return [...byKey.values()];
+  return latest;
 }
 
 // 사용자·assistant 메시지와 연결된 trace·시각화를 함께 렌더링한다.
 export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessageProps) {
   const [expanded, setExpanded] = useState(false);
   const traces = (message.traceIds ?? []).map((traceId) => tracesById[traceId]).filter(Boolean);
-  const charts = messageCharts(traces);
+  const chart = messageChart(traces);
   const isUser = message.role === "user";
 
   return (
@@ -68,12 +71,16 @@ export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessagePr
       ) : null}
 
       <div className={`message ${isUser ? "message--user" : "message--assistant"}`}>
-        <div className={`message__content ${isUser ? "message__content--plain" : "message__content--markdown"}`}>
+        <div
+          className={`message__content ${isUser ? "message__content--plain" : "message__content--markdown"} ${
+            message.stopped ? "message__content--stopped" : ""
+          }`}
+        >
           {isUser ? (
             message.content
           ) : (
             <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
+              remarkPlugins={[[remarkGfm, { singleTilde: false }]]}
               components={{
                 a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
                 table: ({ node: _node, ...props }) => (
@@ -88,16 +95,14 @@ export function ChatMessage({ message, tracesById, showMcpTrace }: ChatMessagePr
           )}
         </div>
 
-        {!isUser && charts.length > 0
-          ? charts.map((chart) => (
-              <Suspense
-                fallback={<p className="vega-chart__loading">시각화를 표시하는 중입니다.</p>}
-                key={chart.key}
-              >
-                <VegaLiteChart spec={chart.spec} />
-              </Suspense>
-            ))
-          : null}
+        {!isUser && chart ? (
+          <Suspense
+            fallback={<p className="vega-chart__loading">시각화를 표시하는 중입니다.</p>}
+            key={chart.key}
+          >
+            <VegaLiteChart spec={chart.spec} />
+          </Suspense>
+        ) : null}
 
         {!isUser && showMcpTrace && traces.length > 0 ? (
           <div className="message__trace">
