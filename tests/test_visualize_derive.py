@@ -6,7 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 from app.tools.service.visualization.chart_spec_builder import build_plot_spec
 from app.tools.service.visualization.multi_table_spec_builder import build_multi_source_spec
-from app.tools.service.visualization.vega_lite_renderer import build_vega_lite_spec
+from app.tools.service.visualization.vega_lite_renderer import build_vega_lite_spec, value_decimals
 from app.tools.visualize import register as register_visualize
 
 
@@ -461,6 +461,78 @@ class DerivedMetricToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.isError)
         self.assertIn("sources에 표를 두 개", result.structuredContent["error"])
         self.assertIn("metrics에 숫자 컬럼을 두 개", result.structuredContent["error"])
+
+
+# 분자가 분모보다 훨씬 작아 그냥 나누면 0.003처럼 1보다 작은 값이 되는 표.
+CCTV = table(
+    568, "지역별 지자체 CCTV 통합관제센터 운영 현황", "대, 명",
+    ["구분 Classification 지역 Region", "CCTV 총 대수 Total", "관제인력 Staff"],
+    [
+        ["서 울 Seoul", "124,975", "401"],
+        ["부 산 Busan", "31,551", "289"],
+        ["경 기 Gyeonggi", "200,696", "648"],
+        ["제 주 Jeju", "16,601", "78"],
+    ],
+)
+
+
+# CCTV 대수로 관제인력을 나누는 호출을 구성한다.
+def build_cctv(derive: dict) -> dict:
+    return build_single_table(
+        CCTV,
+        [{"column": "관제인력", "label": "관제인력"}, {"column": "CCTV 총 대수", "label": "CCTV 대수"}],
+        derive,
+        query="시도별 CCTV 대수 당 관제인력",
+    )
+
+
+class SmallDerivedValueTests(unittest.TestCase):
+    # 배수를 정하지 않은 채 그냥 나누면 모든 막대가 0선에 붙는다. 읽히는 기준으로 바꿔야 한다.
+    def test_tiny_ratio_moves_to_a_readable_basis(self) -> None:
+        spec = build_cctv({"op": "per_capita", "numerator": 0, "denominator": 1})
+
+        self.assertEqual(spec["transform"]["derived"]["per"], 1000)
+        self.assertEqual(spec["chart"]["unit"], "명/1천 대")
+        values = {record["x"]: record["value"] for record in spec["data"]["records"]}
+        self.assertAlmostEqual(values["서울"], 401 / 124975 * 1000, places=6)
+        self.assertTrue(any("1천 대당 기준으로 바꿔" in warning for warning in spec["warnings"]))
+
+    # 기준을 직접 정해 보냈으면 그 기준이 곧 질문이므로 서버가 손대지 않는다.
+    def test_requested_basis_is_kept(self) -> None:
+        spec = build_cctv({"op": "per_capita", "numerator": 0, "denominator": 1, "per": 100})
+
+        self.assertEqual(spec["transform"]["derived"]["per"], 100)
+        values = {record["x"]: record["value"] for record in spec["data"]["records"]}
+        self.assertAlmostEqual(values["서울"], 401 / 124975 * 100, places=6)
+        self.assertFalse([w for w in spec["warnings"] if "기준으로 바꿔" in w])
+
+    # 나눈 값이 이미 1을 넘으면 기준을 바꾸지 않는다.
+    def test_readable_ratio_is_left_alone(self) -> None:
+        spec = build_single_table(
+            POPULATION_WITH_HOUSEHOLDS,
+            [{"column": "인 구 수 Population_계 Total"}, {"column": "세대수 No. of Households"}],
+            {"op": "per_capita", "numerator": 0, "denominator": 1},
+        )
+
+        self.assertEqual(spec["transform"]["derived"]["per"], 1)
+        self.assertFalse([w for w in spec["warnings"] if "기준으로 바꿔" in w])
+
+    # 1보다 작은 값도 소수 두 자리에서 0으로 뭉개지지 않고 그대로 읽혀야 한다.
+    def test_small_values_keep_their_digits(self) -> None:
+        spec = build_cctv({"op": "per_capita", "numerator": 0, "denominator": 1, "per": 1})
+        vega_lite = build_vega_lite_spec(spec)
+
+        self.assertEqual(value_decimals([0.0032086, 0.0091598]), 4)
+        # 라벨과 tooltip이 같은 자릿수를 써야 그래프에서 읽은 값과 짚어 본 값이 어긋나지 않는다.
+        self.assertEqual(vega_lite["layer"][1]["encoding"]["text"]["format"], ",.4~f")
+        self.assertEqual(vega_lite["layer"][0]["encoding"]["tooltip"][-1]["format"], ",.4~f")
+
+    # 값이 모두 1을 넘으면 종전대로 소수 두 자리로 적는다.
+    def test_ordinary_values_keep_two_decimals(self) -> None:
+        spec = build_cctv({"op": "per_capita", "numerator": 0, "denominator": 1, "per": 1000})
+        vega_lite = build_vega_lite_spec(spec)
+
+        self.assertEqual(vega_lite["layer"][1]["encoding"]["text"]["format"], ",.2~f")
 
 
 class DerivedMetricRenderTests(unittest.TestCase):
