@@ -10,11 +10,12 @@ from .chart_spec_builder import (
     VALID_CHART_TYPES,
     apply_display_title,
     axis_title,
-    mark_scatter_labels,
     limit_categories,
+    mark_scatter_labels,
     metric_unit,
     ordered_categories,
     resolve_sort_order,
+    split_axis_chart_type,
     stat_block,
     wants_relation_chart,
     wants_words,
@@ -780,13 +781,14 @@ def build_multi_source_spec(
     scale_ratio = _scale_ratio(series)
     dual_axis = selected_type != "scatter" and _needs_dual_axis(selected_type, series)
     if dual_axis:
-        # 값 축을 나누면 막대를 나란히 둘 수 없다. 계열마다 mark를 달리하는 콤보 차트로 바꾼다.
-        selected_type = "combo"
+        # 값 축을 나누면 막대를 나란히 둘 수 없다. 연도 축이면 계열마다 mark를 달리하는 콤보로,
+        # 순서 없는 범주 축이면 지표마다 칸을 나눈 차트로 바꾼다.
+        selected_type = split_axis_chart_type(key_is_year)
     if dual_axis and same_unit:
         # 같은 단위인데 규모가 이만큼 벌어지는 것은 표의 단위 표기가 서로 어긋났다는 뜻일 때가 많다.
         warnings.append(
             f"단위가 같은데도 두 지표의 규모가 약 {scale_ratio:,.0f}배 차이나, 한 축에 두면 작은 쪽이 "
-            "보이지 않아 값 축을 좌우로 나눴습니다. 두 축의 눈금이 서로 다르므로 막대 높이를 그대로 "
+            "보이지 않아 값 축을 나눴습니다. 축마다 눈금이 서로 다르므로 막대 높이를 그대로 "
             "견주면 안 되며, 표에 적힌 단위가 실제 수치와 맞는지 확인이 필요합니다."
         )
     elif same_unit and scale_ratio >= DUAL_AXIS_SCALE_RATIO:
@@ -822,12 +824,17 @@ def build_multi_source_spec(
         chart["y_title"] = axis_title(series[1])
     elif dual_axis:
         chart["y_title"] = axis_title(series[0])
-        # 값 축을 나누면 mark도 바뀌므로 원래 이유를 덧붙이지 않고 다시 쓴다.
+        # 값 축을 나누면 그림 자체가 바뀌므로 원래 이유를 덧붙이지 않고 다시 쓴다.
         axis_label = "연도" if key_is_year else "표끼리 공통인 항목"
         cause = "규모가 크게 달라" if same_unit else "단위가 달라"
+        drawing = (
+            "값 축을 좌우로 나누고 첫 계열은 막대, 나머지는 선으로 겹쳤습니다."
+            if selected_type == "combo"
+            else "계열마다 칸을 위아래로 나눠 자기 값 축에 막대로 그렸습니다."
+        )
         chart["reason"] = (
             f"{axis_label}을 축으로 맞추되, 두 계열의 {cause} 한 축에 나란히 두면 작은 쪽이 "
-            "보이지 않으므로 값 축을 좌우로 나누고 첫 계열은 막대, 나머지는 선으로 겹쳤습니다."
+            f"보이지 않으므로 {drawing}"
         )
 
     spec = {

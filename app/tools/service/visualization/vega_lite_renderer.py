@@ -1,9 +1,13 @@
 """시각화 명세를 Vega-Lite 형식으로 변환한다."""
-from math import tau
+from math import floor, log10, tau
 from typing import Any
 
 
 VALUE_FORMAT = ",.2~f"
+# 'CCTV 대수당 관제인력'처럼 1보다 작은 파생값은 소수 두 자리에서 0으로 뭉개져 라벨도 tooltip도
+# 모두 '0'이 된다. 값의 크기를 보고 뜻이 남는 자리까지 늘려 적되, 자릿수가 끝없이 길어지지 않게 막는다.
+DEFAULT_VALUE_DECIMALS = 2
+MAX_VALUE_DECIMALS = 6
 # 증감 차트는 부호가 곧 정보라 항상 +/- 를 붙여 읽는다.
 SIGNED_VALUE_FORMAT = "+,.2~f"
 SHARE_FORMAT = ".1%"
@@ -41,16 +45,18 @@ STACK_LABEL_SIDE_PADDING_PX = 12
 
 # 프론트엔드가 차트에 주는 가로 폭. 값 라벨이 들어갈 자리를 이 폭으로 가늠한다.
 VIEW_WIDTH_PX = 640
-# 값 라벨 한 글자의 대략적인 폭과 이웃 라벨 사이에 남겨야 할 여백.
+# 값 라벨 한 글자의 대략적인 폭.
 LABEL_CHAR_WIDTH_PX = 7
-LABEL_GAP_PX = 6
+# 라벨이 이웃과 살짝 스치더라도 값이 보이는 편이 낫다. 항목 한 칸보다 이만큼까지 넓어도 그대로
+# 적고, 이 선을 넘어야 라벨을 접는다. 정확한 값은 tooltip에 그대로 남는다.
+LABEL_OVERLAP_TOLERANCE = 1.15
 # 가로 막대는 값을 막대 오른쪽에 적으므로 이만큼 떨어뜨리고, 축 끝에 라벨 자리를 남긴다.
 HORIZONTAL_LABEL_DX_PX = 8
 MAX_VALUE_HEADROOM = 0.4
 # 값을 그대로 라벨로 붙이는 차트. 순위·구성비처럼 라벨 규칙이 따로 있는 차트는 뺀다.
 VALUE_LABEL_CHARTS = frozenset({
     "bar", "grouped_bar", "line", "area", "scatter",
-    "combo", "lollipop", "diverging_bar", "waterfall", "dumbbell",
+    "combo", "paired_panels", "lollipop", "diverging_bar", "waterfall", "dumbbell",
 })
 # 라벨을 줄일 때 쓰는 큰 수 단위. 큰 단위부터 본다.
 COMPACT_UNITS = ((10**12, "조"), (10**8, "억"), (10**4, "만"))
@@ -60,11 +66,25 @@ SIGNED_LABEL_CHARTS = frozenset({"diverging_bar", "waterfall"})
 STACKED_LABEL_CHARTS = frozenset({"line", "area", "scatter"})
 
 
+# 값들이 0으로 뭉개지지 않고 읽히는 소수 자릿수를 고른다. 가장 작은 값의 첫 유효숫자가
+# 드러나는 자리까지 늘린다. 값이 모두 1 이상이면 두 자리로 충분하다.
+def value_decimals(numbers: list[float]) -> int:
+    smallest = min((abs(number) for number in numbers if number), default=0.0)
+    if smallest <= 0 or smallest >= 1:
+        return DEFAULT_VALUE_DECIMALS
+    return min(int(-floor(log10(smallest))) + 1, MAX_VALUE_DECIMALS)
+
+
+# Vega-Lite가 쓸 숫자 형식 문자열을 만든다. '~'는 뒤에 남는 0을 지운다.
+def value_format(decimals: int) -> str:
+    return f",.{decimals}~f"
+
+
 # 범례와 Vega-Lite text mark가 같은 형태의 숫자를 보여주도록 포맷한다.
-def _format_number(value: float) -> str:
+def _format_number(value: float, decimals: int = DEFAULT_VALUE_DECIMALS) -> str:
     if value.is_integer():
         return f"{value:,.0f}"
-    return f"{value:,.2f}".rstrip("0").rstrip(".")
+    return f"{value:,.{decimals}f}".rstrip("0").rstrip(".")
 
 
 # 값 라벨 하나에 돌아가는 가로 폭을 어림한다. 가로 막대는 범주마다 높이를 늘려 잡고 라벨을
@@ -81,11 +101,12 @@ def _label_slot_width(chart: dict[str, Any], values: list[dict[str, Any]]) -> fl
     return width
 
 
-# 가장 긴 라벨이 주어진 폭 안에 들어가는지 본다.
+# 가장 긴 라벨이 주어진 폭 안에 들어가는지 본다. 살짝 넘치는 정도는 들어가는 것으로 본다.
 def _labels_fit(labels: list[str], width: float) -> bool:
     if not labels:
         return True
-    return max(len(label) for label in labels) * LABEL_CHAR_WIDTH_PX + LABEL_GAP_PX <= width
+    longest = max(len(label) for label in labels) * LABEL_CHAR_WIDTH_PX
+    return longest <= width * LABEL_OVERLAP_TOLERANCE
 
 
 # 만·억 단위로 줄인 값의 자릿수를 정한다. 세 자리 정도만 남겨 라벨을 짧게 유지한다.
@@ -97,10 +118,9 @@ def _scaled_label(scaled: float) -> str:
     return f"{scaled:,.2f}"
 
 
-# 자리가 빠듯할 때 쓸 짧은 라벨을 만든다. 한 차트는 한 단위만 쓰며, 값 하나라도 그 단위에
+# 자리가 빠듯할 때 쓸 짧은 라벨을 만든다. 한 눈금은 한 단위만 쓰며, 값 하나라도 그 단위에
 # 못 미치면(0.12만처럼) 읽기 어려워지므로 줄이지 않는다.
-def _compact_labels(values: list[dict[str, Any]]) -> list[str] | None:
-    numbers = [float(value.get("value") or 0) for value in values]
+def _compact_group_labels(numbers: list[float]) -> list[str] | None:
     magnitudes = [abs(number) for number in numbers if number]
     if not magnitudes:
         return None
@@ -108,6 +128,59 @@ def _compact_labels(values: list[dict[str, Any]]) -> list[str] | None:
         if min(magnitudes) >= size:
             return [f"{_scaled_label(number / size)}{name}" for number in numbers]
     return None
+
+
+# 한 눈금에 놓인 값들의 라벨을 고른다. 값 그대로가 들어가면 그대로 쓰고, 자리가 모자라면
+# 만·억 단위로 줄여 본다. 줄여도 넘치면 None을 돌려 그 값들의 라벨을 비운다.
+def _fit_group_labels(
+    numbers: list[float],
+    width: float,
+    allow_compact: bool,
+    decimals: int,
+) -> tuple[list[str], bool] | None:
+    raw = [_format_number(number, decimals) for number in numbers]
+    if _labels_fit(raw, width):
+        return raw, False
+    compact = _compact_group_labels(numbers) if allow_compact else None
+    if compact and _labels_fit(compact, width):
+        return compact, True
+    return None
+
+
+# 값 라벨을 만든다. 계열마다 값 축이 따로인 차트(칸을 나눈 차트·이중 축)는 계열별로 따로 고른다.
+# 자릿수가 다른 계열을 한 단위로 묶으면 작은 계열이 0.00에 눌리고, 한 계열이 길다는 이유로
+# 나머지 계열의 라벨까지 접히기 때문이다. 한 축을 함께 쓰는 계열은 서로 견줘야 하므로 함께 고른다.
+# 자리가 없는 계열은 그 계열만 라벨을 비우고 이름을 돌려준다(값은 tooltip에 그대로 남는다).
+def _fit_value_labels(
+    values: list[dict[str, Any]],
+    width: float,
+    chart: dict[str, Any],
+    decimals: int,
+) -> tuple[list[str] | None, bool, list[str]]:
+    numbers = [float(value.get("value") or 0) for value in values]
+    allow_compact = chart["type"] not in SIGNED_LABEL_CHARTS
+    groups: dict[Any, list[int]] = {}
+    for index, value in enumerate(values):
+        key = value.get("series") if chart.get("dual_axis") else None
+        groups.setdefault(key, []).append(index)
+
+    labels = [""] * len(values)
+    custom = len(groups) > 1
+    hidden: list[str] = []
+    for key, indexes in groups.items():
+        fitted = _fit_group_labels(
+            [numbers[index] for index in indexes], width, allow_compact, decimals,
+        )
+        if fitted is None:
+            hidden.append(str(key))
+            custom = True
+            continue
+        for index, label in zip(indexes, fitted[0]):
+            labels[index] = label
+        custom = custom or fitted[1]
+    if len(hidden) == len(groups):
+        return None, False, hidden
+    return labels, custom, hidden
 
 
 # 계열이 여럿이면 같은 x에 라벨이 겹쳐 놓인다. 값이 비슷한 계열끼리는 세로로도 가까워
@@ -752,6 +825,53 @@ def _dumbbell_view(
     return {"layer": layers}
 
 
+# 순서 없는 범주 축에서 단위가 다른 지표를 나눠 그릴 때 한 칸에 주는 높이다.
+# 두 칸을 합쳐도 한 장짜리 차트보다 크게 늘어나지 않도록 한 칸을 낮게 잡는다.
+PANEL_HEIGHT_PX = 170
+
+
+# 지표마다 칸을 위아래로 나눠 각자의 값 축에 막대로 그린다.
+# 이중 축 콤보와 달리 눈금을 임의로 맞춰 겹치지 않으므로 두 계열이 만나는 자리에 없는 뜻이
+# 생기지 않고, 선이 범주 사이를 잇지 않아 흐름으로 오해되지도 않는다. x축은 두 칸이 같은
+# 항목 순서를 쓰므로 위아래로 견주는 읽기는 그대로 된다.
+def _paired_panels_view(chart: dict[str, Any], x_is_year: bool) -> dict[str, Any]:
+    series = chart["series"]
+    labels = [item["label"] for item in series]
+    panels: list[dict[str, Any]] = []
+    for index, item in enumerate(series):
+        label = item["label"]
+        axis_title = _series_axis_title(item)
+        category_axis = _category_axis(chart, x_is_year)
+        if index < len(series) - 1:
+            # 항목 이름은 맨 아래 칸에만 적는다. 칸마다 되풀이하면 위 칸의 눈금이 아래 칸
+            # 막대와 붙어 어느 칸의 축인지 읽기 어려워진다.
+            category_axis = {**category_axis, "axis": {"labels": False, "ticks": False, "title": None}}
+        tooltip = [
+            {"field": "x", "type": "ordinal" if x_is_year else "nominal", "title": ""},
+            {"field": "value", "type": "quantitative", "title": axis_title, "format": VALUE_FORMAT},
+        ]
+        marks: list[dict[str, Any]] = [
+            {"mark": {"type": "bar", "cornerRadiusEnd": 3}, "encoding": {"tooltip": tooltip}},
+        ]
+        if chart.get("value_labels", True):
+            marks.append({
+                "mark": {"type": "text", "fontSize": LABEL_FONT_SIZE, "dy": -6, "baseline": "bottom"},
+                "encoding": {"text": _value_text(chart)},
+            })
+        panels.append({
+            "height": PANEL_HEIGHT_PX,
+            "transform": [{"filter": {"field": "series", "oneOf": [label]}}],
+            "encoding": {
+                "x": category_axis,
+                "y": {"field": "value", "type": "quantitative", "title": axis_title},
+                "color": {**_series_color(labels, COMBO_COLORS), "legend": None},
+            },
+            "layer": marks,
+        })
+    # 칸을 나눠 그린 계열은 축 제목이 곧 계열 이름이라 범례가 같은 말을 되풀이한다.
+    return {"vconcat": panels, "spacing": 12}
+
+
 # 여러 표에서 짝지은 두 지표를 항목 이름과 함께 점으로 그린다.
 def _relation_scatter_view(chart: dict[str, Any]) -> dict[str, Any]:
     x_title = chart.get("x_title") or chart.get("x") or ""
@@ -812,6 +932,8 @@ def _vega_view(chart: dict[str, Any], has_series: bool, x_is_year: bool) -> dict
 
     if ctype == "scatter" and chart.get("point_label"):
         return _relation_scatter_view(chart)
+    if ctype == "paired_panels" and chart.get("series"):
+        return _paired_panels_view(chart, x_is_year)
     if (ctype == "combo" or chart.get("dual_axis")) and chart.get("series"):
         return _combo_view(chart, x_is_year)
     if ctype == "diverging_bar":
@@ -1097,6 +1219,23 @@ def _add_derived_fields(chart_type: str, values: list[dict[str, Any]]) -> dict[s
     return {}
 
 
+# tooltip·축·라벨은 뷰마다 여러 겹에 흩어져 있어 만들 때마다 자릿수를 물려주면 인자만 늘어난다.
+# 기본 형식으로 세워 둔 뷰를 다 만든 뒤, 그 안의 형식 문자열만 이 차트의 자릿수로 한 번에 바꾼다.
+def _apply_value_format(node: Any, decimals: int) -> Any:
+    if decimals == DEFAULT_VALUE_DECIMALS:
+        return node
+    if isinstance(node, dict):
+        return {key: _apply_value_format(value, decimals) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_apply_value_format(item, decimals) for item in node]
+    if isinstance(node, str):
+        # Vega 식 안에 형식이 문자열로 박혀 있는 자리(누적 막대 라벨 폭)까지 함께 바꾼다.
+        return node.replace(VALUE_FORMAT, value_format(decimals)).replace(
+            SIGNED_VALUE_FORMAT, f"+{value_format(decimals)}",
+        )
+    return node
+
+
 # 클라이언트가 직접 렌더링할 수 있는 표준 Vega-Lite spec을 만든다.
 def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
     chart = spec["chart"]
@@ -1114,6 +1253,9 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
         if is_donut
         else 0
     )
+    # 자릿수는 이 차트에 실제로 담긴 값으로 정한다. 소수 두 자리로 못 박으면 1보다 작은
+    # 파생값이 라벨에도 tooltip에도 '0'으로 뭉개져 그래프만 보고는 값을 읽을 수 없다.
+    decimals = value_decimals([float(record.get("value") or 0) for record in records])
     cumulative = 0.0
     values: list[dict[str, Any]] = []
     for index, record in enumerate(records):
@@ -1138,7 +1280,7 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
                     else 0
                 ),
                 "_legend_label": (
-                    f"{record.get('x')}  {_format_number(numeric_value)}"
+                    f"{record.get('x')}  {_format_number(numeric_value, decimals)}"
                 ),
             })
             cumulative += numeric_value
@@ -1148,29 +1290,21 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
     # 만·억 단위로 줄여 보고, 그래도 안 들어가면 라벨을 접고 값은 tooltip에 남긴다.
     if values and chart.get("value_labels") is None and chart["type"] in VALUE_LABEL_CHARTS:
         width = _label_slot_width(chart, values)
-        labels: list[str] | None = [
-            _format_number(float(value.get("value") or 0)) for value in values
-        ]
-        custom = False
-        if not _labels_fit(labels, width):
-            # 축을 나눈 차트는 계열마다 값의 자릿수가 달라 한 단위로 줄이면 한쪽이 0에 눌린다.
-            compact = (
-                None
-                if chart.get("dual_axis") or chart["type"] in SIGNED_LABEL_CHARTS
-                else _compact_labels(values)
+        labels, custom, hidden = _fit_value_labels(values, width, chart, decimals)
+        if labels is None:
+            chart["value_labels"] = False
+            # warnings는 모델이 읽는 자리다. 여기에 '가로 막대로 요청하면'처럼 다시 부를 방법을
+            # 적어 두면 모델이 그대로 따라 같은 데이터를 방향만 바꿔 한 번 더 그리고, 사용자
+            # 화면에는 같은 차트가 둘 남는다. 일어난 일만 적고 고쳐 부를 방법은 적지 않는다.
+            spec.setdefault("warnings", []).append(
+                f"항목이 {len({value.get('x') for value in values})}개라 값 라벨이 서로 겹쳐 "
+                "숨겼습니다. 값은 차트에 마우스를 올리면 볼 수 있습니다."
             )
-            if compact and _labels_fit(compact, width):
-                labels, custom = compact, True
-            else:
-                labels = None
-                chart["value_labels"] = False
-                # warnings는 모델이 읽는 자리다. 여기에 '가로 막대로 요청하면'처럼 다시 부를 방법을
-                # 적어 두면 모델이 그대로 따라 같은 데이터를 방향만 바꿔 한 번 더 그리고, 사용자
-                # 화면에는 같은 차트가 둘 남는다. 일어난 일만 적고 고쳐 부를 방법은 적지 않는다.
-                spec.setdefault("warnings", []).append(
-                    f"항목이 {len({value.get('x') for value in values})}개라 값 라벨이 서로 겹쳐 "
-                    "숨겼습니다. 값은 차트에 마우스를 올리면 볼 수 있습니다."
-                )
+        elif hidden:
+            spec.setdefault("warnings", []).append(
+                f"{', '.join(hidden)} 값은 라벨이 서로 겹쳐 숨겼습니다. "
+                "값은 차트에 마우스를 올리면 볼 수 있습니다."
+            )
         # 축을 나눈 차트는 계열마다 눈금이 달라 값만으로 라벨 높이를 가늠할 수 없다.
         if labels is not None and chart["type"] in STACKED_LABEL_CHARTS and not chart.get("dual_axis"):
             custom = _blank_overlapping_labels(values, labels) or custom
@@ -1184,7 +1318,7 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
             largest = max((float(value.get("value") or 0) for value in values), default=0)
             if largest > 0:
                 texts = [
-                    value.get("_label") or _format_number(float(value.get("value") or 0))
+                    value.get("_label") or _format_number(float(value.get("value") or 0), decimals)
                     for value in values
                 ]
                 reserved = max(len(text) for text in texts) * LABEL_CHAR_WIDTH_PX
@@ -1194,8 +1328,8 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
                 chart["value_axis_max"] = largest / (1 - share)
 
     chart = {**chart, **_add_derived_fields(chart["type"], values)}
-    if chart["type"] == "combo" and not chart.get("series"):
-        # 한 표 안의 계열을 콤보로 그릴 때는 계열 목록을 레코드에서 세운다.
+    if chart["type"] in {"combo", "paired_panels"} and not chart.get("series"):
+        # 한 표 안의 계열을 콤보나 나눈 칸으로 그릴 때는 계열 목록을 레코드에서 세운다.
         chart["series"] = [
             {"label": label, "unit": chart.get("unit")}
             for label in dict.fromkeys(
@@ -1206,7 +1340,7 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
         # 축 순서를 두지 않으면 Vega-Lite가 가나다순으로 다시 늘어놓아 표에 실린 순서도,
         # 서버가 값 기준으로 다시 세운 순서도 사라진다. 폭포 차트는 누적까지 어긋난다.
         chart["category_order"] = list(dict.fromkeys(record.get("x") for record in records))
-    view = _vega_view(chart, has_series, x_is_year)
+    view = _apply_value_format(_vega_view(chart, has_series, x_is_year), decimals)
     view["data"] = {"values": values}
 
     root: dict[str, Any] = {

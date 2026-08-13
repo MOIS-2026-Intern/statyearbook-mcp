@@ -25,6 +25,11 @@ PER_SCALE_PATTERNS = (
     (re.compile(r"(?:1천|천)\s*[가-힣]{0,4}\s*당"), 1_000),
     (re.compile(r"(?:1인|1명|1가구|1세대|한\s*명)\s*당"), 1),
 )
+# 배수를 정하지 않은 나눗셈이 1보다 한참 작은 값으로 나오면 모든 막대가 0선에 붙어 그래프가
+# 아무것도 말해 주지 않는다('CCTV 대수당 관제인력' 0.0032명). 사람이 쓰는 배수 가운데 값이 1을
+# 넘게 되는 가장 작은 배수로 바꿔 'CCTV 1천 대당 3.21명'처럼 읽히게 한다.
+AUTO_PER_THRESHOLD = 0.1
+AUTO_PER_STEPS = (1_000, 10_000, 100_000, 1_000_000)
 # 단위에 이런 배수가 붙은 표는 셀 값이 이미 그만큼 줄어 있어, 배수를 그대로 곱하면 자릿수가 어긋난다.
 # 긴 표기가 짧은 표기를 앞머리에 품으므로 긴 쪽부터 본다.
 UNIT_MULTIPLIER_WORDS = ("십만", "백만", "천", "만", "억", "조")
@@ -84,6 +89,15 @@ class DerivedResult:
 def query_per_scale(query: str | None) -> int | None:
     text = (query or "").lower()
     return next((scale for pattern, scale in PER_SCALE_PATTERNS if pattern.search(text)), None)
+
+
+# 값이 모두 1보다 한참 작으면 읽히는 크기가 되도록 배수를 고른다. 요청에 배수가 적혀 있으면
+# 그 기준이 곧 질문이므로 손대지 않는다.
+def auto_per_scale(values: dict[str, float]) -> int:
+    largest = max((abs(value) for value in values.values()), default=0.0)
+    if largest <= 0 or largest >= AUTO_PER_THRESHOLD:
+        return 1
+    return next((step for step in AUTO_PER_STEPS if largest * step >= 1), AUTO_PER_STEPS[-1])
 
 
 # 배수를 '1만', '10만'처럼 사람이 읽는 표기로 바꾼다.
@@ -200,7 +214,8 @@ def build(
     op, top_index, bottom_index = resolved
     numerator, denominator = operands[top_index], operands[bottom_index]
 
-    per = derive.get("per") or query_per_scale(query) or 1
+    requested_per = derive.get("per") or query_per_scale(query)
+    per = requested_per or 1
     if per < 1:
         warnings.append("파생 지표의 배수는 1 이상이어야 해 1을 적용했습니다.")
         per = 1
@@ -228,6 +243,19 @@ def build(
     if not values:
         warnings.append("두 지표에 함께 값이 있는 항목이 없어 파생 지표를 만들지 못했습니다.")
         return None
+
+    # 배수를 정해 주지 않았는데 값이 1보다 한참 작으면 막대가 모두 0선에 붙어 그래프가 아무것도
+    # 말해 주지 않는다. 읽히는 기준으로 바꾸고, 답변도 그 기준으로 적도록 무엇이 바뀌었는지 알린다.
+    if op == "per_capita" and requested_per is None:
+        auto = auto_per_scale(values)
+        if auto > 1:
+            values = {key: value * auto for key, value in values.items()}
+            per = auto
+            unit_word = clean_label(denominator.unit) or "개"
+            warnings.append(
+                f"'{denominator.label}' 하나당 값이 1보다 훨씬 작아 {per_label(per)} {unit_word}당 "
+                "기준으로 바꿔 계산했습니다. 표와 설명도 이 기준으로 적어야 합니다."
+            )
     _warn_inputs(op, numerator, denominator, warnings)
 
     order = [key for key in (numerator.order or list(numerator.values)) if key in values]

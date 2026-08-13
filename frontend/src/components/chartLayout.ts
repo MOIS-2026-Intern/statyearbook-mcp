@@ -339,6 +339,15 @@ function styleBar(view: JsonRecord, width: number) {
 // mark 유형별로 화면 폭에 맞는 뷰 크기와 스타일을 적용한다.
 function styleView(view: JsonRecord, width: number): JsonRecord {
   const type = viewMarkType(view);
+  // 위아래로 나눈 칸처럼 서버가 높이를 정해 보낸 뷰는 그 높이를 지킨다. 칸마다 한 장짜리
+  // 차트 높이를 주면 두 칸이 화면을 벗어난다.
+  const fixedHeight = typeof view.height === "number" ? view.height : undefined;
+  const styled = styleViewByMark(view, width, type);
+  return fixedHeight === undefined ? styled : { ...styled, height: fixedHeight };
+}
+
+// mark 유형에 따른 기본 크기·스타일을 고른다.
+function styleViewByMark(view: JsonRecord, width: number, type: string): JsonRecord {
   // 롤리팝·아령 차트도 범주마다 한 칸을 쓰므로 막대와 같은 규칙으로 높이를 잡는다.
   if (type === "bar" || type === "rule") {
     return styleBar(view, width);
