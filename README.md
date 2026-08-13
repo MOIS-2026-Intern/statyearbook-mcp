@@ -107,6 +107,19 @@ DB에 넣기 전에 파싱 결과만 확인하려면 `build-sql`로 검수 문�
 python -m admin build-sql data/2026통계연보.hwpx --year 2026 --out admin/workspaces/rebuild-2026
 ```
 
+이미 파싱된 주요통계집 JSON은 `ingest-json`으로 적재합니다. DB에 넣기 전에 변환 결과와
+SQL만 확인하려면 `build-json-sql`을 사용합니다.
+
+```bash
+python -m admin build-json-sql 2025_statistics_parsed_v3.json --year 2025 --out admin/workspaces/major-stats-2025
+python -m admin ingest-json 2025_statistics_parsed_v3.json --year 2025 --mode replace --embedding bge-m3
+```
+
+관리자 화면도 두 발간물을 모두 받습니다. **발간물 종류**를 고르면 그 종류가 받는 원본 형식으로
+업로드 칸이 바뀝니다. 통계연보는 HWPX 원본을 직접 파싱하고, 주요통계집은 미리 파싱해 둔 JSON
+패키지를 공통 적재 포맷으로 변환합니다. 서버는 업로드 파일의 확장자로 입력 형식을 판별하므로
+`.hwpx`는 연보 파서, `.json`은 주요통계집 변환기로 들어가고 그 외 확장자는 거부합니다.
+
 ### 목차 계층 복원 규칙
 
 표 번호(`ref_id`)와 장·절·3계층·4계층 제목은 **본문 표제 표**를 정본으로 삼습니다.

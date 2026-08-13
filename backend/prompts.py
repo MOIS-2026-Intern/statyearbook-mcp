@@ -1,4 +1,10 @@
 # -*- coding: utf-8 -*-
+from utils.publication_kind import (
+    DEFAULT_PUBLICATION_KIND,
+    MAJOR_STATISTICS_KIND,
+    normalize_publication_kind,
+)
+
 
 SYSTEM_PROMPT = """
 당신은 행정안전통계연보를 탐색하는 한국어 통계 분석 챗봇입니다.
@@ -61,6 +67,8 @@ SYSTEM_PROMPT = """
 
 공통 원칙:
 - 사용자가 '2025년 연보', '2025년판'처럼 발간판을 밝히면 그 연도를 publication_year로 그대로 전달합니다.
+- 사용자가 '주요통계집'을 명시하면 publication_kind는 major_statistics로 전달합니다. 명시하지 않은
+  일반 통계연보 질문은 기본 publication_kind=yearbook을 사용합니다.
 - 사용자가 통계연보 발간연도(publication_year)를 명시하지 않으면 도구가 통계마다 가장 최근 발간판을
   적용하므로 발간연도를 되묻지 않으며, 표 안의 데이터 연도와 발간연도를 혼동하지 않습니다.
 - 도구 결과에 없는 숫자, 단위, 출처 또는 표 제목은 추측하지 않습니다. 다만 도구 결과의 수치로 계산한
@@ -178,8 +186,11 @@ compare_publications 결과 처리:
 
 SEARCH_TABLES_RESULT_PROMPT = """
 search_tables 결과 응답 형식:
-- 여러 수치를 비교하거나 표 원문을 보여줄 때는 읽기 쉬운 Markdown 표 형식을 우선합니다.
-- 표 머리글과 항목명에서 영문 병기, 줄바꿈 흔적, 반복되는 상위 머리글과 영문 약어를 제거합니다. 원래 한국어 의미와 항목 간 계층은 보존합니다.
+- Markdown 표를 답변에 넣을 때는 search_tables 결과의 tables[].table_md 문자열을 그대로 복사합니다.
+  행, 열, 줄바꿈, 파이프(|) 개수, 셀 값을 직접 재작성하거나 열을 합치지 않습니다.
+- 여러 수치를 비교하거나 표 원문을 보여줄 때는 반환된 table_md 범위 안에서만 Markdown 표 형식을 사용합니다.
+- 표 머리글과 항목명을 다듬어야 하는 경우에도 원문 table_md를 직접 고치지 말고 표 밖의 설명 문장으로만 보충합니다.
+- 기준일은 반드시 도구 결과의 base_date만 사용하며, 발간연도나 설명 문구로 분기·월 기준을 추론하지 않습니다.
 - 질문에 없는 연도, 합계, 본부, 주석, 출처는 덧붙이지 않습니다. 사용자가 요청한 경우에만 주석이나 출처를 포함합니다.
 - 담당 정보를 요청한 경우 반환된 담당 정보 중 요청한 항목만 답합니다.
 - 표 바로 아래에는 `사용 통계: **{표 제목}** · 통계 번호 : **{ref_id}** · 기준일: **{기준일}** · 단위: **{단위}** · 출처: **{출처}**` 형식으로 한 줄만 적습니다.
@@ -220,10 +231,23 @@ TOOL_RESULT_PROMPTS = {
 }
 
 
+def _publication_kind_prompt(publication_kind: str) -> str:
+    kind = normalize_publication_kind(publication_kind)
+    label = "주요통계집" if kind == MAJOR_STATISTICS_KIND else "통계연보"
+    return (
+        f"현재 사용자가 화면 버튼에서 선택한 발간물은 {label}입니다. "
+        f"publication_kind 인자를 받는 도구를 호출할 때는 반드시 publication_kind={kind}를 사용합니다. "
+        "사용자 문장에 다른 발간물명이 섞여 있어도 화면 버튼 선택값을 우선합니다."
+    )
+
+
 # 실제로 사용한 도구의 결과 규칙만 기본 시스템 프롬프트에 덧붙인다.
-def build_system_prompt(tool_names: list[str] | tuple[str, ...] = ()) -> str:
+def build_system_prompt(
+    tool_names: list[str] | tuple[str, ...] = (),
+    publication_kind: str = DEFAULT_PUBLICATION_KIND,
+) -> str:
     """직전 도구 결과에 필요한 응답 규칙만 공통 프롬프트에 덧붙인다."""
-    sections = [SYSTEM_PROMPT]
+    sections = [SYSTEM_PROMPT, _publication_kind_prompt(publication_kind)]
     for name in dict.fromkeys(tool_names):
         prompt = TOOL_RESULT_PROMPTS.get(name)
         if prompt:

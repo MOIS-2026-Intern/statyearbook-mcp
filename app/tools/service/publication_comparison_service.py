@@ -20,6 +20,7 @@ from app.tools.repository.publication_comparison_repository import (
     _validate_request,
     build_query_plan,
 )
+from utils.publication_kind import DEFAULT_PUBLICATION_KIND, normalize_publication_kind
 
 
 # 목록 응답에서 내부 집계 컬럼을 떼어내고 전체 건수를 회수한다.
@@ -40,6 +41,7 @@ def compare_publications_data(
     operation: CompareOperation,
     subject: CompareSubject = "statistics",
     match_by: CompareMatchBy = "title",
+    publication_kind: str = DEFAULT_PUBLICATION_KIND,
     base_publication_year: int | None = None,
     target_publication_year: int | None = None,
     fields: list[CompareField] | None = None,
@@ -47,6 +49,7 @@ def compare_publications_data(
     limit: int = 500,
     offset: int = 0,
 ) -> dict[str, Any]:
+    publication_kind = normalize_publication_kind(publication_kind)
     _validate_request(
         operation,
         subject,
@@ -56,7 +59,7 @@ def compare_publications_data(
         limit,
         offset,
     )
-    available_years = _publication_years()
+    available_years = _publication_years(publication_kind)
     base_year, target_year, publication_years_defaulted = _resolve_publication_years(
         base_publication_year,
         target_publication_year,
@@ -67,6 +70,7 @@ def compare_publications_data(
         operation=operation,
         subject=subject,
         match_by=match_by,
+        publication_kind=publication_kind,
         base_publication_year=base_year,
         target_publication_year=target_year,
         fields=fields,
@@ -82,6 +86,7 @@ def compare_publications_data(
         "ok": True,
         "operation": operation,
         "subject": subject,
+        "publication_kind": publication_kind,
         "match_by": match_by,
         "match_key_definition": (
             f"{spec.definition}을(를) {MATCH_KEY_DEFINITIONS[match_by]}으로 잇는다"

@@ -74,6 +74,10 @@ ANALYZE_PUBLICATIONS_FIELDS = {
     "publication_year": (
         "통계연보 발간연도. 표 안 데이터 연도가 아니다. 생략하면 최신 발간연도를 적용한다."
     ),
+    "publication_kind": (
+        "조회할 발간물 종류. 통계연보는 yearbook, 주요통계집은 major_statistics를 사용한다. "
+        "사용자가 주요통계집을 명시하지 않으면 yearbook을 기본값으로 둔다."
+    ),
     "all_publication_years": (
         "모든 발간판을 대상으로 비교·집계할 때만 true. publication_year와 동시에 사용하지 않는다."
     ),
@@ -141,6 +145,10 @@ COMPARE_PUBLICATIONS_FIELDS = {
         "비교 기준이 되는 발간연도. '25년판에만 있고 26년판에 없는 자료'라면 2025다. "
         "표 안 데이터 연도가 아니다. 두 연도를 모두 생략하면 가장 최근 두 발간판을 비교한다."
     ),
+    "publication_kind": (
+        "비교할 발간물 종류. 통계연보끼리 비교하면 yearbook, 주요통계집끼리 비교하면 "
+        "major_statistics를 사용한다."
+    ),
     "target_publication_year": (
         "맞대어 볼 발간연도. '25년판에만 있고 26년판에 없는 자료'라면 2026이다. "
         "생략하면 base 다음으로 가까운 최신 발간판을 적용한다."
@@ -203,6 +211,10 @@ SEARCH_STATISTICS_FIELDS = {
         "'2025년 연보', '2025년판'처럼 발간판을 명시한 경우에만 전달하며, "
         "생략하면 통계별로 가장 최근 발간판을 사용한다."
     ),
+    "publication_kind": (
+        "검색할 발간물 종류. 통계연보는 yearbook, 주요통계집은 major_statistics다. "
+        "사용자가 주요통계집을 말한 경우 반드시 major_statistics를 전달한다."
+    ),
     "limit": "반환할 통계표 후보의 최대 개수.",
 }
 SEARCH_TABLES = (
@@ -210,8 +222,12 @@ SEARCH_TABLES = (
     "표 안의 실제 수치를 확인하는 도구이며, stat_id를 모르면 먼저 search_statistics로 찾는다. "
     "한 제목의 표가 여러 페이지(seq)로 나뉘어 있으면 모두 합쳐 하나의 표로 제공하며, "
     "table_handle은 그 합쳐진 전체 표를 가리킨다. "
+    "특정 지역·연도·구분 행의 값이 필요하면 row_label에 search_statistics의 matched_text나 "
+    "사용자가 말한 행 라벨을 넣는다. row_label을 넣으면 table_md 미리보기 밖의 행도 "
+    "matched_rows와 matched_rows_md로 별도 반환된다. "
+    "특정 물리 표만 조회해야 할 때만 table_seq를 넣고, 보통은 생략한다. "
     "수치 단위는 반환된 unit을 기준으로 해석한다. 각 표의 table_handle은 같은 사용자 요청에서 "
-    "visualize가 원본 표를 재조회하지 않고 재사용할 때만 쓴다."
+    "visualize가 원본 표를 재조회하지 않고 재사용할 때만 쓴다. "
     "행이 연도로 구분되어 있지만, 연도를 특정하지 않으면 가장 최신 연도를 기준으로 한 표를 반환한다."
     "상관계수·평균·증감률처럼 표 수치를 가공해야 답이 나오는 요청은 이 도구로 필요한 표를 모두 "
     "확인한 뒤 그 값으로 직접 계산해 답한다. 통계량을 산출해 주는 도구는 따로 없다."

@@ -91,7 +91,10 @@ class ComparePublicationsTests(unittest.TestCase):
         self.assertEqual(result["base"]["item_count"], 319)
         self.assertEqual(result["target"]["duplicate_key_count"], 12)
         self.assertFalse(result["publication_years_defaulted"])
-        self.assertEqual(execute_plan_mock.call_args.args[0].params, (2025, 2026))
+        self.assertEqual(
+            execute_plan_mock.call_args.args[0].params,
+            ("yearbook", 2025, "yearbook", 2026),
+        )
 
     # 발간연도를 생략하면 가장 최근 두 발간판을 오래된 판에서 최신 판 방향으로 비교해야 한다.
     def test_defaults_to_two_most_recent_publications(self) -> None:
@@ -120,7 +123,10 @@ class ComparePublicationsTests(unittest.TestCase):
         self.assertNotIn("_total_count", result["results"][0])
         self.assertTrue(result["truncated"])
         self.assertEqual(result["next_offset"], 1)
-        self.assertEqual(execute_plan_mock.call_args.args[0].params, (2025, 2026, 1, 0))
+        self.assertEqual(
+            execute_plan_mock.call_args.args[0].params,
+            ("yearbook", 2025, "yearbook", 2026, 1, 0),
+        )
 
     # 이름 기준 비교는 발간판마다 다시 매겨지는 목차 번호를 변경 판정 대상으로 삼아야 한다.
     def test_changed_compares_selected_fields_only(self) -> None:

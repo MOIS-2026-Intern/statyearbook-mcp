@@ -10,6 +10,7 @@ from app.query_embedding import (
     table_search_embedding_profile,
 )
 from app.tools.repository.statistics_search_repository import StatisticsSearchRepository
+from utils.publication_kind import DEFAULT_PUBLICATION_KIND, normalize_publication_kind
 
 
 SEARCH_TEXT_COLUMNS = (
@@ -145,6 +146,7 @@ def _best_matched_text(
 def _base_candidate(row: dict) -> dict:
     return {
         "stat_id": row["stat_id"],
+        "publication_kind": row.get("publication_kind", DEFAULT_PUBLICATION_KIND),
         "publication_year": row["publication_year"],
         "ref_id": row["ref_id"],
         "chapter_no": row["chapter_no"],
@@ -278,10 +280,16 @@ def _merge_candidates(
 
 
 # 검색할 수 없는 질의에 대해 일관된 빈 응답을 만든다.
-def _empty_response(query: str, publication_year: int | None = None) -> dict:
+def _empty_response(
+    query: str,
+    publication_year: int | None = None,
+    publication_kind: str = DEFAULT_PUBLICATION_KIND,
+) -> dict:
     return {
         "query": query,
         "tokens": [],
+        "requested_publication_kind": publication_kind,
+        "applied_publication_kind": publication_kind,
         "requested_publication_year": publication_year,
         "applied_publication_year": publication_year,
         "latest_edition_per_statistic": False,
@@ -317,9 +325,11 @@ def search_statistics_data(
     query: str,
     publication_year: int | None = None,
     limit: int = 5,
+    publication_kind: str = DEFAULT_PUBLICATION_KIND,
 ) -> dict:
+    publication_kind = normalize_publication_kind(publication_kind)
     if not query or not query.strip():
-        return _empty_response(query, publication_year)
+        return _empty_response(query, publication_year, publication_kind)
 
     requested_publication_year = publication_year
     latest_editions = publication_year is None
@@ -337,6 +347,7 @@ def search_statistics_data(
         publication_year,
         latest_editions,
         limit,
+        publication_kind=publication_kind,
     )
     results = _merge_candidates(query, *rows, limit)
     filter_relaxed = False
@@ -351,6 +362,7 @@ def search_statistics_data(
             None,
             latest_editions,
             limit,
+            publication_kind=publication_kind,
         )
         results = _merge_candidates(query, *rows, limit)
         filter_relaxed = True
@@ -358,6 +370,8 @@ def search_statistics_data(
     return {
         "query": query,
         "tokens": tokens,
+        "requested_publication_kind": publication_kind,
+        "applied_publication_kind": publication_kind,
         "requested_publication_year": requested_publication_year,
         "applied_publication_year": None if latest_editions else publication_year,
         "latest_edition_per_statistic": latest_editions,

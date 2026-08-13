@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from admin.backend.models.embedding import EmbeddingBatch
 from utils.embedding import EmbeddingConfigurationError
+from utils.publication_kind import DEFAULT_PUBLICATION_KIND, normalize_publication_kind
 from utils.vector import vector_literal
 
 
@@ -13,21 +14,40 @@ def _first_value(row):
 
 class TableSearchEmbeddingRepository:
     # 표 검색 임베딩 작업을 선택한 발간연도에 한정한다.
-    def __init__(self, publication_year: int | None = None):
+    def __init__(
+        self,
+        publication_year: int | None = None,
+        publication_kind: str | None = None,
+    ):
         self.publication_year = publication_year
+        self.publication_kind = (
+            normalize_publication_kind(publication_kind or DEFAULT_PUBLICATION_KIND)
+            if publication_year is not None
+            else None
+        )
         self.name = (
-            f"table_search:{publication_year}"
+            f"table_search:{self.publication_kind}:{publication_year}"
             if publication_year is not None
             else "table_search"
         )
 
     # statistics 별칭을 기준으로 선택적 연도 범위 조건을 만든다.
     def _scope_sql(self) -> str:
-        return "s.year = %s" if self.publication_year is not None else "TRUE"
+        clauses = []
+        if self.publication_year is not None:
+            clauses.append("s.year = %s")
+        if self.publication_kind is not None:
+            clauses.append("p.publication_kind = %s")
+        return " AND ".join(clauses) if clauses else "TRUE"
 
     # 연도 범위 조건에 필요한 인자만 순서대로 반환한다.
     def _scope_params(self) -> list:
-        return [self.publication_year] if self.publication_year is not None else []
+        params = []
+        if self.publication_year is not None:
+            params.append(self.publication_year)
+        if self.publication_kind is not None:
+            params.append(self.publication_kind)
+        return params
 
     # 표 검색 벡터 열의 실제 차원이 모델과 일치하는지 쓰기 전에 확인한다.
     def select_and_validate_dimension(self, conn, expected_dimension: int) -> None:
@@ -61,6 +81,7 @@ class TableSearchEmbeddingRepository:
                 SELECT COALESCE(MAX(c.chunk_id), 0)
                 FROM table_search_chunks c
                 JOIN statistics s ON s.stat_id = c.stat_id
+                JOIN publications p ON p.pub_id = s.pub_id
                 WHERE {self._scope_sql()}
                 """,
                 self._scope_params(),
@@ -90,6 +111,7 @@ class TableSearchEmbeddingRepository:
                 SELECT COUNT(*)
                 FROM table_search_chunks c
                 JOIN statistics s ON s.stat_id = c.stat_id
+                JOIN publications p ON p.pub_id = s.pub_id
                 WHERE {self._candidate_sql(force)}
                   AND {self._scope_sql()}
                   AND c.chunk_id <= %s
@@ -116,9 +138,10 @@ class TableSearchEmbeddingRepository:
                 f"""
                 SELECT c.chunk_id, c.chunk_no, c.chunk_kind, c.search_text,
                        t.seq AS table_seq,
-                       s.year, s.ref_id, s.title_ko
+                       s.year, p.publication_kind, s.ref_id, s.title_ko
                 FROM table_search_chunks c
                 JOIN statistics s ON s.stat_id = c.stat_id
+                JOIN publications p ON p.pub_id = s.pub_id
                 LEFT JOIN stat_tables t ON t.table_id = c.table_id
                 WHERE {self._candidate_sql(force)}
                   AND {self._scope_sql()}

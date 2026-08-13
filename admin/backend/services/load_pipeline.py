@@ -22,8 +22,12 @@ from admin.backend.repositories.statistics_embeddings import StatisticsEmbedding
 from admin.backend.repositories.table_search_embeddings import TableSearchEmbeddingRepository
 from admin.backend.services.load_artifacts import YearbookArtifactService
 from admin.backend.services.load_embedding import EmbeddingRunner
+from admin.backend.services.load_major_statistics_json import convert_major_statistics_json
 from admin.backend.services.load_parser import parse
 from admin.backend.services.load_verification import YearbookVerificationService
+
+
+INGESTION_INPUT_FORMATS = ("hwpx", "major_statistics_json")
 
 
 class YearbookIngestionService:
@@ -62,8 +66,13 @@ class YearbookIngestionService:
         try:
             input_path = Path(options.input_path)
             self._step(job_id, "validate", 3, "업로드 파일과 대상 환경을 확인하고 있습니다.")
-            if input_path.suffix.lower() != ".hwpx" or not zipfile.is_zipfile(input_path):
-                raise ValueError("유효한 HWPX 파일이 아닙니다.")
+            if options.input_format not in INGESTION_INPUT_FORMATS:
+                raise ValueError(f"지원하지 않는 입력 형식입니다: {options.input_format}")
+            if options.input_format == "hwpx":
+                if input_path.suffix.lower() != ".hwpx" or not zipfile.is_zipfile(input_path):
+                    raise ValueError("유효한 HWPX 파일이 아닙니다.")
+            elif input_path.suffix.lower() != ".json":
+                raise ValueError("유효한 JSON 파일이 아닙니다.")
             dsn = self.settings.target_dsn(options.target)
 
             embedding_runtime = None
@@ -94,13 +103,24 @@ class YearbookIngestionService:
                     provider,
                 )
 
-            self._step(job_id, "parse", 10, "HWPX 구조와 통계표를 파싱하고 있습니다.")
-            parsed = parse(
-                str(input_path),
-                publication_year=options.year,
-                publication_title=options.title,
-                publication_no=options.pub_no,
-            )
+            if options.input_format == "major_statistics_json":
+                self._step(job_id, "parse", 10, "주요통계집 JSON을 적재 포맷으로 변환하고 있습니다.")
+                parsed = convert_major_statistics_json(
+                    input_path,
+                    publication_year=options.year,
+                    publication_title=options.title,
+                    publication_no=options.pub_no,
+                    publication_kind=options.publication_kind,
+                )
+            else:
+                self._step(job_id, "parse", 10, "HWPX 구조와 통계표를 파싱하고 있습니다.")
+                parsed = parse(
+                    str(input_path),
+                    publication_year=options.year,
+                    publication_title=options.title,
+                    publication_no=options.pub_no,
+                    publication_kind=options.publication_kind,
+                )
             artifacts.update(artifact_service.save_parsed_outputs(parsed))
             self.store.update_job(job_id, artifacts=artifacts)
 
@@ -118,13 +138,16 @@ class YearbookIngestionService:
                     job_id,
                     "load_db",
                     48,
-                    f"{options.target} DB에 {options.year}년 연보를 적재하고 있습니다.",
+                    f"{options.target} DB에 {options.year}년 발간물을 적재하고 있습니다.",
                 )
                 self.dml_repository.execute_dml_file(conn, load_sql)
 
                 if embedding_runtime is not None:
                     embed_settings, profile, table_profile, provider = embedding_runtime
-                    source = StatisticsEmbeddingRepository(options.year)
+                    source = StatisticsEmbeddingRepository(
+                        options.year,
+                        options.publication_kind,
+                    )
                     runner = EmbeddingRunner(provider, profile, source)
                     writer = artifact_service.embedding_dml_writer(profile)
                     embedding_sql = writer.path
@@ -167,7 +190,10 @@ class YearbookIngestionService:
                     )
                     self.dml_repository.execute_dml_file(conn, embedding_sql)
 
-                    table_source = TableSearchEmbeddingRepository(options.year)
+                    table_source = TableSearchEmbeddingRepository(
+                        options.year,
+                        options.publication_kind,
+                    )
                     table_runner = EmbeddingRunner(provider, table_profile, table_source)
                     table_writer = artifact_service.table_embedding_dml_writer(table_profile)
                     table_embedding_sql = table_writer.path
@@ -219,12 +245,14 @@ class YearbookIngestionService:
                 verification = self.verification.verify_connection(
                     conn,
                     options.year,
+                    options.publication_kind,
                     embedding_profile_key,
                     table_embedding_profile_key,
                 )
             result_payload = {
+                "publication_kind": options.publication_kind,
                 "publication_year": options.year,
-                "publication_title": options.title,
+                "publication_title": (parsed.get("publication") or {}).get("title"),
                 "embedding_count": embedding_count,
                 "embedding_profile_key": embedding_profile_key,
                 "table_embedding_count": table_embedding_count,

@@ -10,7 +10,7 @@ import { MAX_USER_MESSAGES_PER_CONVERSATION, RECENT_HISTORY_TURN_LIMIT } from ".
 import { seedConversations } from "./data/mockChat";
 import { useStickToBottom } from "./hooks/useStickToBottom";
 import { limitConversationState, loadConversationState, saveConversationState } from "./storage/conversationStore";
-import type { ChatMessage as ChatMessageType, ChatProgress, Conversation, McpTrace } from "./types/chat";
+import type { ChatMessage as ChatMessageType, ChatProgress, Conversation, McpTrace, PublicationKind } from "./types/chat";
 
 // 빈 메시지·trace와 고유 ID를 가진 새 대화를 만든다.
 function createConversation(): Conversation {
@@ -132,6 +132,7 @@ export default function App() {
   const [activeConversationId, setActiveConversationId] = useState(initialConversationState.activeConversationId);
   const [sendingConversationId, setSendingConversationId] = useState<string | null>(null);
   const [showMcpTrace, setShowMcpTrace] = useState(true);
+  const [publicationKind, setPublicationKind] = useState<PublicationKind>("yearbook");
   const [limitNoticeDismissed, setLimitNoticeDismissed] = useState(false);
   const [progressByConversation, setProgressByConversation] = useState<Record<string, ChatProgress>>({});
   const [streamingByConversation, setStreamingByConversation] = useState<Record<string, string>>({});
@@ -231,6 +232,7 @@ export default function App() {
         {
           conversationId,
           message,
+          publicationKind,
           includeMcpTrace: true,
           history,
           traces: historyTraces,
@@ -420,6 +422,8 @@ export default function App() {
         <footer className="composer-wrap">
           <Composer
             disabled={activeConversationIsSending || conversationMessageLimitReached}
+            publicationKind={publicationKind}
+            onPublicationKindChange={setPublicationKind}
             sending={activeConversationIsSending}
             onSendMessage={sendMessage}
             onStopMessage={stopMessage}

@@ -51,6 +51,9 @@ class TitleEmbeddingDmlWriter:
         for row, vector in zip(rows, vectors):
             conditions = [
                 f"year = {sql_literal(row['year'])}",
+                "pub_id IN (SELECT pub_id FROM publications WHERE publication_kind = "
+                + sql_literal(row.get("publication_kind", "yearbook"))
+                + ")",
                 f"ref_id IS NOT DISTINCT FROM {sql_literal(row.get('ref_id'))}",
                 f"title_ko = {sql_literal(row['title_ko'])}",
                 f"chapter IS NOT DISTINCT FROM {sql_literal(row.get('chapter'))}",
@@ -128,6 +131,9 @@ class TableSearchEmbeddingDmlWriter(TitleEmbeddingDmlWriter):
         for row, vector in zip(rows, vectors):
             conditions = [
                 f"s.year = {sql_literal(row['year'])}",
+                "s.pub_id IN (SELECT pub_id FROM publications WHERE publication_kind = "
+                + sql_literal(row.get("publication_kind", "yearbook"))
+                + ")",
                 f"s.ref_id IS NOT DISTINCT FROM {sql_literal(row.get('ref_id'))}",
                 f"s.title_ko = {sql_literal(row['title_ko'])}",
                 f"c.chunk_kind = {sql_literal(row['chunk_kind'])}",

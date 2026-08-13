@@ -18,6 +18,7 @@ from app.tools.repository.publication_analysis_repository import (
     _validate_request,
     build_query_plan,
 )
+from utils.publication_kind import DEFAULT_PUBLICATION_KIND, normalize_publication_kind
 
 # 검색어를 여러 형태로 푼 조건은 저장값이 검색어를 그대로 담고 있지 않으므로,
 # 무엇을 무시하거나 바꿔 맞췄는지 필드에 맞는 말로 밝힌다.
@@ -93,6 +94,7 @@ def analyze_publications_data(
     required_fields: list[AnalysisField] | None = None,
     value_filters: list[dict[str, str]] | None = None,
     deduplicate: bool | None = None,
+    publication_kind: str = DEFAULT_PUBLICATION_KIND,
     publication_year: int | None = None,
     all_publication_years: bool = False,
     chapter_no: int | None = None,
@@ -100,6 +102,7 @@ def analyze_publications_data(
     limit: int = 500,
     offset: int = 0,
 ) -> dict[str, Any]:
+    publication_kind = normalize_publication_kind(publication_kind)
     _validate_request(
         operation,
         subject,
@@ -109,6 +112,7 @@ def analyze_publications_data(
         required_fields,
         deduplicate,
         publication_year,
+        publication_kind,
         all_publication_years,
         chapter_no,
         section_no,
@@ -117,7 +121,7 @@ def analyze_publications_data(
     )
     applied_value_filters = _resolve_value_filters(operation, subject, value_filters)
     applied_publication_year, publication_year_defaulted = (
-        _resolve_publication_scope(publication_year, all_publication_years)
+        _resolve_publication_scope(publication_year, all_publication_years, publication_kind)
     )
     applied_fields = fields
     plan = build_query_plan(
@@ -126,6 +130,7 @@ def analyze_publications_data(
         group_by=group_by,
         distinct_field=distinct_field,
         applied_publication_year=applied_publication_year,
+        publication_kind=publication_kind,
         chapter_no=chapter_no,
         section_no=section_no,
         limit=limit,
@@ -157,6 +162,7 @@ def analyze_publications_data(
             group_by=group_by,
             distinct_field=distinct_field,
             applied_publication_year=None,
+            publication_kind=publication_kind,
             chapter_no=chapter_no,
             section_no=section_no,
             limit=limit,
@@ -207,6 +213,7 @@ def analyze_publications_data(
         key: value
         for key, value in {
             "publication_year": applied_publication_year,
+            "publication_kind": publication_kind,
             "chapter_no": chapter_no,
             "section_no": section_no,
         }.items()

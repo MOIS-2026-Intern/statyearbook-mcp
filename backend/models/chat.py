@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from utils.publication_kind import DEFAULT_PUBLICATION_KIND, PublicationKind
+
 
 MessageRole = Literal["user", "assistant", "system"]
 McpTraceKind = Literal["tool_discovery", "tool_call", "tool_result", "resource_read", "error"]
@@ -44,6 +46,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     conversationId: str
     message: str = Field(min_length=1)
+    publicationKind: PublicationKind = DEFAULT_PUBLICATION_KIND
     includeMcpTrace: bool = True
     history: list[ChatMessage] = Field(default_factory=list)
     traces: list[McpTrace] = Field(default_factory=list)

@@ -1,15 +1,25 @@
 import { FormEvent, KeyboardEvent, useState } from "react";
-import { DatabaseZap, Mic, Paperclip, SendHorizontal, Square } from "lucide-react";
+import { BookOpen, DatabaseZap, FileText, Mic, Paperclip, SendHorizontal, Square } from "lucide-react";
+import type { PublicationKind } from "../types/chat";
 
 interface ComposerProps {
   disabled: boolean;
   sending: boolean;
+  publicationKind: PublicationKind;
+  onPublicationKindChange: (kind: PublicationKind) => void;
   onSendMessage: (message: string) => void;
   onStopMessage: () => void;
 }
 
-// 메시지 입력과 전송 상태를 관리하는 작성기를 렌더링한다.
-export function Composer({ disabled, sending, onSendMessage, onStopMessage }: ComposerProps) {
+// 메시지 입력, 발간물 선택, 전송 상태를 관리하는 작성기를 렌더링한다.
+export function Composer({
+  disabled,
+  sending,
+  publicationKind,
+  onPublicationKindChange,
+  onSendMessage,
+  onStopMessage,
+}: ComposerProps) {
   const [value, setValue] = useState("");
 
   // 빈 입력과 비활성 상태를 제외하고 정리된 메시지를 전송한다.
@@ -49,6 +59,30 @@ export function Composer({ disabled, sending, onSendMessage, onStopMessage }: Co
           <button className="icon-button" type="button" aria-label="파일 첨부" title="파일 첨부">
             <Paperclip size={18} />
           </button>
+          <div className="publication-switch" role="group" aria-label="조회 발간물">
+            <button
+              className={publicationKind === "yearbook" ? "publication-switch__button publication-switch__button--active" : "publication-switch__button"}
+              type="button"
+              aria-pressed={publicationKind === "yearbook"}
+              disabled={disabled}
+              onClick={() => onPublicationKindChange("yearbook")}
+              title="통계연보 조회"
+            >
+              <BookOpen size={15} />
+              <span>통계연보</span>
+            </button>
+            <button
+              className={publicationKind === "major_statistics" ? "publication-switch__button publication-switch__button--active" : "publication-switch__button"}
+              type="button"
+              aria-pressed={publicationKind === "major_statistics"}
+              disabled={disabled}
+              onClick={() => onPublicationKindChange("major_statistics")}
+              title="주요통계집 조회"
+            >
+              <FileText size={15} />
+              <span>주요통계집</span>
+            </button>
+          </div>
           <button className="tool-chip" type="button">
             <DatabaseZap size={16} />
             <span>MCP 추적</span>
