@@ -2,6 +2,7 @@
 import re
 from typing import Any, Literal
 
+from . import derived_metric
 from .table_interpreter import (
     TotalMode,
     apply_exact_filters,
@@ -548,6 +549,72 @@ def _metric_labels(columns: list[str], requested_labels: list[str | None]) -> li
     return labels
 
 
+# 한 표에서 고른 두 지표를 항목마다 계산해 파생 지표 하나로 만든다.
+# 같은 항목이 여러 행에 나뉘어 있으면 먼저 더하고 나서 계산해야 합계끼리 나눈 값이 된다.
+def _derived_selection_records(
+    table: dict,
+    validated: list[dict[str, str]],
+    labels: list[str],
+    source_rows: list[dict[str, str]],
+    x_column: str | None,
+    x_profile: dict[str, Any] | None,
+    derive: dict[str, Any],
+    query: str | None,
+    warnings: list[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], derived_metric.DerivedResult] | None:
+    if len(validated) < 2:
+        warnings.append(
+            "파생 지표는 분자와 분모가 될 숫자 컬럼이 두 개 필요해 metrics에 두 개 이상 지정해야 합니다."
+        )
+        return None
+
+    grouped: list[dict[Any, float]] = [{} for _ in validated]
+    rows_by_key: dict[Any, list[int]] = {}
+    for row_index, row in enumerate(source_rows):
+        key = row_x_value(row, x_column, x_profile)
+        if key is None or key == "":
+            continue
+        rows_by_key.setdefault(key, []).append(row_index)
+        for position, metric in enumerate(validated):
+            value = parse_number(row.get(metric["column"]))
+            if value is not None:
+                grouped[position][key] = grouped[position].get(key, 0.0) + value
+    if any(len(indexes) > 1 for indexes in rows_by_key.values()):
+        warnings.append("한 항목이 여러 행에 나뉘어 있어 합계로 모은 뒤 계산했습니다.")
+
+    order = list(rows_by_key)
+    operands = [
+        derived_metric.Operand(
+            label=label,
+            # 단위가 '명, 세대'처럼 여러 개인 표는 컬럼마다 단위를 좁혀야 파생 단위를 읽을 수 있다.
+            unit=derived_metric.column_unit(metric["column"], table.get("unit"), metric["unit"]),
+            values=values,
+            axis_labels={key: key for key in values},
+            base_date=table.get("base_date"),
+            order=order,
+        )
+        for metric, label, values in zip(validated, labels, grouped)
+    ]
+    result = derived_metric.build(derive, operands, query, warnings)
+    if result is None:
+        return None
+
+    records = [{"x": key, "value": result.values[key], "series": None} for key in result.order]
+    numerator = validated[result.numerator_index]
+    denominator = validated[result.denominator_index]
+    provenance = [
+        {
+            "record": record,
+            "source_row_indexes": rows_by_key.get(record["x"], []),
+            "source_columns": [numerator["column"], denominator["column"]],
+            "label": result.label,
+            "unit": result.unit,
+        }
+        for record in records
+    ]
+    return records, provenance, result
+
+
 # 구조화된 선택 계획을 검증하고 같은 데이터셋으로 표와 차트 응답을 만든다.
 def _selection_plan_spec(
     table: dict,
@@ -564,6 +631,7 @@ def _selection_plan_spec(
     warnings: list[str],
     target_year: int | None,
     request_hints: dict[str, Any],
+    derive: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     profile_map = profile_by_name(profiles)
     validated: list[dict[str, str]] = []
@@ -643,27 +711,40 @@ def _selection_plan_spec(
     records: list[dict[str, Any]] = []
     provenance: list[dict[str, Any]] = []
     single_row = len(source_rows) == 1
-    for row_index, row in enumerate(source_rows):
-        row_category = row_x_value(row, x_column, x_profile)
-        for metric, label in zip(validated, labels):
-            value = parse_number(row.get(metric["column"]))
-            if value is None:
-                continue
-            record = {
-                "x": label if single_row else row_category,
-                "value": value,
-                "series": None if single_row or len(validated) == 1 else label,
-            }
-            records.append(record)
-            provenance.append({
-                "record": record,
-                "source_row_index": row_index,
-                "source_row": {key: row.get(key) for key in row if key == x_column},
-                "source_column": metric["column"],
-                "source_value": row.get(metric["column"]),
-                "label": label,
-                "unit": metric["unit"],
-            })
+    derived = (
+        _derived_selection_records(
+            table, validated, labels, source_rows, x_column, x_profile, derive, query, warnings,
+        )
+        if derive
+        else None
+    )
+    derived_result = derived[2] if derived else None
+    if derived is not None:
+        # 계산한 값 하나만 그리므로 지표를 계열로 늘어놓지 않는다.
+        records, provenance = derived[0], derived[1]
+        single_row = False
+    else:
+        for row_index, row in enumerate(source_rows):
+            row_category = row_x_value(row, x_column, x_profile)
+            for metric, label in zip(validated, labels):
+                value = parse_number(row.get(metric["column"]))
+                if value is None:
+                    continue
+                record = {
+                    "x": label if single_row else row_category,
+                    "value": value,
+                    "series": None if single_row or len(validated) == 1 else label,
+                }
+                records.append(record)
+                provenance.append({
+                    "record": record,
+                    "source_row_index": row_index,
+                    "source_row": {key: row.get(key) for key in row if key == x_column},
+                    "source_column": metric["column"],
+                    "source_value": row.get(metric["column"]),
+                    "label": label,
+                    "unit": metric["unit"],
+                })
 
     records = filter_chart_records(
         records, query, total_mode, target_year=target_year, apply_query_filters=False,
@@ -687,7 +768,11 @@ def _selection_plan_spec(
     provenance = [item for item in provenance if id(item["record"]) in visible_record_ids]
 
     units = {metric["unit"] for metric in validated}
-    chart_unit = next(iter(units)) if len(units) == 1 else table.get("unit")
+    chart_unit = (
+        derived_result.unit
+        if derived_result is not None
+        else next(iter(units)) if len(units) == 1 else table.get("unit")
+    )
     if not records:
         warnings.append("선택한 행의 지표 값이 비어 있어 차트 데이터를 만들지 못했습니다.")
 
@@ -712,13 +797,15 @@ def _selection_plan_spec(
         "reason": (
             "선택한 원본 셀에 숫자 값이 없어 차트를 생성하지 않았습니다."
             if not records
+            else f"표에서 고른 두 지표를 항목마다 계산해 '{derived_result.label}'을 그렸습니다."
+            if derived_result is not None
             else "원본 표와 대조한 행·지표 선택 계획으로 차트 데이터를 구성했습니다."
             + (
                 " 지표마다 단위가 달라 값 축을 좌우로 나누고 계열별로 mark를 달리했습니다."
                 if dual_axis else ""
             )
         ),
-        "title": _chart_title(table),
+        "title": _chart_title(table, derived_result.label if derived_result else None),
         "x": "metric" if single_row else x_column,
         "y": "value",
         "group": "metric" if has_group else None,
@@ -730,9 +817,26 @@ def _selection_plan_spec(
         table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
         records, source_rows, warnings, request_hints=request_hints,
         transform={
-            "type": "validated_selection_plan",
+            "type": "derived_selection_plan" if derived_result else "validated_selection_plan",
             "row_shape": "single_row_metrics" if single_row else "rows_by_metrics",
             "metrics": validated,
+            **(
+                {
+                    "derived": {
+                        **derived_result.detail,
+                        "numerator": {
+                            **derived_result.detail["numerator"],
+                            "column": validated[derived_result.numerator_index]["column"],
+                        },
+                        "denominator": {
+                            **derived_result.detail["denominator"],
+                            "column": validated[derived_result.denominator_index]["column"],
+                        },
+                    }
+                }
+                if derived_result
+                else {}
+            ),
         },
         selected_dataset={
             "columns": ["x", "value", "series"],
@@ -1222,6 +1326,7 @@ def build_plot_spec(
     metrics: list[dict[str, str | None]] | None = None,
     title: str | None = None,
     sort_order: SortOrder = "auto",
+    derive: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     columns, all_source_rows, warnings = body_to_rows(table["body"])
     resolved_sort_order = resolve_sort_order(sort_order, query, warnings)
@@ -1252,7 +1357,19 @@ def build_plot_spec(
         "resolved_sort_order": resolved_sort_order,
         "resolved_year": target_year,
         "selection": selection,
+        "derive": derive,
     }
+
+    # 파생 지표는 어느 컬럼을 나눌지 정해져야 계산할 수 있다. 표를 펴는 다른 경로로 새면
+    # 고른 두 컬럼이 사라지므로 metrics 경로로 곧장 보낸다.
+    if derive and metrics is not None:
+        return apply_display_title(
+            _selection_plan_spec(
+                table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles,
+                metrics, warnings, target_year, request_hints, derive,
+            ),
+            title,
+        )
 
     # 행을 직접 골라 온 요청은 연도 축 시계열일 수 있다. 이 판정을 metrics보다 먼저 해야
     # 연도 컬럼을 지표로 받았을 때 축이 뒤집히지 않는다.
