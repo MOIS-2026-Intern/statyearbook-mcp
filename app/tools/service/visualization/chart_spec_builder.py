@@ -7,6 +7,7 @@ from .table_interpreter import (
     TotalMode,
     apply_exact_filters,
     body_to_rows,
+    clean_label,
     column_family,
     column_family_groups,
     display_category_label,
@@ -76,6 +77,7 @@ PART_OF_WHOLE_TYPES = {"donut", "stacked_bar_100", "waterfall"}
 CHANGE_CHART_TYPES = {"diverging_bar", "waterfall"}
 SHARE_WORDS = ("비중", "구성", "구성비", "점유", "점유율", "분포", "share", "ratio", "composition")
 RANK_WORDS = ("순위", "랭킹", "등수", "rank")
+RELATION_WORDS = ("관계", "상관", "산점", "scatter", "correlation")
 GAP_WORDS = ("격차", "차이", "간극", "gap", "difference")
 MAX_SERIES = 12
 _MISSING = object()
@@ -148,6 +150,11 @@ def limit_categories(
 def wants_words(query: str | None, words: tuple[str, ...]) -> bool:
     text = (query or "").lower()
     return any(word in text for word in words)
+
+
+# 질의가 두 지표의 관계를 묻는지 판단한다.
+def wants_relation_chart(query: str | None) -> bool:
+    return wants_words(query, RELATION_WORDS)
 
 
 # 요청이 비중/구성비 차트를 의도하는지 판단한다.
@@ -238,20 +245,127 @@ def _correct_chart(
     return None
 
 
+# 표가 단위를 하나로 뭉뚱그려 적으면 계열마다 단위를 갈라내지 못한다. 그럴 때는 값의 규모로
+# 판단한다. 같은 단위가 맞다면 축을 나누지 않는 편이 옳지만(눈금이 달라져 높이를 견줄 수 없다),
+# 이만큼 벌어지면 작은 쪽이 축 바닥에 눌려 아예 보이지 않으므로 나누는 편이 낫다.
+SAME_UNIT_SPLIT_RATIO = 100
+UNKNOWN_UNIT_SPLIT_RATIO = 20
+
+
+# 계열마다 가장 큰 값을 견줘 규모가 몇 배나 벌어지는지 잰다.
+def series_scale_ratio(
+    series: list[dict[str, Any]],
+    records: list[dict[str, Any]],
+) -> float:
+    if len(series) != 2:
+        return 1.0
+    scales = []
+    for item in series:
+        values = [
+            abs(record["value"])
+            for record in records
+            if record.get("series") == item["label"] and record.get("value")
+        ]
+        scales.append(max(values) if values else 0.0)
+    if min(scales) <= 0:
+        return 1.0
+    return max(scales) / min(scales)
+
+
 # 단위가 둘로 갈리는 계열은 한 축에 그리면 작은 쪽이 축 바닥에 눌려 보이지 않는다.
 # 값 축을 좌우로 나눌 수 있는 것은 두 종류까지라, 단위가 셋 이상이면 나누지 못한다.
-def needs_axis_split(series: list[dict[str, Any]]) -> bool:
+def needs_axis_split(
+    series: list[dict[str, Any]],
+    records: list[dict[str, Any]] = (),
+) -> bool:
     units = [str(item.get("unit") or "").strip() for item in series]
-    return len(series) >= 2 and all(units) and len(set(units)) == 2
+    if len(series) >= 2 and all(units) and len(set(units)) == 2:
+        return True
+    if len(series) != 2 or not records:
+        return False
+    same_unit = all(units) and len(set(units)) == 1
+    threshold = SAME_UNIT_SPLIT_RATIO if same_unit else UNKNOWN_UNIT_SPLIT_RATIO
+    return series_scale_ratio(series, records) >= threshold
 
 
 # 단위가 갈리는 계열은 계열마다 mark를 달리하는 콤보로 바꿔 값 축을 좌우로 나눈다.
-def apply_axis_split(chart_type: str, series: list[dict[str, Any]]) -> tuple[str, bool]:
+def apply_axis_split(
+    chart_type: str,
+    series: list[dict[str, Any]],
+    records: list[dict[str, Any]] = (),
+) -> tuple[str, bool]:
     if chart_type not in {"bar", "grouped_bar", "line", "area", "combo"}:
         return chart_type, False
-    if not needs_axis_split(series):
+    if not needs_axis_split(series, records):
         return chart_type, False
     return "combo", True
+
+
+# 축을 나눈 까닭은 단위와 규모 중 무엇이 갈랐느냐에 따라 다르다. 규모 때문에 나눈 축은
+# 눈금이 서로 달라, 막대 높이를 그대로 견주면 안 된다는 것까지 알려야 오해가 없다.
+def axis_split_reason(series: list[dict[str, Any]]) -> str:
+    units = [clean_label(item.get("unit")) for item in series]
+    if all(units) and len(set(units)) > 1:
+        return "지표마다 단위가 달라 값 축을 좌우로 나누고 계열별로 mark를 달리했습니다."
+    return (
+        "두 지표의 규모가 크게 달라 한 축에 두면 작은 쪽이 보이지 않아 값 축을 좌우로 나누고 "
+        "계열별로 mark를 달리했습니다. 두 축의 눈금이 서로 다르므로 막대 높이를 그대로 견주면 안 됩니다."
+    )
+
+
+# 축에 표시할 계열 이름과 단위를 합친다.
+def axis_title(item: dict[str, Any]) -> str:
+    unit = clean_label(item.get("unit"))
+    return f"{item['label']} ({unit})" if unit else item["label"]
+
+
+# 산점도 라벨 겹침을 재는 기준이 되는 프론트엔드 기본 차트 크기다.
+SCATTER_VIEW_WIDTH_PX = 640
+SCATTER_VIEW_HEIGHT_PX = 340
+SCATTER_LABEL_HEIGHT_PX = 16
+SCATTER_LABEL_OFFSET_PX = 10
+
+
+# 라벨 폭을 글자 종류에 맞춰 어림한다(한글은 넓고 영문·숫자는 좁다).
+def _label_width_px(label: str) -> float:
+    return sum(10.5 if ord(character) > 0x2000 else 6.0 for character in label) + 8
+
+
+# 값 범위를 차트 픽셀 위치로 바꾼다.
+def _scale_px(value: float, low: float, high: float, size: int) -> float:
+    if high <= low:
+        return size / 2
+    return (value - low) / (high - low) * size
+
+
+# 점이 몰린 곳에서 라벨이 서로 겹치면 큰 값부터 남기고 나머지는 비워 둔다.
+# 값 자체는 tooltip으로 확인할 수 있으므로 라벨을 지워도 정보가 사라지지 않는다.
+def mark_scatter_labels(records: list[dict[str, Any]]) -> None:
+    x_values = [record["x"] for record in records]
+    y_values = [record["value"] for record in records]
+    x_low, x_high = min(x_values), max(x_values)
+    y_low, y_high = min(y_values), max(y_values)
+
+    placed: list[tuple[float, float, float, float]] = []
+    ranked = sorted(records, key=lambda record: record["value"], reverse=True)
+    for record in ranked:
+        label = str(record.get("label") or "")
+        width = _label_width_px(label)
+        center_x = _scale_px(record["x"], x_low, x_high, SCATTER_VIEW_WIDTH_PX)
+        top_y = SCATTER_VIEW_HEIGHT_PX - _scale_px(record["value"], y_low, y_high, SCATTER_VIEW_HEIGHT_PX)
+        box = (
+            center_x - width / 2,
+            top_y - SCATTER_LABEL_OFFSET_PX - SCATTER_LABEL_HEIGHT_PX,
+            center_x + width / 2,
+            top_y - SCATTER_LABEL_OFFSET_PX,
+        )
+        overlaps = any(
+            box[0] < other[2] and other[0] < box[2] and box[1] < other[3] and other[1] < box[3]
+            for other in placed
+        )
+        record["point_label"] = "" if overlaps else label
+        if not overlaps:
+            placed.append(box)
 
 
 # 표 메타데이터와 선택 범주로 차트 제목을 만든다.
@@ -526,7 +640,24 @@ def metric_unit(column: str, table_unit: str | None) -> str:
     non_percent_units = [unit for unit in units if "%" not in unit]
     if len(units) > 1 and len(non_percent_units) == 1:
         return non_percent_units[0]
+    # '대상지구(개소)'처럼 컬럼명이 단위를 품고 있으면 표 전체 단위 대신 그 단위를 쓴다.
+    named_units = [unit for unit in units if unit in column]
+    if len(units) > 1 and len(named_units) == 1:
+        return named_units[0]
     return table_unit or "값"
+
+
+# 표 단위가 '개소, 백만원'처럼 여럿이면 지표마다 어느 단위인지 갈라 놓아야 축을 나눌 수 있다.
+# 컬럼명에 단위가 적힌 지표는 metric_unit이 이미 갈라 놓으므로, 남은 지표가 하나이고
+# 아직 아무도 쓰지 않은 단위도 하나뿐일 때만 그 둘을 잇는다. 그 밖에는 짝을 단정할 수 없어 둔다.
+def assign_shared_units(metrics: list[dict[str, str]], table_unit: str | None) -> None:
+    units = [part.strip() for part in str(table_unit or "").split(",") if part.strip()]
+    if len(units) < 2:
+        return
+    unresolved = [metric for metric in metrics if metric["unit"] not in units]
+    remaining = [unit for unit in units if unit not in {metric["unit"] for metric in metrics}]
+    if len(unresolved) == 1 and len(remaining) == 1:
+        unresolved[0]["unit"] = remaining[0]
 
 
 # 여러 지표 컬럼이 공유하는 헤더 방향을 찾아 차트 범주 라벨을 만든다.
@@ -615,6 +746,51 @@ def _derived_selection_records(
     return records, provenance, result
 
 
+# 한 표에서 고른 두 지표를 항목마다 짝지어 산점도 좌표로 만든다.
+# 첫 지표가 x축, 두 번째 지표가 y축이며 항목 이름은 점의 라벨이 된다.
+def _relation_selection_records(
+    validated: list[dict[str, str]],
+    source_rows: list[dict[str, str]],
+    x_column: str,
+    x_profile: dict[str, Any] | None,
+    total_mode: TotalMode,
+    query: str | None,
+    warnings: list[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    keep_totals = resolve_total_mode(total_mode, query) == "include"
+    records: list[dict[str, Any]] = []
+    provenance: list[dict[str, Any]] = []
+    incomplete: list[str] = []
+    for row_index, row in enumerate(source_rows):
+        category = row_x_value(row, x_column, x_profile)
+        if not keep_totals and is_total_label(category):
+            continue
+        values = [parse_number(row.get(metric["column"])) for metric in validated]
+        if any(value is None for value in values):
+            incomplete.append(str(category))
+            continue
+        record = {
+            "x": values[0],
+            "value": values[1],
+            "series": None,
+            "label": category,
+        }
+        records.append(record)
+        provenance.append({
+            "record": record,
+            "source_row_index": row_index,
+            "source_row": {key: row.get(key) for key in row if key == x_column},
+            "source_columns": [metric["column"] for metric in validated],
+            "source_values": [row.get(metric["column"]) for metric in validated],
+            "label": category,
+        })
+    if incomplete:
+        shown = ", ".join(incomplete[:5])
+        more = f" 외 {len(incomplete) - 5}개" if len(incomplete) > 5 else ""
+        warnings.append(f"두 지표 중 한쪽 값이 비어 있는 항목({shown}{more})은 산점도에서 뺐습니다.")
+    return records, provenance
+
+
 # 구조화된 선택 계획을 검증하고 같은 데이터셋으로 표와 차트 응답을 만든다.
 def _selection_plan_spec(
     table: dict,
@@ -672,6 +848,8 @@ def _selection_plan_spec(
             "unit": requested_unit or inferred_unit,
         })
 
+    assign_shared_units(validated, table.get("unit"))
+
     # 지표 일부만 확인돼도 확인된 지표로 그린다. 확인하지 못한 지표는 경고로만 알리고 채우지 않는다.
     warnings.extend(validation_errors)
     if not validated or not source_rows:
@@ -719,11 +897,37 @@ def _selection_plan_spec(
         else None
     )
     derived_result = derived[2] if derived else None
+    # 한 표에서 고른 두 지표의 관계를 물으면 지표를 계열로 늘어놓지 않고 서로 다른 축에 둔다.
+    # 계열로 늘어놓으면 값 축이 하나뿐이라 규모가 작은 지표가 축 바닥에 눌리고, 항목마다 두 값이
+    # 어떻게 맞물리는지도 드러나지 않는다.
+    relation = (
+        (
+            chart_type == "scatter"
+            # 연도 축이면 관계를 묻는 말이 있어도 추이가 먼저라, 질의만 보고 축을 바꾸지 않는다.
+            or (
+                chart_type == "auto"
+                and wants_relation_chart(query)
+                and not (x_profile and x_profile["is_year"])
+            )
+        )
+        and derived is None
+        and len(validated) == 2
+        and not single_row
+        and x_column is not None
+    )
+    if relation:
+        records, provenance = _relation_selection_records(
+            validated, source_rows, x_column, x_profile, total_mode, query, warnings,
+        )
+        if len(records) < 2:
+            warnings.append("두 지표가 함께 있는 항목이 둘 미만이라 산점도 대신 다른 차트로 그렸습니다.")
+            relation = False
+            records, provenance = [], []
     if derived is not None:
         # 계산한 값 하나만 그리므로 지표를 계열로 늘어놓지 않는다.
         records, provenance = derived[0], derived[1]
         single_row = False
-    else:
+    elif not relation:
         for row_index, row in enumerate(source_rows):
             row_category = row_x_value(row, x_column, x_profile)
             for metric, label in zip(validated, labels):
@@ -746,44 +950,53 @@ def _selection_plan_spec(
                     "unit": metric["unit"],
                 })
 
-    records = filter_chart_records(
-        records, query, total_mode, target_year=target_year, apply_query_filters=False,
-    )
-    allowed_record_ids = {id(record) for record in records}
-    provenance = [item for item in provenance if id(item["record"]) in allowed_record_ids]
-    has_group = any(record.get("series") for record in records)
-    selected_type, decision_source, _ = _select_chart(
-        chart_type, query, records, x_profile if not single_row else None, has_group, warnings,
-    )
-    records = _drop_total_slices(records, selected_type)
-    records = _limit_series(records, warnings)
-    records = limit_categories(records, selected_type, bool(x_profile and x_profile["is_year"]), top_n, warnings)
-    records = sort_records(
-        records,
-        bool(x_profile and x_profile["is_year"]),
-        selected_type,
-        request_hints.get("resolved_sort_order"),
-    )
-    visible_record_ids = {id(record) for record in records}
-    provenance = [item for item in provenance if id(item["record"]) in visible_record_ids]
+    if relation:
+        # 산점도의 x는 항목 이름이 아니라 첫 지표의 값이므로 범주 축을 다루는 손질은 지나간다.
+        # 점 개수를 줄이면 관계 자체가 달라지고, 값 기준 정렬도 뜻이 없다.
+        has_group = False
+        selected_type, decision_source = "scatter", "selection_plan"
+        mark_scatter_labels(records)
+    else:
+        records = filter_chart_records(
+            records, query, total_mode, target_year=target_year, apply_query_filters=False,
+        )
+        allowed_record_ids = {id(record) for record in records}
+        provenance = [item for item in provenance if id(item["record"]) in allowed_record_ids]
+        has_group = any(record.get("series") for record in records)
+        selected_type, decision_source, _ = _select_chart(
+            chart_type, query, records, x_profile if not single_row else None, has_group, warnings,
+        )
+        records = _drop_total_slices(records, selected_type)
+        records = _limit_series(records, warnings)
+        records = limit_categories(records, selected_type, bool(x_profile and x_profile["is_year"]), top_n, warnings)
+        records = sort_records(
+            records,
+            bool(x_profile and x_profile["is_year"]),
+            selected_type,
+            request_hints.get("resolved_sort_order"),
+        )
+        visible_record_ids = {id(record) for record in records}
+        provenance = [item for item in provenance if id(item["record"]) in visible_record_ids]
 
     units = {metric["unit"] for metric in validated}
     chart_unit = (
         derived_result.unit
         if derived_result is not None
+        else None if relation
         else next(iter(units)) if len(units) == 1 else table.get("unit")
     )
     if not records:
         warnings.append("선택한 행의 지표 값이 비어 있어 차트 데이터를 만들지 못했습니다.")
 
     # 지표마다 단위가 달라도 한 축에 그리면 작은 단위 지표가 축 바닥에 눌린다.
+    # 산점도는 지표가 계열이 아니라 축이 되므로 records에 계열명이 없어도 둘 다 남긴다.
     chart_series = [
         {"label": label, "unit": metric["unit"]}
         for metric, label in zip(validated, labels)
-        if any(record.get("series") == label for record in records)
+        if relation or any(record.get("series") == label for record in records)
     ]
     if has_group:
-        selected_type, dual_axis = apply_axis_split(selected_type, chart_series)
+        selected_type, dual_axis = apply_axis_split(selected_type, chart_series, records)
     else:
         dual_axis = False
     chart = {
@@ -797,28 +1010,35 @@ def _selection_plan_spec(
         "reason": (
             "선택한 원본 셀에 숫자 값이 없어 차트를 생성하지 않았습니다."
             if not records
+            else "한 표에서 고른 두 지표를 항목마다 짝지어 관계를 보는 산점도로 구성했습니다."
+            if relation
             else f"표에서 고른 두 지표를 항목마다 계산해 '{derived_result.label}'을 그렸습니다."
             if derived_result is not None
             else "원본 표와 대조한 행·지표 선택 계획으로 차트 데이터를 구성했습니다."
-            + (
-                " 지표마다 단위가 달라 값 축을 좌우로 나누고 계열별로 mark를 달리했습니다."
-                if dual_axis else ""
-            )
+            + (f" {axis_split_reason(chart_series)}" if dual_axis else "")
         ),
         "title": _chart_title(table, derived_result.label if derived_result else None),
-        "x": "metric" if single_row else x_column,
+        "x": "category" if relation else "metric" if single_row else x_column,
         "y": "value",
         "group": "metric" if has_group else None,
         "unit": chart_unit,
-        "series": chart_series if has_group else None,
+        "series": chart_series if has_group or relation else None,
         "dual_axis": dual_axis,
     }
+    if relation and records:
+        chart["point_label"] = True
+        chart["x_title"] = axis_title(chart_series[0])
+        chart["y_title"] = axis_title(chart_series[1])
     return _build_response(
         table, query, chart_type, x, y, group, top_n, total_mode, chart, profiles,
         records, source_rows, warnings, request_hints=request_hints,
         transform={
             "type": "derived_selection_plan" if derived_result else "validated_selection_plan",
-            "row_shape": "single_row_metrics" if single_row else "rows_by_metrics",
+            "row_shape": (
+                "metric_pairs" if relation
+                else "single_row_metrics" if single_row
+                else "rows_by_metrics"
+            ),
             "metrics": validated,
             **(
                 {
@@ -839,7 +1059,7 @@ def _selection_plan_spec(
             ),
         },
         selected_dataset={
-            "columns": ["x", "value", "series"],
+            "columns": ["x", "value", "label"] if relation else ["x", "value", "series"],
             "records": records,
             "provenance": provenance,
             "unit": chart_unit,
@@ -913,9 +1133,9 @@ def _wide_year_selected_rows_spec(
         for label in labels
         if any(record.get("series") == label for record in records)
     ]
-    selected_type, dual_axis = apply_axis_split(selected_type, chart_series)
+    selected_type, dual_axis = apply_axis_split(selected_type, chart_series, records)
     if dual_axis:
-        reason = f"{reason} 행마다 단위가 달라 값 축을 좌우로 나누고 계열별로 mark를 달리했습니다."
+        reason = f"{reason} {axis_split_reason(chart_series)}"
 
     chart = {
         "type": selected_type,
@@ -1498,9 +1718,9 @@ def build_plot_spec(
     ] if has_group and series_source == "metric" else []
     dual_axis = False
     if chart_series:
-        selected_type, dual_axis = apply_axis_split(selected_type, chart_series)
+        selected_type, dual_axis = apply_axis_split(selected_type, chart_series, records)
         if dual_axis:
-            reason = f"{reason} 지표마다 단위가 달라 값 축을 좌우로 나누고 계열별로 mark를 달리했습니다."
+            reason = f"{reason} {axis_split_reason(chart_series)}"
 
     chart = {
         "type": selected_type,

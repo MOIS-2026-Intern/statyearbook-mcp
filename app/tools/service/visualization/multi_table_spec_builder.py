@@ -6,13 +6,17 @@ from typing import Any, Literal
 from .chart_spec_builder import (
     GAP_WORDS,
     RANK_WORDS,
+    SAME_UNIT_SPLIT_RATIO,
     VALID_CHART_TYPES,
     apply_display_title,
+    axis_title,
+    mark_scatter_labels,
     limit_categories,
     metric_unit,
     ordered_categories,
     resolve_sort_order,
     stat_block,
+    wants_relation_chart,
     wants_words,
 )
 from . import derived_metric
@@ -41,9 +45,6 @@ MAX_SOURCES = 5
 MAX_JOINED_ROWS = 60
 # 두 계열의 크기 차이가 이보다 크면 한 축에 그렸을 때 작은 계열이 보이지 않는다.
 DUAL_AXIS_SCALE_RATIO = 20
-# 단위가 같은 계열은 되도록 한 축에 두지만, 이보다 벌어지면 작은 쪽이 선 한 줄로 뭉개진다.
-SAME_UNIT_SPLIT_RATIO = 100
-RELATION_WORDS = ("관계", "상관", "산점", "scatter", "correlation")
 RATIO_WORDS = ("비율", "구성비", "증감률", "rate", "ratio", "percent", "%")
 # 지역·연도 축에서 개별 항목과 나란히 두면 축을 압도하는 전체 집계 라벨이다.
 AGGREGATE_KEY_WORDS = ("전국", "전체", "평균", "nationwide", "average")
@@ -445,12 +446,6 @@ def _derive_series(
     }
 
 
-# 질의가 두 지표의 관계를 묻는지 판단한다.
-def _wants_relation_chart(query: str | None) -> bool:
-    text = (query or "").lower()
-    return any(word in text for word in RELATION_WORDS)
-
-
 # 계열들이 같은 단위를 쓰는지 확인한다.
 def _same_unit(series: list[dict[str, Any]]) -> bool:
     units = {clean_label(item.get("unit")) for item in series}
@@ -473,7 +468,7 @@ def _select_multi_chart(
     series_count = len(series)
 
     if requested_type == "scatter" or (
-        requested_type == "auto" and series_count == 2 and not key_is_year and _wants_relation_chart(query)
+        requested_type == "auto" and series_count == 2 and not key_is_year and wants_relation_chart(query)
     ):
         if series_count == 2:
             return (
@@ -542,61 +537,6 @@ def _needs_dual_axis(chart_type: str, series: list[dict[str, Any]]) -> bool:
         return _scale_ratio(series) >= SAME_UNIT_SPLIT_RATIO
     # 단위를 알 수 없을 때만 값의 규모 차이로 판단한다.
     return _scale_ratio(series) >= DUAL_AXIS_SCALE_RATIO
-
-
-# 축에 표시할 계열 이름과 단위를 합친다.
-def _axis_title(item: dict[str, Any]) -> str:
-    unit = clean_label(item.get("unit"))
-    return f"{item['label']} ({unit})" if unit else item["label"]
-
-
-# 산점도 라벨 겹침을 재는 기준이 되는 프론트엔드 기본 차트 크기다.
-SCATTER_VIEW_WIDTH_PX = 640
-SCATTER_VIEW_HEIGHT_PX = 340
-SCATTER_LABEL_HEIGHT_PX = 16
-SCATTER_LABEL_OFFSET_PX = 10
-
-
-# 라벨 폭을 글자 종류에 맞춰 어림한다(한글은 넓고 영문·숫자는 좁다).
-def _label_width_px(label: str) -> float:
-    return sum(10.5 if ord(character) > 0x2000 else 6.0 for character in label) + 8
-
-
-# 값 범위를 차트 픽셀 위치로 바꾼다.
-def _scale_px(value: float, low: float, high: float, size: int) -> float:
-    if high <= low:
-        return size / 2
-    return (value - low) / (high - low) * size
-
-
-# 점이 몰린 곳에서 라벨이 서로 겹치면 큰 값부터 남기고 나머지는 비워 둔다.
-# 값 자체는 tooltip으로 확인할 수 있으므로 라벨을 지워도 정보가 사라지지 않는다.
-def _mark_scatter_labels(records: list[dict[str, Any]]) -> None:
-    x_values = [record["x"] for record in records]
-    y_values = [record["value"] for record in records]
-    x_low, x_high = min(x_values), max(x_values)
-    y_low, y_high = min(y_values), max(y_values)
-
-    placed: list[tuple[float, float, float, float]] = []
-    ranked = sorted(records, key=lambda record: record["value"], reverse=True)
-    for record in ranked:
-        label = str(record.get("label") or "")
-        width = _label_width_px(label)
-        center_x = _scale_px(record["x"], x_low, x_high, SCATTER_VIEW_WIDTH_PX)
-        top_y = SCATTER_VIEW_HEIGHT_PX - _scale_px(record["value"], y_low, y_high, SCATTER_VIEW_HEIGHT_PX)
-        box = (
-            center_x - width / 2,
-            top_y - SCATTER_LABEL_OFFSET_PX - SCATTER_LABEL_HEIGHT_PX,
-            center_x + width / 2,
-            top_y - SCATTER_LABEL_OFFSET_PX,
-        )
-        overlaps = any(
-            box[0] < other[2] and other[0] < box[2] and box[1] < other[3] and other[1] < box[3]
-            for other in placed
-        )
-        record["point_label"] = "" if overlaps else label
-        if not overlaps:
-            placed.append(box)
 
 
 # 계열 값을 표 형태로 정리해 답변에 인용할 수 있게 한다.
@@ -809,7 +749,7 @@ def build_multi_source_spec(
             }
             for key in ordered_keys
         ]
-        _mark_scatter_labels(records)
+        mark_scatter_labels(records)
     else:
         # 값 기준 정렬은 첫 계열의 값으로 정한다. 단위가 다른 계열을 더한 순서는 뜻이 없다.
         if resolved_sort_order and not key_is_year:
@@ -878,10 +818,10 @@ def build_multi_source_spec(
     }
     if selected_type == "scatter":
         chart["point_label"] = True
-        chart["x_title"] = _axis_title(series[0])
-        chart["y_title"] = _axis_title(series[1])
+        chart["x_title"] = axis_title(series[0])
+        chart["y_title"] = axis_title(series[1])
     elif dual_axis:
-        chart["y_title"] = _axis_title(series[0])
+        chart["y_title"] = axis_title(series[0])
         # 값 축을 나누면 mark도 바뀌므로 원래 이유를 덧붙이지 않고 다시 쓴다.
         axis_label = "연도" if key_is_year else "표끼리 공통인 항목"
         cause = "규모가 크게 달라" if same_unit else "단위가 달라"
