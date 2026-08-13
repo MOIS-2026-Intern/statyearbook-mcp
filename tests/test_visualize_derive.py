@@ -464,6 +464,33 @@ class DerivedMetricToolTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DerivedMetricRenderTests(unittest.TestCase):
+    # 값 라벨을 접었을 때 warnings에 다시 부를 방법을 적으면 모델이 그대로 따라 같은 데이터를
+    # 방향만 바꿔 한 번 더 그린다. 화면에는 같은 차트가 둘 남으므로 일어난 일만 적어야 한다.
+    def test_folded_value_labels_do_not_invite_another_call(self) -> None:
+        names = [
+            "서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "경기",
+            "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주",
+        ]
+        quota = table(
+            436, "지역별 지방공무원 정원", "명", ["지역", "정원"],
+            [[name, str(1000 + index * 7)] for index, name in enumerate(names)],
+        )
+        population = table(
+            98, "지역별 주민등록인구", "명", ["지역", "인구"],
+            [[name, str(100000 + index * 900)] for index, name in enumerate(names)],
+        )
+        spec = build(
+            [(quota, {"label": "정원"}), (population, {"label": "인구"})],
+            query="주민 1만 명당 정원",
+            derive={"op": "per_capita", "per": 10000},
+        )
+        spec["vega_lite"] = build_vega_lite_spec(spec)
+
+        folded = [warning for warning in spec["warnings"] if "값 라벨이 서로 겹쳐" in warning]
+        self.assertTrue(folded, spec["warnings"])
+        self.assertNotIn("가로 막대로 요청", folded[0])
+        self.assertNotIn("요청하면", folded[0])
+
     # 계열이 하나인 파생 지표에는 색 범례를 붙이지 않아야 한다.
     def test_rendered_chart_has_no_series_legend(self) -> None:
         spec = build_per_capita()
