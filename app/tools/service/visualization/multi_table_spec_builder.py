@@ -6,15 +6,20 @@ from typing import Any, Literal
 from .chart_spec_builder import (
     GAP_WORDS,
     RANK_WORDS,
+    SAME_UNIT_SPLIT_RATIO,
     VALID_CHART_TYPES,
     apply_display_title,
+    axis_title,
+    mark_scatter_labels,
     limit_categories,
     metric_unit,
     ordered_categories,
     resolve_sort_order,
     stat_block,
+    wants_relation_chart,
     wants_words,
 )
+from . import derived_metric
 from .table_interpreter import (
     TotalMode,
     apply_exact_filters,
@@ -40,9 +45,6 @@ MAX_SOURCES = 5
 MAX_JOINED_ROWS = 60
 # 두 계열의 크기 차이가 이보다 크면 한 축에 그렸을 때 작은 계열이 보이지 않는다.
 DUAL_AXIS_SCALE_RATIO = 20
-# 단위가 같은 계열은 되도록 한 축에 두지만, 이보다 벌어지면 작은 쪽이 선 한 줄로 뭉개진다.
-SAME_UNIT_SPLIT_RATIO = 100
-RELATION_WORDS = ("관계", "상관", "산점", "scatter", "correlation")
 RATIO_WORDS = ("비율", "구성비", "증감률", "rate", "ratio", "percent", "%")
 # 지역·연도 축에서 개별 항목과 나란히 두면 축을 압도하는 전체 집계 라벨이다.
 AGGREGATE_KEY_WORDS = ("전국", "전체", "평균", "nationwide", "average")
@@ -63,14 +65,6 @@ REGION_FULL_NAMES = {
     "경상남도": "경남",
     "제주도": "제주",
 }
-# 단위가 '백만원, 명'처럼 여러 개인 표에서 컬럼 뜻과 맞는 단위를 고를 실마리다.
-UNIT_HINTS = (
-    ("세대", ("세대",)),
-    ("명", ("인명", "인구", "인원", "사망", "부상", "이재민", "환자", "직원", "정원")),
-    ("원", ("재산", "금액", "적립액", "피해액", "예산", "지출", "잔액", "사업비")),
-    ("개", ("개소", "건수", "기관", "시설")),
-)
-
 
 # 표마다 표기가 달라도 같은 항목이 한 키로 모이도록 라벨을 정규화한다.
 def canonical_key(value: Any, key_is_year: bool) -> str:
@@ -107,18 +101,7 @@ def _is_aggregate_key(value: Any) -> bool:
 
 # 단위가 여러 개인 표에서는 컬럼 이름을 보고 그 계열의 단위만 남긴다.
 def source_unit(column: str, table_unit: str | None) -> str:
-    units = [part.strip() for part in str(table_unit or "").split(",") if part.strip()]
-    if len(units) <= 1:
-        return metric_unit(column, table_unit)
-
-    normalized = normalize_key(column)
-    for marker, words in UNIT_HINTS:
-        if not any(word in normalized for word in words):
-            continue
-        matched = next((unit for unit in units if marker in unit), None)
-        if matched:
-            return matched
-    return metric_unit(column, table_unit)
+    return derived_metric.column_unit(column, table_unit, metric_unit(column, table_unit))
 
 
 # 비율 컬럼은 여러 행을 더하면 값이 망가지므로 따로 구분한다.
@@ -410,10 +393,57 @@ def _unique_labels(series: list[dict[str, Any]]) -> None:
         item["label"] = f"{item['label']} ({suffix})"
 
 
-# 질의가 두 지표의 관계를 묻는지 판단한다.
-def _wants_relation_chart(query: str | None) -> bool:
-    text = (query or "").lower()
-    return any(word in text for word in RELATION_WORDS)
+# 표별 계열을 파생 계산이 읽는 피연산자로 옮긴다. 계열 값은 _series_points가 항목별 집계를
+# 이미 끝낸 값이라, 여기서 나누면 합계끼리 나눈 값이 된다.
+def _derive_series(
+    series: list[dict[str, Any]],
+    derive: dict[str, Any],
+    query: str | None,
+    warnings: list[str],
+) -> dict[str, Any] | None:
+    operands = [
+        derived_metric.Operand(
+            label=item["label"],
+            unit=item["unit"],
+            values=item["points"]["values"],
+            axis_labels=item["points"]["axis_values"],
+            base_date=item["source"]["table"].get("base_date"),
+            order=item["points"]["order"],
+        )
+        for item in series
+    ]
+    result = derived_metric.build(derive, operands, query, warnings)
+    if result is None:
+        return None
+
+    numerator = series[result.numerator_index]
+    denominator = series[result.denominator_index]
+    return {
+        "source": numerator["source"],
+        "label": result.label,
+        "key_column": numerator["key_column"],
+        "value_column": numerator["value_column"],
+        "unit": result.unit,
+        "points": {
+            "values": result.values,
+            "axis_values": result.axis_labels,
+            "order": result.order,
+        },
+        "derived": {
+            **result.detail,
+            # 어느 표의 어느 컬럼을 썼는지는 표를 아는 이 경로에서만 채울 수 있다.
+            "numerator": {
+                **result.detail["numerator"],
+                "stat_id": numerator["source"]["table"]["stat_id"],
+                "column": numerator["value_column"],
+            },
+            "denominator": {
+                **result.detail["denominator"],
+                "stat_id": denominator["source"]["table"]["stat_id"],
+                "column": denominator["value_column"],
+            },
+        },
+    }
 
 
 # 계열들이 같은 단위를 쓰는지 확인한다.
@@ -430,6 +460,7 @@ def _select_multi_chart(
     series: list[dict[str, Any]],
     axis_labels: list[Any],
     warnings: list[str],
+    derived: bool = False,
 ) -> tuple[str, str, str]:
     requested_type = requested if requested in VALID_CHART_TYPES else "auto"
     if requested_type != requested:
@@ -437,7 +468,7 @@ def _select_multi_chart(
     series_count = len(series)
 
     if requested_type == "scatter" or (
-        requested_type == "auto" and series_count == 2 and not key_is_year and _wants_relation_chart(query)
+        requested_type == "auto" and series_count == 2 and not key_is_year and wants_relation_chart(query)
     ):
         if series_count == 2:
             return (
@@ -461,6 +492,11 @@ def _select_multi_chart(
         requested_type = "auto"
 
     if requested_type == "auto":
+        if derived:
+            # 파생 지표는 계열이 하나뿐이라 표별 비교가 아니라 항목별 크기 비교가 된다.
+            if key_is_year:
+                return "line", "server_derived_metric", "표끼리 계산한 값을 연도 축에 이어 추이를 보여 줍니다."
+            return "bar", "server_derived_metric", "표끼리 계산한 값을 항목마다 견주는 막대그래프를 선택했습니다."
         if key_is_year and _same_unit(series) and wants_words(query, RANK_WORDS):
             return "bump", "server_multi_source", "순위 변화를 묻는 요청이라 시점마다 순위를 매겨 잇는 그래프를 선택했습니다."
         if key_is_year:
@@ -501,61 +537,6 @@ def _needs_dual_axis(chart_type: str, series: list[dict[str, Any]]) -> bool:
         return _scale_ratio(series) >= SAME_UNIT_SPLIT_RATIO
     # 단위를 알 수 없을 때만 값의 규모 차이로 판단한다.
     return _scale_ratio(series) >= DUAL_AXIS_SCALE_RATIO
-
-
-# 축에 표시할 계열 이름과 단위를 합친다.
-def _axis_title(item: dict[str, Any]) -> str:
-    unit = clean_label(item.get("unit"))
-    return f"{item['label']} ({unit})" if unit else item["label"]
-
-
-# 산점도 라벨 겹침을 재는 기준이 되는 프론트엔드 기본 차트 크기다.
-SCATTER_VIEW_WIDTH_PX = 640
-SCATTER_VIEW_HEIGHT_PX = 340
-SCATTER_LABEL_HEIGHT_PX = 16
-SCATTER_LABEL_OFFSET_PX = 10
-
-
-# 라벨 폭을 글자 종류에 맞춰 어림한다(한글은 넓고 영문·숫자는 좁다).
-def _label_width_px(label: str) -> float:
-    return sum(10.5 if ord(character) > 0x2000 else 6.0 for character in label) + 8
-
-
-# 값 범위를 차트 픽셀 위치로 바꾼다.
-def _scale_px(value: float, low: float, high: float, size: int) -> float:
-    if high <= low:
-        return size / 2
-    return (value - low) / (high - low) * size
-
-
-# 점이 몰린 곳에서 라벨이 서로 겹치면 큰 값부터 남기고 나머지는 비워 둔다.
-# 값 자체는 tooltip으로 확인할 수 있으므로 라벨을 지워도 정보가 사라지지 않는다.
-def _mark_scatter_labels(records: list[dict[str, Any]]) -> None:
-    x_values = [record["x"] for record in records]
-    y_values = [record["value"] for record in records]
-    x_low, x_high = min(x_values), max(x_values)
-    y_low, y_high = min(y_values), max(y_values)
-
-    placed: list[tuple[float, float, float, float]] = []
-    ranked = sorted(records, key=lambda record: record["value"], reverse=True)
-    for record in ranked:
-        label = str(record.get("label") or "")
-        width = _label_width_px(label)
-        center_x = _scale_px(record["x"], x_low, x_high, SCATTER_VIEW_WIDTH_PX)
-        top_y = SCATTER_VIEW_HEIGHT_PX - _scale_px(record["value"], y_low, y_high, SCATTER_VIEW_HEIGHT_PX)
-        box = (
-            center_x - width / 2,
-            top_y - SCATTER_LABEL_OFFSET_PX - SCATTER_LABEL_HEIGHT_PX,
-            center_x + width / 2,
-            top_y - SCATTER_LABEL_OFFSET_PX,
-        )
-        overlaps = any(
-            box[0] < other[2] and other[0] < box[2] and box[1] < other[3] and other[1] < box[3]
-            for other in placed
-        )
-        record["point_label"] = "" if overlaps else label
-        if not overlaps:
-            placed.append(box)
 
 
 # 계열 값을 표 형태로 정리해 답변에 인용할 수 있게 한다.
@@ -638,6 +619,7 @@ def build_multi_source_spec(
     title: str | None = None,
     orientation: Literal["vertical", "horizontal"] = "vertical",
     sort_order: str = "auto",
+    derive: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     warnings: list[str] = []
     resolved_sort_order = resolve_sort_order(sort_order, query, warnings)
@@ -654,6 +636,7 @@ def build_multi_source_spec(
         "orientation": orientation,
         "sort_order": sort_order,
         "resolved_sort_order": resolved_sort_order,
+        "derive": derive,
         "sources": [
             {
                 key: value
@@ -707,11 +690,24 @@ def build_multi_source_spec(
         )
     _unique_labels(series)
 
+    # 파생 지표는 계열 두 개를 소비해 하나를 만든다. 표별 계열이 다 갖춰진 뒤에 계산해야
+    # 분자와 분모가 같은 기준 항목으로 이미 맞춰진 값이 된다.
+    source_series = series
+    derived = _derive_series(series, derive, query, warnings) if derive else None
+    if derived is not None:
+        if len(series) > 2:
+            warnings.append("파생 지표는 분자와 분모 두 표만 쓰므로 나머지 표는 그리지 않았습니다.")
+        series = [derived]
+        if resolved_sort_order is None and not key_is_year and wants_words(query, RANK_WORDS):
+            # 순위를 묻는 요청에 값 순서를 두지 않으면 표에 실린 순서 그대로 나와 순위가 드러나지 않는다.
+            resolved_sort_order = "descending"
+            request["resolved_sort_order"] = resolved_sort_order
+
     all_labels = list(dict.fromkeys(
         label for item in series for label in item["points"]["axis_values"].values()
     ))
     selected_type, decision_source, reason = _select_multi_chart(
-        chart_type, query, key_is_year, series, all_labels, warnings,
+        chart_type, query, key_is_year, series, all_labels, warnings, derived is not None,
     )
     shared_keys = set(series[0]["points"]["values"])
     for item in series[1:]:
@@ -753,7 +749,7 @@ def build_multi_source_spec(
             }
             for key in ordered_keys
         ]
-        _mark_scatter_labels(records)
+        mark_scatter_labels(records)
     else:
         # 값 기준 정렬은 첫 계열의 값으로 정한다. 단위가 다른 계열을 더한 순서는 뜻이 없다.
         if resolved_sort_order and not key_is_year:
@@ -767,7 +763,12 @@ def build_multi_source_spec(
                 )
             )
         records = [
-            {"x": axis_labels.get(key, key), "value": value, "series": item["label"]}
+            # 파생 지표는 계열이 하나뿐이라 계열명을 두면 항목이 하나인 범례만 늘어난다.
+            {
+                "x": axis_labels.get(key, key),
+                "value": value,
+                "series": None if derived is not None else item["label"],
+            }
             for key in ordered_keys
             for item in series
             if (value := item["points"]["values"].get(key)) is not None
@@ -801,7 +802,7 @@ def build_multi_source_spec(
         "title": " · ".join(item["label"] for item in series),
         "x": "year" if key_is_year else "category",
         "y": "value",
-        "group": None if selected_type == "scatter" else "series",
+        "group": None if selected_type == "scatter" or derived is not None else "series",
         "unit": next(iter(units)) if len(units) == 1 else None,
         "orientation": orientation,
         "sort_order": resolved_sort_order,
@@ -817,10 +818,10 @@ def build_multi_source_spec(
     }
     if selected_type == "scatter":
         chart["point_label"] = True
-        chart["x_title"] = _axis_title(series[0])
-        chart["y_title"] = _axis_title(series[1])
+        chart["x_title"] = axis_title(series[0])
+        chart["y_title"] = axis_title(series[1])
     elif dual_axis:
-        chart["y_title"] = _axis_title(series[0])
+        chart["y_title"] = axis_title(series[0])
         # 값 축을 나누면 mark도 바뀌므로 원래 이유를 덧붙이지 않고 다시 쓴다.
         axis_label = "연도" if key_is_year else "표끼리 공통인 항목"
         cause = "규모가 크게 달라" if same_unit else "단위가 달라"
@@ -834,11 +835,12 @@ def build_multi_source_spec(
         "version": "0.1",
         "library": "vega-lite",
         "renderer": "client",
-        "stat": stat_block(series[0]["source"]["table"]),
+        "stat": stat_block(source_series[0]["source"]["table"]),
         # 실제로 그린 표만 남겨 답변의 출처 줄이 쓰지 않은 표를 인용하지 않게 한다.
+        # 파생 지표는 계열이 하나로 줄어도 분자·분모 두 표가 모두 근거이므로 계산 전 계열을 쓴다.
         "stats": list({
             item["source"]["table"]["stat_id"]: stat_block(item["source"]["table"])
-            for item in series
+            for item in source_series
         }.values()),
         "sources": [
             {
@@ -853,23 +855,29 @@ def build_multi_source_spec(
                 "point_count": len(item["points"]["values"]),
                 "selection": item["source"]["selection"],
             }
-            for item in series
+            for item in source_series
         ],
         "request": request,
         "chart": chart,
         "transform": {
-            "type": "multi_source_join",
+            "type": "multi_source_derive" if derived is not None else "multi_source_join",
             "key_is_year": key_is_year,
             "key_columns": [
-                {"label": item["label"], "column": item["key_column"]} for item in series
+                {"label": item["label"], "column": item["key_column"]} for item in source_series
             ],
             "matched_key_count": len(shared_keys),
             "join": "inner" if selected_type == "scatter" else "outer",
+            "derived": derived["derived"] if derived is not None else None,
         },
         "data": {
             "records": records,
             "record_count": len(records),
-            "joined_rows": _joined_rows(ordered_keys, axis_labels, series),
+            # 파생 지표는 분자·분모와 계산 결과를 한 줄에 두어야 답변이 계산 근거를 인용할 수 있다.
+            "joined_rows": _joined_rows(
+                ordered_keys,
+                axis_labels,
+                [*source_series, derived] if derived is not None else series,
+            ),
         },
         "warnings": warnings,
     }

@@ -7,6 +7,7 @@ from app.tools.service.visualization.chart_spec_builder import ChartType, SortOr
 from app.tools.service.visualization.table_interpreter import TotalMode
 from app.tools.service.visualization.visualization_service import VisualizationService
 from app.tool_descriptions import (
+    DERIVED_METRIC_FIELDS,
     METRIC_SELECTION_FIELDS,
     SELECTION_FILTER_FIELDS,
     SERIES_SOURCE_FIELDS,
@@ -27,6 +28,16 @@ class MetricSelection(BaseModel):
     column: str = Field(description=METRIC_SELECTION_FIELDS["column"])
     label: str | None = Field(default=None, description=METRIC_SELECTION_FIELDS["label"])
     unit: str | None = Field(default=None, description=METRIC_SELECTION_FIELDS["unit"])
+
+
+class DerivedMetric(BaseModel):
+    op: Literal["ratio", "per_capita", "share", "difference"] = Field(
+        description=DERIVED_METRIC_FIELDS["op"]
+    )
+    numerator: int = Field(default=0, ge=0, description=DERIVED_METRIC_FIELDS["numerator"])
+    denominator: int = Field(default=1, ge=0, description=DERIVED_METRIC_FIELDS["denominator"])
+    per: int | None = Field(default=None, ge=1, description=DERIVED_METRIC_FIELDS["per"])
+    label: str | None = Field(default=None, description=DERIVED_METRIC_FIELDS["label"])
 
 
 class SeriesSource(BaseModel):
@@ -110,8 +121,22 @@ def register(mcp: FastMCP) -> None:
             SortOrder,
             Field(description=VISUALIZE_FIELDS["sort_order"]),
         ] = "auto",
+        derive: Annotated[
+            DerivedMetric | None,
+            Field(description=VISUALIZE_FIELDS["derive"]),
+        ] = None,
     ):
         selected_sources = [item.model_dump() for item in sources] if sources else []
+        # 파생 지표는 분자와 분모가 둘 다 있어야 계산할 수 있다. 표가 하나뿐이면 그 표 안에서
+        # 나눌 두 컬럼을 metrics로 받아야 하므로, 어느 쪽도 없으면 무엇이 빠졌는지 알려 준다.
+        if derive and len(selected_sources) < 2 and not metrics:
+            return VISUALIZATION_SERVICE.error_result(
+                "derive는 분자와 분모가 필요합니다. 서로 다른 두 표를 나누려면 sources에 표를 두 개 "
+                "전달하고, 한 표 안의 두 컬럼을 나누려면 metrics에 숫자 컬럼을 두 개 전달하세요.",
+                selected_sources[0]["stat_id"] if selected_sources else stat_id,
+                table_seq,
+            )
+
         # 표를 둘 이상 받은 요청만 공통 항목으로 맞춰 한 차트에 겹친다.
         if len(selected_sources) > 1:
             return VISUALIZATION_SERVICE.visualize_sources(
@@ -124,6 +149,7 @@ def register(mcp: FastMCP) -> None:
                 year=year,
                 orientation=orientation,
                 sort_order=sort_order,
+                derive=derive.model_dump() if derive else None,
             )
 
         # 표가 하나뿐이면 sources의 선택 조건을 단일 표 인자로 옮겨 기존 경로를 그대로 쓴다.
@@ -165,4 +191,5 @@ def register(mcp: FastMCP) -> None:
             metrics=selected_metrics,
             orientation=orientation,
             sort_order=sort_order,
+            derive=derive.model_dump() if derive else None,
         )

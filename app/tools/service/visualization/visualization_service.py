@@ -100,6 +100,7 @@ class VisualizationService:
         year: int | None,
         orientation: Literal["vertical", "horizontal"],
         sort_order: SortOrder,
+        derive: dict | None = None,
     ) -> CallToolResult:
         if len(sources) > MAX_SOURCES:
             return self.error_result(
@@ -131,6 +132,7 @@ class VisualizationService:
             title=title,
             orientation=orientation,
             sort_order=sort_order,
+            derive=derive,
         )
         # 표마다 같은 안내가 붙으므로 한 번만 남긴다.
         spec["warnings"] = list(dict.fromkeys(notes)) + spec["warnings"]
@@ -158,6 +160,7 @@ class VisualizationService:
         metrics: list[dict] | None,
         orientation: Literal["vertical", "horizontal"],
         sort_order: SortOrder,
+        derive: dict | None = None,
     ) -> CallToolResult:
         table, error, note = self.resolve_table(stat_id, table_handle)
         if table is None:
@@ -181,6 +184,7 @@ class VisualizationService:
             metrics=metrics,
             title=title,
             sort_order=sort_order,
+            derive=derive,
         )
         if note:
             spec["warnings"] = [note, *spec["warnings"]]
