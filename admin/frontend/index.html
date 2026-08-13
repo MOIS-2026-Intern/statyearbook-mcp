@@ -58,6 +58,7 @@
                 <div class="form-grid form-grid--three">
                   <label><span>발간연도</span><input id="yearInput" name="year" type="number" min="1900" max="2200" value="2026" required /></label>
                   <label class="span-two"><span>발간물 제목</span><input id="titleInput" name="title" value="2026 행정안전통계연보" required /></label>
+                  <label><span>발간물 종류</span><select id="publicationKindSelect" name="publication_kind"></select></label>
                   <label><span>발간번호 <em>선택</em></span><input id="pubNoInput" name="pub_no" placeholder="예: 11-1741000-000001-10" /></label>
                   <label><span>대상 DB</span><select id="targetSelect" name="target"></select></label>
                   <label><span>같은 연도 처리</span><select id="loadModeSelect" name="load_mode"></select></label>
@@ -101,13 +102,14 @@
                     <tr>
                       <th class="checkbox-cell"><input id="selectAllPublications" type="checkbox" aria-label="전체 선택" /></th>
                       <th>pub_id</th>
+                      <th>kind</th>
                       <th>year</th>
                       <th>pub_no</th>
                       <th>title</th>
                     </tr>
                   </thead>
                   <tbody id="publicationList">
-                    <tr><td colspan="5" class="empty-table">목록을 불러오려면 삭제 화면을 여세요.</td></tr>
+                    <tr><td colspan="6" class="empty-table">목록을 불러오려면 삭제 화면을 여세요.</td></tr>
                   </tbody>
                 </table>
               </div>

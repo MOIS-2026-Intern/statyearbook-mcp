@@ -13,7 +13,8 @@ class YearbookVerificationService:
         self,
         conn,
         year: int,
-        profile_key: str | None,
+        publication_kind: str = "yearbook",
+        profile_key: str | None = None,
         table_profile_key: str | None = None,
     ) -> dict:
         with conn.cursor() as cur:
@@ -23,9 +24,11 @@ class YearbookVerificationService:
                        COALESCE(SUM((
                            SELECT COUNT(*) FROM stat_tables t WHERE t.stat_id = s.stat_id
                        )), 0) AS table_count
-                FROM statistics s WHERE s.year = %s
+                FROM statistics s
+                JOIN publications p ON p.pub_id = s.pub_id
+                WHERE p.publication_kind = %s AND s.year = %s
                 """,
-                (year,),
+                (publication_kind, year),
             )
             counts = cur.fetchone()
             if isinstance(counts, dict):
@@ -40,10 +43,11 @@ class YearbookVerificationService:
                 cur.execute(
                     """
                     SELECT COUNT(*) FROM statistics
-                    WHERE year = %s AND embedding IS NOT NULL
+                    JOIN publications p ON p.pub_id = statistics.pub_id
+                    WHERE p.publication_kind = %s AND year = %s AND embedding IS NOT NULL
                       AND embedding_profile_key = %s
                     """,
-                    (year, profile_key),
+                    (publication_kind, year, profile_key),
                 )
                 current_count = _first_value(cur.fetchone())
             cur.execute(
@@ -51,9 +55,10 @@ class YearbookVerificationService:
                 SELECT COUNT(*)
                 FROM table_search_chunks c
                 JOIN statistics s ON s.stat_id = c.stat_id
-                WHERE s.year = %s
+                JOIN publications p ON p.pub_id = s.pub_id
+                WHERE p.publication_kind = %s AND s.year = %s
                 """,
-                (year,),
+                (publication_kind, year),
             )
             table_chunk_count = _first_value(cur.fetchone())
             if table_profile_key:
@@ -62,10 +67,12 @@ class YearbookVerificationService:
                     SELECT COUNT(*)
                     FROM table_search_chunks c
                     JOIN statistics s ON s.stat_id = c.stat_id
-                    WHERE s.year = %s AND c.embedding IS NOT NULL
+                    JOIN publications p ON p.pub_id = s.pub_id
+                    WHERE p.publication_kind = %s AND s.year = %s
+                      AND c.embedding IS NOT NULL
                       AND c.embedding_profile_key = %s
                     """,
-                    (year, table_profile_key),
+                    (publication_kind, year, table_profile_key),
                 )
                 current_table_count = _first_value(cur.fetchone())
         if profile_key and current_count != statistics_count:

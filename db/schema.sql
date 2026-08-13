@@ -8,6 +8,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS publications (
     pub_id      SERIAL PRIMARY KEY,
+    publication_kind TEXT NOT NULL DEFAULT 'yearbook',
     year        INT NOT NULL,
     pub_no      TEXT,
     title       TEXT NOT NULL,
@@ -115,6 +116,19 @@ CREATE TABLE IF NOT EXISTS embedding_jobs (
 
 -- 이미 만들어진 DB에도 statistics.ordinal을 더한다. CREATE TABLE IF NOT EXISTS만으로는
 -- 기존 테이블에 컬럼이 생기지 않는다.
+ALTER TABLE publications ADD COLUMN IF NOT EXISTS publication_kind TEXT;
+UPDATE publications
+   SET publication_kind = 'yearbook'
+ WHERE publication_kind IS NULL;
+ALTER TABLE publications ALTER COLUMN publication_kind SET DEFAULT 'yearbook';
+ALTER TABLE publications ALTER COLUMN publication_kind SET NOT NULL;
+
+ALTER TABLE publications
+    DROP CONSTRAINT IF EXISTS publications_kind_check;
+ALTER TABLE publications
+    ADD CONSTRAINT publications_kind_check
+    CHECK (publication_kind IN ('yearbook', 'major_statistics'));
+
 ALTER TABLE statistics ADD COLUMN IF NOT EXISTS ordinal INT;
 
 -- 이미 만들어진 DB의 table_search_chunks를 통계 단위 주석 청크까지 담도록 넓힌다.
@@ -177,11 +191,11 @@ BEGIN
 END
 $statyearbook_dup_guard$;
 
--- 한 연도에 발간물은 하나라는 전제를 강제한다. 적재 스크립트와 통계 검색의 발간판 병합이
--- 이 전제에 기대므로, 발간물 종류를 늘리려면 발간물 구분 컬럼을 먼저 추가하고
--- app/tools/search_statistics.py의 LATEST_EDITIONS_CTE를 함께 고쳐야 한다.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_publications_unique_year
-    ON publications(year);
+-- 같은 종류의 발간물 안에서 한 연도에 하나의 판만 허용한다.
+-- 통계연보와 주요통계집은 같은 연도를 각각 가질 수 있다.
+DROP INDEX IF EXISTS idx_publications_unique_year;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_publications_unique_kind_year
+    ON publications(publication_kind, year);
 -- 한 발간물 안에서 표 번호는 유일하다. 파서가 같은 표를 두 번 넣거나 번호를 밀어
 -- 쓰는 사고를 적재 단계에서 곧바로 막는다.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_statistics_unique_pub_ref

@@ -31,6 +31,7 @@ from backend.serializers.mcp_result_serializer import (
     truncate_jsonable,
     truncate_text,
 )
+from utils.publication_kind import normalize_publication_kind
 
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[ChatProgress], None]
@@ -50,6 +51,11 @@ _TOOL_INPUT_ERROR_MARKERS = (
     "does not accept",
     "requires ",
 )
+_PUBLICATION_KIND_TOOLS = {
+    "analyze_publications",
+    "compare_publications",
+    "search_statistics",
+}
 
 
 class ChatService:
@@ -195,6 +201,7 @@ class ChatService:
         tool_results: list[ToolResult] = []
         historical_tool_names = _historical_tool_names(request)
         visualize_result_cache: dict[str, dict[str, Any]] = {}
+        search_table_row_hints: dict[int, str] = {}
         tool_call_counts: dict[str, int] = {}
         input_error_retry_used = False
         no_results_retry_used = False
@@ -216,7 +223,10 @@ class ChatService:
             model_started = time.perf_counter()
             try:
                 turn = await self._model.create_turn(
-                    instructions=build_system_prompt(response_tool_names),
+                    instructions=build_system_prompt(
+                        response_tool_names,
+                        request.publicationKind,
+                    ),
                     messages=messages,
                     tools=tools,
                     model_profile=request.modelProfile,
@@ -250,6 +260,8 @@ class ChatService:
                             call,
                             traces,
                             visualize_result_cache,
+                            search_table_row_hints,
+                            request.publicationKind,
                         )
                     )
                 finally:
@@ -307,7 +319,8 @@ class ChatService:
             final_turn = await self._model.create_turn(
                 instructions=(
                     build_system_prompt(
-                        _response_tool_names(tool_results, historical_tool_names)
+                        _response_tool_names(tool_results, historical_tool_names),
+                        request.publicationKind,
                     )
                     + "\n\n도구 호출 횟수 제한에 도달했습니다. 지금까지 받은 도구 결과만 사용해 답하세요."
                 ),
@@ -347,6 +360,8 @@ class ChatService:
         call: ToolCall,
         traces: list[McpTrace],
         visualize_result_cache: dict[str, dict[str, Any]],
+        search_table_row_hints: dict[int, str],
+        publication_kind: str,
     ) -> ToolResult:
         trace_id = str(uuid4())
         started = time.perf_counter()
@@ -359,6 +374,12 @@ class ChatService:
                 raise ValueError("tool name is missing")
 
             arguments = mcp.prepare_tool_arguments(call.name, call.arguments)
+            arguments = _apply_publication_kind(arguments, call.name, publication_kind)
+            arguments = _apply_search_tables_row_hint(
+                arguments,
+                call.name,
+                search_table_row_hints,
+            )
             request_arguments = arguments
             cache_key = json_dumps(arguments)
             reused = call.name == "visualize" and cache_key in visualize_result_cache
@@ -368,6 +389,8 @@ class ChatService:
                 result = await mcp.call_tool(call.name, arguments)
                 if call.name == "visualize":
                     visualize_result_cache[cache_key] = result
+                if call.name == "search_statistics":
+                    _remember_search_table_row_hints(result, search_table_row_hints)
             model_payload = _model_result_for_tool(call.name, result)
             model_result = truncate_jsonable(model_payload, self._settings.tool_output_max_chars)
             status = "error" if result.get("isError") else "success"
@@ -441,6 +464,60 @@ def _response_tool_names(
     return _successful_tool_names(current_results) or historical_names
 
 
+def _apply_publication_kind(
+    arguments: dict[str, Any],
+    tool_name: str | None,
+    publication_kind: str,
+) -> dict[str, Any]:
+    if tool_name not in _PUBLICATION_KIND_TOOLS:
+        return arguments
+    return {
+        **arguments,
+        "publication_kind": normalize_publication_kind(publication_kind),
+    }
+
+
+def _apply_search_tables_row_hint(
+    arguments: dict[str, Any],
+    tool_name: str | None,
+    row_hints: dict[int, str],
+) -> dict[str, Any]:
+    if tool_name != "search_tables" or arguments.get("row_label"):
+        return arguments
+    try:
+        stat_id = int(arguments.get("stat_id"))
+    except (TypeError, ValueError):
+        return arguments
+
+    row_label = row_hints.get(stat_id)
+    if not row_label:
+        return arguments
+    return {**arguments, "row_label": row_label}
+
+
+def _remember_search_table_row_hints(
+    result: dict[str, Any],
+    row_hints: dict[int, str],
+) -> None:
+    structured = result.get("structuredContent")
+    if not isinstance(structured, dict):
+        return
+    rows = structured.get("results")
+    if not isinstance(rows, list):
+        return
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("matched_source") != "row_label" or not row.get("matched_text"):
+            continue
+        try:
+            stat_id = int(row.get("stat_id"))
+        except (TypeError, ValueError):
+            continue
+        row_hints[stat_id] = str(row["matched_text"])
+
+
 # 가장 최근 도구 사용 assistant 턴의 성공한 도구 이름을 복원한다.
 def _historical_tool_names(request: ChatRequest) -> tuple[str, ...]:
     """가장 최근 도구 사용 assistant 턴의 성공한 도구 이름을 복원한다."""
@@ -502,6 +579,7 @@ def _tool_summary(result: dict[str, Any]) -> str:
 
 # structuredContent를 대신할 안내로, 같은 내용을 두 번 싣지 않는다는 사실을 모델에 알린다.
 _STRUCTURED_RESULT_TEXT = "도구 결과는 structuredContent에 있습니다."
+_TABLE_PREVIEW_DATA_ROWS = 12
 
 
 # 후속 판단에 필요한 핵심만 모델에 넘기고 프런트엔드 trace용 원본은 보존한다.
@@ -517,14 +595,15 @@ def _model_result_for_tool(tool_name: str | None, result: dict[str, Any]) -> dic
     if structured is None:
         return result
 
+    if tool_name == "search_tables":
+        return _search_tables_model_result(result, structured)
+
     # MCP는 같은 결과를 정렬된 JSON 텍스트와 structuredContent로 두 번 싣는다. 목록처럼 큰
     # 결과는 이 중복만으로 tool_output_max_chars를 넘겨 모델이 뒷부분을 아예 못 보게 된다.
     return _with_summary_text(
         result,
         structured,
-        _search_tables_text(structured)
-        if tool_name == "search_tables"
-        else _STRUCTURED_RESULT_TEXT,
+        _STRUCTURED_RESULT_TEXT,
     )
 
 
@@ -627,6 +706,85 @@ def _visualize_model_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# search_tables는 큰 Markdown 표 하나만으로 모델 입력 한도를 넘기기 쉽다. 한도에서 잘린 표를
+# 모델이 다시 조립하면 행 구분과 파이프 개수가 깨지므로, 모델에는 완성된 행 단위 미리보기만 준다.
+def _search_tables_model_result(
+    result: dict[str, Any],
+    structured: dict[str, Any],
+) -> dict[str, Any]:
+    compact = _select_keys(
+        structured,
+        "found",
+        "stat_id",
+        "publication_kind",
+        "ref_id",
+        "publication_year",
+        "chapter_no",
+        "section_no",
+        "level3_no",
+        "level4_no",
+        "chapter",
+        "section",
+        "level3_title",
+        "level4_title",
+        "title_ko",
+        "title_en",
+        "unit",
+        "base_date",
+        "page_start",
+    )
+    for key in ("source", "footnotes"):
+        value = structured.get(key)
+        if isinstance(value, list):
+            compact[key] = value
+
+    tables = structured.get("tables")
+    if isinstance(tables, list):
+        compact["tables"] = [_compact_table_for_model(table) for table in tables]
+    elif structured.get("table_md"):
+        compact["tables"] = [_compact_table_for_model(structured)]
+
+    return _with_summary_text(result, compact, _search_tables_text(compact))
+
+
+def _compact_table_for_model(table: Any) -> dict[str, Any]:
+    if not isinstance(table, dict):
+        return {"value": table}
+
+    compact = _select_keys(table, "seq", "table_handle", "caption", "n_rows", "n_cols")
+    table_md = str(table.get("table_md") or "")
+    preview, preview_rows, omitted_rows = _markdown_table_preview(
+        table_md,
+        _TABLE_PREVIEW_DATA_ROWS,
+    )
+    compact["table_md"] = preview
+    compact["table_md_is_preview"] = omitted_rows > 0
+    compact["preview_data_rows"] = preview_rows
+    compact["omitted_data_rows"] = omitted_rows
+    for key in (
+        "row_label_query",
+        "matched_row_count",
+        "matched_rows_truncated",
+        "matched_rows",
+        "matched_rows_md",
+    ):
+        if key in table:
+            compact[key] = table[key]
+    return compact
+
+
+def _markdown_table_preview(table_md: str, max_data_rows: int) -> tuple[str, int, int]:
+    lines = [line.strip() for line in table_md.splitlines() if line.strip()]
+    table_lines = [line for line in lines if line.startswith("|")]
+    if len(table_lines) <= 2:
+        return "\n".join(table_lines), max(0, len(table_lines) - 2), 0
+
+    header = table_lines[:2]
+    data_rows = table_lines[2:]
+    kept_rows = data_rows[:max_data_rows]
+    return "\n".join([*header, *kept_rows]), len(kept_rows), len(data_rows) - len(kept_rows)
+
+
 # 표 본문이 없는 통계표는 조회 자체는 성공해 정상 결과처럼 보이므로 문구로 분명히 알린다.
 # 그대로 두면 모델이 수치를 찾아 같은 통계표 주변을 계속 뒤지며 도구 호출을 낭비한다.
 def _search_tables_text(structured: dict[str, Any]) -> str:
@@ -635,7 +793,13 @@ def _search_tables_text(structured: dict[str, Any]) -> str:
             "이 통계표에는 표 본문이 없습니다. 조직도나 도표로 실린 항목이라 수치를 읽을 수 "
             "없으므로, 수치가 필요하면 has_tables가 true인 다른 통계표를 확인하세요."
         )
-    return "통계표 원문과 메타데이터를 조회했습니다."
+    return (
+        "통계표 원문 미리보기와 메타데이터를 조회했습니다. 답변에 Markdown 표를 넣을 때는 "
+        "structuredContent.tables[].table_md를 행, 열, 줄바꿈, 파이프 개수를 바꾸지 말고 그대로 "
+        "복사하세요. table_md_is_preview가 true이면 전체 표가 아니라 일부 행 미리보기입니다. "
+        "matched_rows가 있으면 row_label에 맞춰 원본 표에서 추출한 행이므로 미리보기보다 우선해서 "
+        "답변 근거로 사용하세요."
+    )
 
 
 # 실패한 도구 이름과 반환된 원인을 사용자에게 설명하는 종료 문구를 만든다.

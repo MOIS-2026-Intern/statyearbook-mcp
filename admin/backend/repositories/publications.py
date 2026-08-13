@@ -18,9 +18,9 @@ class PublicationRepository:
         with psycopg.connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT pub_id, year, pub_no, title
+                SELECT pub_id, publication_kind, year, pub_no, title
                 FROM publications
-                ORDER BY year DESC, pub_id DESC
+                ORDER BY year DESC, publication_kind, pub_id DESC
                 """
             )
             return [dict(row) for row in cur.fetchall()]
@@ -32,10 +32,10 @@ class PublicationRepository:
             cur.execute("SELECT pg_advisory_xact_lock(%s)", (PUBLICATION_WRITE_LOCK_ID,))
             cur.execute(
                 """
-                SELECT pub_id, year, pub_no, title
+                SELECT pub_id, publication_kind, year, pub_no, title
                 FROM publications
                 WHERE pub_id = ANY(%s)
-                ORDER BY year DESC, pub_id DESC
+                ORDER BY year DESC, publication_kind, pub_id DESC
                 FOR UPDATE
                 """,
                 (selected_ids,),
@@ -69,6 +69,8 @@ class PublicationRepository:
                 source_name
                 for row in publications
                 for source_name in (
+                    f"statistics:{row['publication_kind']}:{row['year']}",
+                    f"table_search:{row['publication_kind']}:{row['year']}",
                     f"statistics:{row['year']}",
                     f"table_search:{row['year']}",
                 )

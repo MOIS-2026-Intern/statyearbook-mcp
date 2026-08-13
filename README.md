@@ -98,6 +98,14 @@ DB에 넣기 전에 파싱 결과만 확인하려면 `build-sql`로 검수 문�
 python -m admin build-sql data/2026통계연보.hwpx --year 2026 --out admin/workspaces/rebuild-2026
 ```
 
+이미 파싱된 주요통계집 JSON은 `ingest-json`으로 적재합니다. DB에 넣기 전에 변환 결과와
+SQL만 확인하려면 `build-json-sql`을 사용합니다.
+
+```bash
+python -m admin build-json-sql 2025_statistics_parsed_v3.json --year 2025 --out admin/workspaces/major-stats-2025
+python -m admin ingest-json 2025_statistics_parsed_v3.json --year 2025 --mode replace --embedding bge-m3
+```
+
 ### 목차 계층 복원 규칙
 
 표 번호(`ref_id`)와 장·절·3계층·4계층 제목은 **본문 표제 표**를 정본으로 삼습니다.

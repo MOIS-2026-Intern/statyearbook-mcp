@@ -9,6 +9,7 @@ from admin.backend.services.table_search_chunks import (
     build_note_search_chunks,
     build_table_search_chunks,
 )
+from utils.publication_kind import normalize_publication_kind
 
 YEARBOOK_LOAD_MODES = ("reject", "replace")
 
@@ -48,6 +49,10 @@ def _chunk_insert(chunk: dict, table_ref: str) -> str:
 # 적재에 실패하면 원인이 파서인지 DB인지 가리기 어렵다.
 def validate_yearbook(data: dict) -> None:
     publication = data.get("publication") or {}
+    try:
+        normalize_publication_kind(publication.get("publication_kind"))
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
     year = publication.get("year")
     if not isinstance(year, int) or not 1900 <= year <= 2200:
         raise ValueError("publication.year must be an integer between 1900 and 2200")
@@ -166,7 +171,11 @@ def build_load_dml(
         raise ValueError(f"unsupported load mode: {mode}")
 
     publication = data["publication"]
+    publication_kind = normalize_publication_kind(publication.get("publication_kind"))
     year = int(publication["year"])
+    publication_scope = (
+        f"publication_kind = {sql_literal(publication_kind)} AND year = {year}"
+    )
     lines = []
     if include_transaction:
         lines.append("BEGIN;")
@@ -181,24 +190,27 @@ def build_load_dml(
     ])
     if mode == "replace":
         lines.extend([
-            f"    DELETE FROM statistics WHERE pub_id IN (SELECT pub_id FROM publications WHERE year = {year});",
-            f"    DELETE FROM publications WHERE year = {year};",
+            "    DELETE FROM statistics WHERE pub_id IN "
+            f"(SELECT pub_id FROM publications WHERE {publication_scope});",
+            f"    DELETE FROM publications WHERE {publication_scope};",
         ])
     else:
         lines.extend([
-            f"    IF EXISTS (SELECT 1 FROM publications WHERE year = {year}) THEN",
-            f"        RAISE EXCEPTION 'publication year {year} already exists; use replace mode explicitly';",
+            f"    IF EXISTS (SELECT 1 FROM publications WHERE {publication_scope}) THEN",
+            "        RAISE EXCEPTION "
+            f"'publication {publication_kind}:{year} already exists; use replace mode explicitly';",
             "    END IF;",
         ])
 
     pub_values = _values([
+        publication_kind,
         year,
         publication.get("pub_no"),
         publication["title"],
         publication.get("page_count"),
     ])
     lines.extend([
-        "    INSERT INTO publications (year, pub_no, title, page_count)",
+        "    INSERT INTO publications (publication_kind, year, pub_no, title, page_count)",
         f"    VALUES ({pub_values}) RETURNING pub_id INTO v_pub_id;",
     ])
     for unit in data["statistics"]:

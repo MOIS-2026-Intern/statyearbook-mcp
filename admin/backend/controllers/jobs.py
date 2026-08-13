@@ -15,6 +15,7 @@ from admin.backend.services.upload import (
 )
 from admin.backend.services.load_dml import YEARBOOK_LOAD_MODES
 from admin.backend.services.load_workspace import create_workspace
+from utils.publication_kind import normalize_publication_kind
 
 
 router = APIRouter(
@@ -46,6 +47,7 @@ async def create_job(
     year: int = Form(...),
     title: str = Form(...),
     pub_no: str | None = Form(default=None),
+    publication_kind: str = Form(default="yearbook"),
     target: str | None = Form(default=None),
     load_mode: str = Form(default="reject"),
     embedding_model: str = Form(default="bge-m3"),
@@ -58,6 +60,10 @@ async def create_job(
         raise HTTPException(status_code=422, detail="publication title is required")
     if load_mode not in YEARBOOK_LOAD_MODES:
         raise HTTPException(status_code=422, detail="invalid load mode")
+    try:
+        publication_kind = normalize_publication_kind(publication_kind)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         settings.target_dsn(target)
         settings.embedding_model(embedding_model)
@@ -86,6 +92,7 @@ async def create_job(
         year=year,
         title=title.strip(),
         pub_no=(pub_no or "").strip() or None,
+        publication_kind=publication_kind,
         target=target,
         load_mode=load_mode,
         embedding_model=embedding_model,

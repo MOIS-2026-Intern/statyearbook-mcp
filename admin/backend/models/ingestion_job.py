@@ -2,14 +2,18 @@
 # CLI와 웹 API가 같은 모델과 파일명 규칙을 공유하도록 한다.
 from dataclasses import asdict, dataclass
 
+from utils.publication_kind import DEFAULT_PUBLICATION_KIND, PublicationKind
+
 
 @dataclass(frozen=True)
 class IngestionOptions:
     input_path: str
     original_filename: str
     year: int
-    title: str
+    title: str | None
     pub_no: str | None = None
+    publication_kind: PublicationKind = DEFAULT_PUBLICATION_KIND
+    input_format: str = "hwpx"
     target: str = "local"
     load_mode: str = "reject"
     embedding_model: str = "bge-m3"
@@ -22,6 +26,7 @@ class IngestionOptions:
 @dataclass(frozen=True)
 class WorkspaceArtifactNames:
     source_yearbook: str = "yearbook_source.hwpx"
+    source_json: str = "source.json"
     parsed_json: str = "yearbook_parsed.json"
     review_markdown: str = "yearbook_review.md"
     load_dml: str = "yearbook_load.sql"

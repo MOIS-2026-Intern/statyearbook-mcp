@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from admin.backend.models.embedding import EmbeddingBatch, WeightedEmbeddingTexts
 from utils.embedding import EmbeddingConfigurationError
+from utils.publication_kind import DEFAULT_PUBLICATION_KIND, normalize_publication_kind
 from utils.vector import vector_literal
 
 
@@ -21,21 +22,42 @@ def _first_value(row):
 
 class StatisticsEmbeddingRepository:
     # 선택한 발간연도로 모든 조회·갱신 범위를 제한할 저장소를 구성한다.
-    def __init__(self, publication_year: int | None = None):
+    def __init__(
+        self,
+        publication_year: int | None = None,
+        publication_kind: str | None = None,
+    ):
         self.publication_year = publication_year
+        self.publication_kind = (
+            normalize_publication_kind(publication_kind or DEFAULT_PUBLICATION_KIND)
+            if publication_year is not None
+            else None
+        )
         self.name = (
-            f"statistics:{publication_year}"
+            f"statistics:{self.publication_kind}:{publication_year}"
             if publication_year is not None
             else "statistics"
         )
 
     # 연도 필터 유무에 맞는 안전한 고정 SQL 조건을 반환한다.
     def _scope_sql(self) -> str:
-        return "year = %s" if self.publication_year is not None else "TRUE"
+        clauses = []
+        if self.publication_year is not None:
+            clauses.append("year = %s")
+        if self.publication_kind is not None:
+            clauses.append(
+                "pub_id IN (SELECT pub_id FROM publications WHERE publication_kind = %s)"
+            )
+        return " AND ".join(clauses) if clauses else "TRUE"
 
     # 범위 SQL의 연도 자리표시자와 정확히 대응하는 인자를 만든다.
     def _scope_params(self) -> list:
-        return [self.publication_year] if self.publication_year is not None else []
+        params = []
+        if self.publication_year is not None:
+            params.append(self.publication_year)
+        if self.publication_kind is not None:
+            params.append(self.publication_kind)
+        return params
 
     # PostgreSQL 카탈로그에서 실제 statistics 벡터 열 타입을 조회한다.
     def select_embedding_column_type(self, conn) -> str:
@@ -118,7 +140,10 @@ class StatisticsEmbeddingRepository:
         with conn.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT stat_id, year, ref_id, title_ko, title_en,
+                SELECT stat_id, year,
+                       (SELECT publication_kind FROM publications p WHERE p.pub_id = statistics.pub_id)
+                           AS publication_kind,
+                       ref_id, title_ko, title_en,
                        chapter, section, level3_title, level4_title, page_start
                 FROM statistics
                 WHERE {condition}

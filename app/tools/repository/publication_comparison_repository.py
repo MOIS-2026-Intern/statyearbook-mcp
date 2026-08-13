@@ -11,6 +11,7 @@ from app.tools.repository.publication_repository import (
     match_key_sql,
     simple_key_sql,
 )
+from utils.publication_kind import DEFAULT_PUBLICATION_KIND, normalize_publication_kind
 
 
 CompareOperation = Literal[
@@ -45,7 +46,9 @@ CompareField = Literal[
     "source_system",
 ]
 
-PUBLICATION_YEARS_SQL = "SELECT year FROM publications ORDER BY year DESC"
+PUBLICATION_YEARS_SQL = (
+    "SELECT year FROM publications WHERE publication_kind = %s ORDER BY year DESC"
+)
 SET_OPERATIONS = frozenset({"only_in_base", "only_in_target", "in_both", "changed"})
 PAIRED_OPERATIONS = frozenset({"in_both", "changed"})
 
@@ -211,9 +214,10 @@ DUPLICATE_TITLE_LIMITATION = (
 
 
 # 적재된 발간연도를 최신순으로 조회한다.
-def _publication_years() -> list[int]:
+def _publication_years(publication_kind: str = DEFAULT_PUBLICATION_KIND) -> list[int]:
+    publication_kind = normalize_publication_kind(publication_kind)
     with connect() as conn, conn.cursor() as cur:
-        cur.execute(PUBLICATION_YEARS_SQL)
+        cur.execute(PUBLICATION_YEARS_SQL, (publication_kind,))
         return [int(row["year"]) for row in cur.fetchall()]
 
 
@@ -338,7 +342,7 @@ def _items_cte_sql(name: str, spec: CompareSubjectSpec, key_sql: str) -> str:
             f"                   COUNT(*) OVER (PARTITION BY {key_sql}) AS record_count",
             "            FROM publications p",
             f"            {spec.join_sql}",
-            f"            WHERE p.year = %s AND {key_sql} IS NOT NULL",
+            f"            WHERE p.publication_kind = %s AND p.year = %s AND {key_sql} IS NOT NULL",
             f"        ) matched ORDER BY match_key, {spec.dedupe_order_sql}",
             "    )",
         )
@@ -362,11 +366,13 @@ def build_query_plan(
     match_by: CompareMatchBy,
     base_publication_year: int,
     target_publication_year: int,
+    publication_kind: str = DEFAULT_PUBLICATION_KIND,
     fields: list[CompareField] | None = None,
     limit: int = 500,
     offset: int = 0,
 ) -> QueryPlan:
     spec = SUBJECTS[subject]
+    publication_kind = normalize_publication_kind(publication_kind)
     key_sql = spec.match_keys[match_by]
     selected = _selected_fields(spec, fields)
     compared = _comparable_fields(spec, fields)
@@ -377,7 +383,12 @@ def build_query_plan(
             _items_cte_sql("target_items", spec, key_sql),
         )
     )
-    years = (base_publication_year, target_publication_year)
+    years = (
+        publication_kind,
+        base_publication_year,
+        publication_kind,
+        target_publication_year,
+    )
 
     if operation == "summary":
         changed_sql = (

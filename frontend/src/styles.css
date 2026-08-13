@@ -108,7 +108,8 @@ button {
 .nav-button,
 .conversation-item,
 .mcp-toggle,
-.tool-chip {
+.tool-chip,
+.publication-switch__button {
   display: inline-flex;
   align-items: center;
   border: 0;
@@ -942,6 +943,49 @@ button {
 .composer__tools,
 .composer__actions {
   gap: 8px;
+}
+
+.composer__tools {
+  flex-wrap: wrap;
+}
+
+.publication-switch {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f7f9fa;
+  padding: 2px;
+}
+
+.publication-switch__button {
+  height: 28px;
+  gap: 5px;
+  border-radius: 6px;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 0 9px;
+  white-space: nowrap;
+}
+
+.publication-switch__button:hover {
+  background: #eef3f4;
+  color: #1f2933;
+}
+
+.publication-switch__button--active {
+  background: #ffffff;
+  color: var(--accent-strong);
+  box-shadow: 0 1px 4px rgb(15 23 42 / 0.12);
+}
+
+.publication-switch__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .tool-chip {

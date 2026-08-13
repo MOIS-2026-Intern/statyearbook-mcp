@@ -1,4 +1,5 @@
 export type MessageRole = "user" | "assistant" | "system";
+export type PublicationKind = "yearbook" | "major_statistics";
 
 export type McpTraceKind =
   | "tool_discovery"
@@ -43,6 +44,7 @@ export interface ChatRequest {
   conversationId: string;
   message: string;
   modelProfile: string;
+  publicationKind: PublicationKind;
   includeMcpTrace: boolean;
   history: ChatMessage[];
   traces: McpTrace[];

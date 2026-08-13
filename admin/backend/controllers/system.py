@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Request
 
 from admin.backend.config import ADMIN_API_PREFIX
 from admin.backend.controllers.dependencies import authorize_admin
+from utils.publication_kind import DEFAULT_PUBLICATION_KIND, MAJOR_STATISTICS_KIND
 
 
 router = APIRouter(prefix=ADMIN_API_PREFIX, dependencies=[Depends(authorize_admin)])
@@ -21,6 +22,18 @@ def options(request: Request) -> dict:
     settings = request.app.state.settings
     return {
         "targets": settings.targets(),
+        "publication_kinds": [
+            {
+                "id": DEFAULT_PUBLICATION_KIND,
+                "label": "통계연보",
+                "description": "행정안전통계연보 발간판입니다.",
+            },
+            {
+                "id": MAJOR_STATISTICS_KIND,
+                "label": "주요통계집",
+                "description": "주요통계집 발간판입니다.",
+            },
+        ],
         "load_modes": [
             {
                 "id": "reject",

@@ -77,6 +77,7 @@ function renderJob(job) {
   $("resultGrid").innerHTML = Object.keys(result).length ? [
     [result.statistics_count ?? 0, "통계 단위"], [result.table_count ?? 0, "원자료 표"],
     [result.verified_embedding_count ?? 0, "제목 임베딩"], [result.verified_table_embedding_count ?? 0, "표 검색 임베딩"],
+    [result.publication_kind ?? "-", "발간물 종류"],
     [result.publication_year ?? "-", "발간연도"],
   // 결과 값을 동일한 수치·라벨 카드 형식으로 변환한다.
   ].map(([value,label]) => `<div class="result-item"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`).join("") : `<p class="muted">완료 후 적재 건수가 표시됩니다.</p>`;
@@ -101,7 +102,7 @@ async function loadJobs() {
   try {
     const jobs = await (await api(`${adminApiBasePath}/jobs`)).json();
     // 각 작업 요약을 현재 선택 표시가 포함된 탐색 버튼으로 렌더링한다.
-    $("jobList").innerHTML = jobs.length ? jobs.map((job) => `<button class="job-item ${job.job_id === currentJobId ? "job-item--active" : ""}" data-job="${escapeHtml(job.job_id)}"><strong>${escapeHtml(job.options?.year || "-")} ${escapeHtml(job.options?.original_filename || "통계연보")}</strong><span>${escapeHtml(statusLabel(job.status))} · ${escapeHtml(job.progress)}%</span></button>`).join("") : `<p class="muted">아직 실행한 작업이 없습니다.</p>`;
+    $("jobList").innerHTML = jobs.length ? jobs.map((job) => `<button class="job-item ${job.job_id === currentJobId ? "job-item--active" : ""}" data-job="${escapeHtml(job.job_id)}"><strong>${escapeHtml(job.options?.year || "-")} ${escapeHtml(job.options?.original_filename || "통계연보")}</strong><span>${escapeHtml(job.options?.publication_kind || "yearbook")} · ${escapeHtml(statusLabel(job.status))} · ${escapeHtml(job.progress)}%</span></button>`).join("") : `<p class="muted">아직 실행한 작업이 없습니다.</p>`;
     // 작업 목록의 각 버튼에 상세 조회 진입 동작을 연결한다.
     document.querySelectorAll("[data-job]").forEach((button) => {
       // 클릭 시 적재 화면으로 이동해 해당 작업의 최신 상태를 불러온다.
@@ -125,6 +126,7 @@ function renderOptions(payload) {
   $("maxUpload").textContent = payload.max_upload_mb;
   // 비활성 DB 대상은 보이지만 선택되지 않도록 option으로 변환한다.
   $("targetSelect").innerHTML = payload.targets.map((item) => `<option value="${escapeHtml(item.id)}" ${item.enabled ? "" : "disabled"}>${escapeHtml(item.label)}${item.enabled ? "" : " (비활성)"}</option>`).join("");
+  $("publicationKindSelect").innerHTML = payload.publication_kinds.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`).join("");
   // 적재 정책은 서버가 제공한 순서 그대로 선택 option으로 만든다.
   $("loadModeSelect").innerHTML = payload.load_modes.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`).join("");
   // 첫 활성 모델을 기본으로 보여주는 라디오 선택지를 렌더링한다.
@@ -162,7 +164,7 @@ $("ingestionForm").addEventListener("submit", async (event) => {
   event.preventDefault(); $("formError").hidden = true; $("submitButton").disabled = true;
   const form = new FormData(); const file = $("fileInput").files[0];
   if (!file) { $("formError").hidden = false; $("formError").textContent = "HWPX 파일을 선택하세요."; $("submitButton").disabled = false; return; }
-  form.append("file", file); form.append("year", $("yearInput").value); form.append("title", $("titleInput").value); form.append("pub_no", $("pubNoInput").value); form.append("target", $("targetSelect").value); form.append("load_mode", $("loadModeSelect").value); form.append("embedding_model", document.querySelector("input[name=embedding_model]:checked").value);
+  form.append("file", file); form.append("year", $("yearInput").value); form.append("title", $("titleInput").value); form.append("publication_kind", $("publicationKindSelect").value); form.append("pub_no", $("pubNoInput").value); form.append("target", $("targetSelect").value); form.append("load_mode", $("loadModeSelect").value); form.append("embedding_model", document.querySelector("input[name=embedding_model]:checked").value);
   // 작업이 완료 또는 실패할 때까지 상세 상태를 1초 간격으로 갱신한다.
   try { const job = await (await api(`${adminApiBasePath}/jobs`, { method:"POST", body:form })).json(); renderJob(job); await loadJobs(); pollTimer = setInterval(() => loadJob(job.job_id).catch(console.error), 1000); }
   catch (error) { $("formError").hidden = false; $("formError").textContent = error.message; $("submitButton").disabled = false; }
