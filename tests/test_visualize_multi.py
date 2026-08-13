@@ -123,8 +123,8 @@ class MultiSourceVisualizeTests(unittest.TestCase):
         )
 
         self.assertTrue(spec["ok"])
-        # 명과 억원은 한 축에 못 올려 계열마다 mark를 나누는 콤보 차트가 된다.
-        self.assertEqual(spec["chart"]["type"], "combo")
+        # 명과 억원은 한 축에 못 올린다. 지역 축에는 흐름이 없으므로 지표마다 칸을 나눈다.
+        self.assertEqual(spec["chart"]["type"], "paired_panels")
         self.assertEqual([item["label"] for item in spec["chart"]["series"]], ["인구", "채무"])
         # 합계·전국 행은 개별 지역과 중복되므로 축에서 빠진다.
         self.assertEqual(
@@ -135,7 +135,8 @@ class MultiSourceVisualizeTests(unittest.TestCase):
         )
         # 첫 표의 행 순서가 곧 축 순서다(Vega-Lite 기본 가나다순 정렬에 밀리지 않도록 명시한다).
         self.assertEqual(spec["chart"]["category_order"], ["서울", "부산", "세종"])
-        self.assertEqual(build_vega_lite_spec(spec)["encoding"]["x"]["sort"], ["서울", "부산", "세종"])
+        panels = build_vega_lite_spec(spec)["vconcat"]
+        self.assertEqual(panels[0]["encoding"]["x"]["sort"], ["서울", "부산", "세종"])
 
     # 두 표의 값을 x축과 y축으로 짝지어 산점도를 만들어야 한다.
     def test_scatter_pairs_two_tables_into_x_and_y(self) -> None:
@@ -176,19 +177,18 @@ class MultiSourceVisualizeTests(unittest.TestCase):
         vega_lite = build_vega_lite_spec(spec)
 
         self.assertTrue(spec["chart"]["dual_axis"])
-        self.assertEqual(vega_lite["resolve"], {"scale": {"y": "independent"}})
-        first, second = vega_lite["layer"]
+        first, second = vega_lite["vconcat"]
         self.assertEqual(first["transform"][0]["filter"], {"field": "series", "oneOf": ["인구"]})
         self.assertEqual(first["encoding"]["y"]["title"], "인구 (명)")
-        self.assertEqual(first["encoding"]["y"]["axis"]["orient"], "left")
         self.assertEqual(second["encoding"]["y"]["title"], "채무 (억원)")
-        self.assertEqual(second["encoding"]["y"]["axis"]["orient"], "right")
-        # 첫 계열만 막대로 두고 둘째 계열은 선으로 겹쳐 어느 축을 읽어야 하는지 드러낸다.
+        # 지역 축에는 흐름이 없으므로 어느 칸도 선으로 잇지 않는다.
         self.assertEqual(first["layer"][0]["mark"]["type"], "bar")
-        self.assertEqual(second["layer"][0]["mark"]["type"], "line")
-        # 축을 나누면 두 계열이 같은 높이에 놓이기 쉬워 값 라벨 자리를 달리한다.
-        self.assertEqual(first["layer"][1]["mark"]["baseline"], "bottom")
-        self.assertEqual(second["layer"][1]["mark"]["align"], "left")
+        self.assertEqual(second["layer"][0]["mark"]["type"], "bar")
+        # 항목 이름은 맨 아래 칸에만 적어 위 칸의 눈금이 아래 칸 막대와 붙지 않게 한다.
+        self.assertFalse(first["encoding"]["x"]["axis"]["labels"])
+        self.assertNotIn("axis", second["encoding"]["x"])
+        # 두 칸이 같은 항목 순서를 써야 위아래로 견줄 수 있다.
+        self.assertEqual(first["encoding"]["x"]["sort"], second["encoding"]["x"]["sort"])
 
     # 단위가 같고 크기도 비슷하면 한 축에 나란히 그린다.
     def test_same_unit_keeps_single_value_axis(self) -> None:
@@ -318,7 +318,7 @@ class MultiSourceVisualizeTests(unittest.TestCase):
             query="지역별 재난관리기금 적립액과 자연재난 피해액을 한 그래프에",
         )
 
-        self.assertEqual(spec["chart"]["type"], "combo")
+        self.assertEqual(spec["chart"]["type"], "paired_panels")
         self.assertTrue(spec["chart"]["dual_axis"])
         # 눈금이 갈렸다는 사실과, 그 원인이 단위 표기일 수 있다는 점을 함께 알린다.
         self.assertTrue(any("눈금이 서로 다르므로" in warning for warning in spec["warnings"]))

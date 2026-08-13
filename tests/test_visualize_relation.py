@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""한 표에서 고른 두 지표의 관계를 산점도와 이중 축으로 그리는지 검증한다."""
+"""한 표에서 고른 두 지표의 관계를 산점도와 나눈 칸으로 그리는지 검증한다."""
 import unittest
 
 from app.tools.service.visualization.chart_spec_builder import build_plot_spec
@@ -153,7 +153,43 @@ class SharedUnitAxisSplitTests(unittest.TestCase):
         )
 
         self.assertTrue(spec["chart"]["dual_axis"])
-        self.assertEqual(spec["chart"]["type"], "combo")
+        # 지역 축이라 막대와 선을 겹치지 않고 지표마다 칸을 나눈다.
+        self.assertEqual(spec["chart"]["type"], "paired_panels")
+
+
+class CategoryAxisComboTests(unittest.TestCase):
+    # 선은 시간의 흐름을 그리는 mark다. 시도 축에 콤보를 요청해도 막대와 선을 겹치지 않는다.
+    def test_combo_request_on_region_axis_becomes_panels(self) -> None:
+        spec = build_spec(
+            [
+                {"column": DISTRICT_COUNT, "label": "대상지구 수"},
+                {"column": WORKING_EXPENSES, "label": "사업비"},
+            ],
+            chart_type="combo",
+        )
+
+        self.assertEqual(spec["chart"]["type"], "paired_panels")
+        self.assertTrue(spec["chart"]["dual_axis"])
+        self.assertIn("칸마다 눈금이 다르므로", spec["chart"]["reason"])
+
+    # 나눈 칸은 지표마다 자기 값 축을 쓰고, 항목 순서는 두 칸이 같아야 한다.
+    def test_panels_share_the_category_axis(self) -> None:
+        spec = build_spec(
+            [
+                {"column": DISTRICT_COUNT, "label": "대상지구 수"},
+                {"column": WORKING_EXPENSES, "label": "사업비"},
+            ],
+            chart_type="combo",
+        )
+        first, second = build_vega_lite_spec(spec)["vconcat"]
+
+        self.assertEqual(first["encoding"]["y"]["title"], "대상지구 수 (개소)")
+        self.assertEqual(second["encoding"]["y"]["title"], "사업비 (백만원)")
+        self.assertEqual(first["layer"][0]["mark"]["type"], "bar")
+        self.assertEqual(second["layer"][0]["mark"]["type"], "bar")
+        self.assertEqual(first["encoding"]["x"]["sort"], second["encoding"]["x"]["sort"])
+        # 칸을 두 개 쌓아도 한 장짜리 차트만큼만 자리를 쓰도록 칸 높이를 정해 보낸다.
+        self.assertTrue(all(panel["height"] > 0 for panel in (first, second)))
 
 
 if __name__ == "__main__":

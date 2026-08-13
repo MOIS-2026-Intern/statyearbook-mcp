@@ -50,7 +50,7 @@ MAX_VALUE_HEADROOM = 0.4
 # 값을 그대로 라벨로 붙이는 차트. 순위·구성비처럼 라벨 규칙이 따로 있는 차트는 뺀다.
 VALUE_LABEL_CHARTS = frozenset({
     "bar", "grouped_bar", "line", "area", "scatter",
-    "combo", "lollipop", "diverging_bar", "waterfall", "dumbbell",
+    "combo", "paired_panels", "lollipop", "diverging_bar", "waterfall", "dumbbell",
 })
 # 라벨을 줄일 때 쓰는 큰 수 단위. 큰 단위부터 본다.
 COMPACT_UNITS = ((10**12, "조"), (10**8, "억"), (10**4, "만"))
@@ -752,6 +752,53 @@ def _dumbbell_view(
     return {"layer": layers}
 
 
+# 순서 없는 범주 축에서 단위가 다른 지표를 나눠 그릴 때 한 칸에 주는 높이다.
+# 두 칸을 합쳐도 한 장짜리 차트보다 크게 늘어나지 않도록 한 칸을 낮게 잡는다.
+PANEL_HEIGHT_PX = 170
+
+
+# 지표마다 칸을 위아래로 나눠 각자의 값 축에 막대로 그린다.
+# 이중 축 콤보와 달리 눈금을 임의로 맞춰 겹치지 않으므로 두 계열이 만나는 자리에 없는 뜻이
+# 생기지 않고, 선이 범주 사이를 잇지 않아 흐름으로 오해되지도 않는다. x축은 두 칸이 같은
+# 항목 순서를 쓰므로 위아래로 견주는 읽기는 그대로 된다.
+def _paired_panels_view(chart: dict[str, Any], x_is_year: bool) -> dict[str, Any]:
+    series = chart["series"]
+    labels = [item["label"] for item in series]
+    panels: list[dict[str, Any]] = []
+    for index, item in enumerate(series):
+        label = item["label"]
+        axis_title = _series_axis_title(item)
+        category_axis = _category_axis(chart, x_is_year)
+        if index < len(series) - 1:
+            # 항목 이름은 맨 아래 칸에만 적는다. 칸마다 되풀이하면 위 칸의 눈금이 아래 칸
+            # 막대와 붙어 어느 칸의 축인지 읽기 어려워진다.
+            category_axis = {**category_axis, "axis": {"labels": False, "ticks": False, "title": None}}
+        tooltip = [
+            {"field": "x", "type": "ordinal" if x_is_year else "nominal", "title": ""},
+            {"field": "value", "type": "quantitative", "title": axis_title, "format": VALUE_FORMAT},
+        ]
+        marks: list[dict[str, Any]] = [
+            {"mark": {"type": "bar", "cornerRadiusEnd": 3}, "encoding": {"tooltip": tooltip}},
+        ]
+        if chart.get("value_labels", True):
+            marks.append({
+                "mark": {"type": "text", "fontSize": LABEL_FONT_SIZE, "dy": -6, "baseline": "bottom"},
+                "encoding": {"text": _value_text(chart)},
+            })
+        panels.append({
+            "height": PANEL_HEIGHT_PX,
+            "transform": [{"filter": {"field": "series", "oneOf": [label]}}],
+            "encoding": {
+                "x": category_axis,
+                "y": {"field": "value", "type": "quantitative", "title": axis_title},
+                "color": {**_series_color(labels, COMBO_COLORS), "legend": None},
+            },
+            "layer": marks,
+        })
+    # 칸을 나눠 그린 계열은 축 제목이 곧 계열 이름이라 범례가 같은 말을 되풀이한다.
+    return {"vconcat": panels, "spacing": 12}
+
+
 # 여러 표에서 짝지은 두 지표를 항목 이름과 함께 점으로 그린다.
 def _relation_scatter_view(chart: dict[str, Any]) -> dict[str, Any]:
     x_title = chart.get("x_title") or chart.get("x") or ""
@@ -812,6 +859,8 @@ def _vega_view(chart: dict[str, Any], has_series: bool, x_is_year: bool) -> dict
 
     if ctype == "scatter" and chart.get("point_label"):
         return _relation_scatter_view(chart)
+    if ctype == "paired_panels" and chart.get("series"):
+        return _paired_panels_view(chart, x_is_year)
     if (ctype == "combo" or chart.get("dual_axis")) and chart.get("series"):
         return _combo_view(chart, x_is_year)
     if ctype == "diverging_bar":
@@ -1194,8 +1243,8 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
                 chart["value_axis_max"] = largest / (1 - share)
 
     chart = {**chart, **_add_derived_fields(chart["type"], values)}
-    if chart["type"] == "combo" and not chart.get("series"):
-        # 한 표 안의 계열을 콤보로 그릴 때는 계열 목록을 레코드에서 세운다.
+    if chart["type"] in {"combo", "paired_panels"} and not chart.get("series"):
+        # 한 표 안의 계열을 콤보나 나눈 칸으로 그릴 때는 계열 목록을 레코드에서 세운다.
         chart["series"] = [
             {"label": label, "unit": chart.get("unit")}
             for label in dict.fromkeys(

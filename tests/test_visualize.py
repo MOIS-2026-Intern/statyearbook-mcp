@@ -468,8 +468,8 @@ class ChartSelectionTests(unittest.TestCase):
         self.assertEqual(spec["chart"]["type"], "line")
         self.assertEqual(spec["transform"]["selected_category"], "서울")
 
-    # 한 표 안의 계열도 콤보로 그릴 수 있어야 하며, 계열 목록은 레코드에서 세운다.
-    def test_combo_builds_series_from_records(self) -> None:
+    # 선은 시간의 흐름을 나타내는 mark다. 지역처럼 순서 없는 축에서는 막대를 나란히 놓아야 한다.
+    def test_combo_on_category_axis_becomes_grouped_bar(self) -> None:
         spec = build_plot_spec(
             STACKED_TABLE,
             "지역별 성별 인원",
@@ -482,14 +482,12 @@ class ChartSelectionTests(unittest.TestCase):
         )
         vega_lite = build_vega_lite_spec(spec)
 
-        self.assertEqual(spec["chart"]["type"], "combo")
-        first, second = vega_lite["layer"]
-        self.assertEqual(first["transform"][0]["filter"], {"field": "series", "oneOf": ["남자"]})
-        self.assertEqual(first["layer"][0]["mark"]["type"], "bar")
-        self.assertEqual(second["layer"][0]["mark"]["type"], "line")
-        # 축을 나누지 않았으므로 두 계열이 같은 값 축을 쓴다.
+        self.assertEqual(spec["chart"]["type"], "grouped_bar")
+        self.assertIn("선이 흐름처럼 잘못 읽히므로", spec["chart"]["reason"])
+        # 단위도 규모도 같은 두 계열이라 축을 나누지 않고 한 축에 나란히 둔다.
+        self.assertFalse(spec["chart"]["dual_axis"])
         self.assertNotIn("resolve", vega_lite)
-        self.assertEqual(first["encoding"]["y"]["title"], second["encoding"]["y"]["title"])
+        self.assertNotIn("vconcat", vega_lite)
 
     # 지역처럼 순서가 없는 축을 선으로 이으면 없는 추세가 보이므로 막대로 바꿔야 한다.
     def test_line_request_on_unordered_categories_falls_back_to_bars(self) -> None:
