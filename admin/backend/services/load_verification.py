@@ -42,10 +42,11 @@ class YearbookVerificationService:
             if profile_key:
                 cur.execute(
                     """
-                    SELECT COUNT(*) FROM statistics
-                    JOIN publications p ON p.pub_id = statistics.pub_id
-                    WHERE p.publication_kind = %s AND year = %s AND embedding IS NOT NULL
-                      AND embedding_profile_key = %s
+                    SELECT COUNT(*) FROM statistics s
+                    JOIN publications p ON p.pub_id = s.pub_id
+                    WHERE p.publication_kind = %s AND s.year = %s
+                      AND s.embedding IS NOT NULL
+                      AND s.embedding_profile_key = %s
                     """,
                     (publication_kind, year, profile_key),
                 )
