@@ -188,8 +188,6 @@ SEARCH_TABLES_RESULT_PROMPT = """
 search_tables 결과 응답 형식:
 - Markdown 표를 답변에 넣을 때는 search_tables 결과의 tables[].table_md 문자열을 그대로 복사합니다.
   행, 열, 줄바꿈, 파이프(|) 개수, 셀 값을 직접 재작성하거나 열을 합치지 않습니다.
-- table_md_is_preview가 true이면 전체 표가 아니라 일부 행 미리보기임을 밝히고, 누락된 행의 수는
-  omitted_data_rows를 사용합니다. 미리보기에 없는 지역·항목·수치는 추측하지 않습니다.
 - 여러 수치를 비교하거나 표 원문을 보여줄 때는 반환된 table_md 범위 안에서만 Markdown 표 형식을 사용합니다.
 - 표 머리글과 항목명을 다듬어야 하는 경우에도 원문 table_md를 직접 고치지 말고 표 밖의 설명 문장으로만 보충합니다.
 - 기준일은 반드시 도구 결과의 base_date만 사용하며, 발간연도나 설명 문구로 분기·월 기준을 추론하지 않습니다.

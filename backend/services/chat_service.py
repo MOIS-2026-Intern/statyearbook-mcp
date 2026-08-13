@@ -596,7 +596,6 @@ def _tool_summary(result: dict[str, Any]) -> str:
 
 # structuredContent를 대신할 안내로, 같은 내용을 두 번 싣지 않는다는 사실을 모델에 알린다.
 _STRUCTURED_RESULT_TEXT = "도구 결과는 structuredContent에 있습니다."
-_TABLE_PREVIEW_DATA_ROWS = 12
 
 
 # 후속 판단에 필요한 핵심만 모델에 넘기고 프런트엔드 trace용 원본은 보존한다.
@@ -612,15 +611,14 @@ def _model_result_for_tool(tool_name: str | None, result: dict[str, Any]) -> dic
     if structured is None:
         return result
 
-    if tool_name == "search_tables":
-        return _search_tables_model_result(result, structured)
-
     # MCP는 같은 결과를 정렬된 JSON 텍스트와 structuredContent로 두 번 싣는다. 목록처럼 큰
     # 결과는 이 중복만으로 tool_output_max_chars를 넘겨 모델이 뒷부분을 아예 못 보게 된다.
     return _with_summary_text(
         result,
         structured,
-        _STRUCTURED_RESULT_TEXT,
+        _search_tables_text(structured)
+        if tool_name == "search_tables"
+        else _STRUCTURED_RESULT_TEXT,
     )
 
 
@@ -723,85 +721,6 @@ def _visualize_model_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# search_tables는 큰 Markdown 표 하나만으로 모델 입력 한도를 넘기기 쉽다. 한도에서 잘린 표를
-# 모델이 다시 조립하면 행 구분과 파이프 개수가 깨지므로, 모델에는 완성된 행 단위 미리보기만 준다.
-def _search_tables_model_result(
-    result: dict[str, Any],
-    structured: dict[str, Any],
-) -> dict[str, Any]:
-    compact = _select_keys(
-        structured,
-        "found",
-        "stat_id",
-        "publication_kind",
-        "ref_id",
-        "publication_year",
-        "chapter_no",
-        "section_no",
-        "level3_no",
-        "level4_no",
-        "chapter",
-        "section",
-        "level3_title",
-        "level4_title",
-        "title_ko",
-        "title_en",
-        "unit",
-        "base_date",
-        "page_start",
-    )
-    for key in ("source", "footnotes"):
-        value = structured.get(key)
-        if isinstance(value, list):
-            compact[key] = value
-
-    tables = structured.get("tables")
-    if isinstance(tables, list):
-        compact["tables"] = [_compact_table_for_model(table) for table in tables]
-    elif structured.get("table_md"):
-        compact["tables"] = [_compact_table_for_model(structured)]
-
-    return _with_summary_text(result, compact, _search_tables_text(compact))
-
-
-def _compact_table_for_model(table: Any) -> dict[str, Any]:
-    if not isinstance(table, dict):
-        return {"value": table}
-
-    compact = _select_keys(table, "seq", "table_handle", "caption", "n_rows", "n_cols")
-    table_md = str(table.get("table_md") or "")
-    preview, preview_rows, omitted_rows = _markdown_table_preview(
-        table_md,
-        _TABLE_PREVIEW_DATA_ROWS,
-    )
-    compact["table_md"] = preview
-    compact["table_md_is_preview"] = omitted_rows > 0
-    compact["preview_data_rows"] = preview_rows
-    compact["omitted_data_rows"] = omitted_rows
-    for key in (
-        "row_label_query",
-        "matched_row_count",
-        "matched_rows_truncated",
-        "matched_rows",
-        "matched_rows_md",
-    ):
-        if key in table:
-            compact[key] = table[key]
-    return compact
-
-
-def _markdown_table_preview(table_md: str, max_data_rows: int) -> tuple[str, int, int]:
-    lines = [line.strip() for line in table_md.splitlines() if line.strip()]
-    table_lines = [line for line in lines if line.startswith("|")]
-    if len(table_lines) <= 2:
-        return "\n".join(table_lines), max(0, len(table_lines) - 2), 0
-
-    header = table_lines[:2]
-    data_rows = table_lines[2:]
-    kept_rows = data_rows[:max_data_rows]
-    return "\n".join([*header, *kept_rows]), len(kept_rows), len(data_rows) - len(kept_rows)
-
-
 # 표 본문이 없는 통계표는 조회 자체는 성공해 정상 결과처럼 보이므로 문구로 분명히 알린다.
 # 그대로 두면 모델이 수치를 찾아 같은 통계표 주변을 계속 뒤지며 도구 호출을 낭비한다.
 def _search_tables_text(structured: dict[str, Any]) -> str:
@@ -811,11 +730,10 @@ def _search_tables_text(structured: dict[str, Any]) -> str:
             "없으므로, 수치가 필요하면 has_tables가 true인 다른 통계표를 확인하세요."
         )
     return (
-        "통계표 원문 미리보기와 메타데이터를 조회했습니다. 답변에 Markdown 표를 넣을 때는 "
+        "통계표 원문과 메타데이터를 조회했습니다. 답변에 Markdown 표를 넣을 때는 "
         "structuredContent.tables[].table_md를 행, 열, 줄바꿈, 파이프 개수를 바꾸지 말고 그대로 "
-        "복사하세요. table_md_is_preview가 true이면 전체 표가 아니라 일부 행 미리보기입니다. "
-        "matched_rows가 있으면 row_label에 맞춰 원본 표에서 추출한 행이므로 미리보기보다 우선해서 "
-        "답변 근거로 사용하세요."
+        "복사하세요. table_md에는 표의 모든 행이 들어 있으므로 빠진 행을 row_label로 다시 "
+        "조회할 필요가 없습니다."
     )
 
 

@@ -519,8 +519,10 @@ class SearchTablesResultTextTests(unittest.TestCase):
         )
         return {"seq": 1, "n_rows": rows, "n_cols": 2, "table_md": table_md}
 
-    # 큰 표를 모델 입력 한도에서 중간 절단하면 Markdown 행이 깨지므로 완성된 행 단위로만 넘긴다.
-    def test_compacts_large_tables_to_a_valid_markdown_preview(self) -> None:
+    # 표 행을 일부만 넘기면 모델이 빠진 행을 row_label로 한 행씩 되불러 같은 표를 몇 번씩 다시
+    # 조회하고 그 값을 손으로 옮겨 적는다. tool_output_max_chars가 표 하나를 통째로 담을 만큼
+    # 넉넉하므로 행을 미리 솎지 않고 원문 표 전체를 넘긴다.
+    def test_passes_every_table_row_to_the_model(self) -> None:
         result = _model_result_for_tool(
             "search_tables",
             {
@@ -528,7 +530,7 @@ class SearchTablesResultTextTests(unittest.TestCase):
                     "found": True,
                     "stat_id": 329,
                     "title_ko": "생활인구",
-                    "tables": [self._table(15)],
+                    "tables": [self._table(40)],
                 },
                 "isError": False,
             },
@@ -536,23 +538,11 @@ class SearchTablesResultTextTests(unittest.TestCase):
 
         table = result["structuredContent"]["tables"][0]
 
-        self.assertEqual(table["preview_data_rows"], 12)
-        self.assertEqual(table["omitted_data_rows"], 3)
-        self.assertTrue(table["table_md_is_preview"])
-        self.assertEqual(
-            table["table_md"],
-            "\n".join(
-                [
-                    "| 지역 | 값 |",
-                    "| --- | --- |",
-                    *[f"| 행 {index} | {index} |" for index in range(12)],
-                ]
-            ),
-        )
-        self.assertNotIn("행 12", table["table_md"])
+        self.assertEqual(table["table_md"], self._table(40)["table_md"])
+        self.assertIn("| 행 39 | 39 |", table["table_md"])
 
-    # 행 미리보기 밖에 있는 요청 행은 matched_rows로 유지해 모델이 답변에 쓸 수 있어야 한다.
-    def test_keeps_matched_rows_even_when_they_are_outside_preview(self) -> None:
+    # row_label로 뽑은 행은 표 원문과 함께 그대로 남아야 지역을 지목한 질문에 쓸 수 있다.
+    def test_keeps_matched_rows_alongside_the_full_table(self) -> None:
         source_table = self._table(15)
         source_table.update({
             "row_label_query": "행 12",
@@ -576,8 +566,7 @@ class SearchTablesResultTextTests(unittest.TestCase):
         )
         table = result["structuredContent"]["tables"][0]
 
-        self.assertTrue(table["table_md_is_preview"])
-        self.assertNotIn("행 12", table["table_md"])
+        self.assertIn("| 행 12 | 12 |", table["table_md"])
         self.assertEqual(table["matched_rows"], [{"지역": "행 12", "값": "12"}])
         self.assertIn("| 행 12 | 12 |", table["matched_rows_md"])
 
