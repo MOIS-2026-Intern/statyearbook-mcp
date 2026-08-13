@@ -69,6 +69,7 @@ VALUE_SORTED_TYPES = {
     "diverging_bar",
     "dumbbell",
     "combo",
+    "paired_panels",
     "donut",
 }
 # 부분이 모여 전체를 이루는 차트는 합계 범주를 함께 그리면 두 번 세게 된다.
@@ -226,6 +227,13 @@ def _correct_chart(
         return "bar", "히트맵에는 두 개의 범주 축이 필요해 막대그래프로 대체했습니다."
     if requested_type in {"stacked_bar", "stacked_bar_100", "dumbbell", "bump", "slope", "combo"} and not has_group:
         return ("line" if x_is_year else "bar"), "요청한 차트는 계열이 둘 이상 필요해 단일 계열 차트로 대체했습니다."
+    if requested_type == "combo" and not x_is_year:
+        # 여기서 칸을 나누지 않고 그룹 막대로 되돌린다. 단위나 규모가 갈려 한 축에 못 두는지는
+        # 뒤에서 계열의 단위와 값을 보고 판단하며, 그때 칸을 나눈 차트로 바뀐다.
+        return "grouped_bar", (
+            "막대와 선을 겹치는 콤보는 선이 시간의 흐름을 나타낼 때 쓰는 차트입니다. 항목 사이에 "
+            "순서가 없는 범주 축이라 선이 흐름처럼 잘못 읽히므로 막대를 나란히 놓았습니다."
+        )
     if requested_type == "dumbbell" and len(series) != 2:
         return "grouped_bar", "아령 차트는 계열이 정확히 두 개여야 해 그룹 막대그래프로 대체했습니다."
     if requested_type in {"bump", "slope"} and not x_is_year:
@@ -288,28 +296,48 @@ def needs_axis_split(
     return series_scale_ratio(series, records) >= threshold
 
 
-# 단위가 갈리는 계열은 계열마다 mark를 달리하는 콤보로 바꿔 값 축을 좌우로 나눈다.
+# 이중 축 콤보는 x축에 시간의 흐름이 있을 때만 뜻이 통한다. 시도처럼 순서가 없는 범주 축에서는
+# 선이 지역과 지역 사이를 잇는 흐름처럼 보이고, 좌우 두 축의 눈금을 임의로 맞춰 놓은 탓에 막대와
+# 선이 만나는 자리가 뜻이 있는 것처럼 읽힌다. 그래서 범주 축에서는 위아래 두 칸으로 나눠
+# 지표마다 자기 값 축에 막대로 그린다. x축은 두 칸이 그대로 맞춰져 있어 견주기는 그대로 된다.
+def split_axis_chart_type(x_is_year: bool) -> str:
+    return "combo" if x_is_year else "paired_panels"
+
+
+# 단위가 갈리는 계열은 값 축을 계열마다 나눈다. 시간 축이면 mark를 달리하는 콤보로, 범주 축이면
+# 위아래로 나눈 두 칸으로 그린다.
 def apply_axis_split(
     chart_type: str,
     series: list[dict[str, Any]],
     records: list[dict[str, Any]] = (),
+    x_is_year: bool = False,
 ) -> tuple[str, bool]:
+    # 이미 칸을 나누기로 정한 차트는 칸마다 값 축이 따로 있으므로 규모를 다시 따지지 않는다.
+    if chart_type == "paired_panels":
+        return chart_type, True
     if chart_type not in {"bar", "grouped_bar", "line", "area", "combo"}:
         return chart_type, False
     if not needs_axis_split(series, records):
         return chart_type, False
-    return "combo", True
+    return split_axis_chart_type(x_is_year), True
 
 
 # 축을 나눈 까닭은 단위와 규모 중 무엇이 갈랐느냐에 따라 다르다. 규모 때문에 나눈 축은
 # 눈금이 서로 달라, 막대 높이를 그대로 견주면 안 된다는 것까지 알려야 오해가 없다.
-def axis_split_reason(series: list[dict[str, Any]]) -> str:
+def axis_split_reason(series: list[dict[str, Any]], chart_type: str = "combo") -> str:
     units = [clean_label(item.get("unit")) for item in series]
-    if all(units) and len(set(units)) > 1:
-        return "지표마다 단위가 달라 값 축을 좌우로 나누고 계열별로 mark를 달리했습니다."
+    cause = (
+        "지표마다 단위가 달라" if all(units) and len(set(units)) > 1
+        else "두 지표의 규모가 크게 달라 한 축에 두면 작은 쪽이 보이지 않아"
+    )
+    if chart_type == "paired_panels":
+        return (
+            f"{cause} 계열마다 칸을 위아래로 나눠 자기 값 축에 막대로 그렸습니다. "
+            "칸마다 눈금이 다르므로 막대 높이를 칸 너머로 견주면 안 됩니다."
+        )
     return (
-        "두 지표의 규모가 크게 달라 한 축에 두면 작은 쪽이 보이지 않아 값 축을 좌우로 나누고 "
-        "계열별로 mark를 달리했습니다. 두 축의 눈금이 서로 다르므로 막대 높이를 그대로 견주면 안 됩니다."
+        f"{cause} 값 축을 좌우로 나누고 계열별로 mark를 달리했습니다. "
+        "두 축의 눈금이 서로 다르므로 막대 높이를 그대로 견주면 안 됩니다."
     )
 
 
@@ -996,7 +1024,9 @@ def _selection_plan_spec(
         if relation or any(record.get("series") == label for record in records)
     ]
     if has_group:
-        selected_type, dual_axis = apply_axis_split(selected_type, chart_series, records)
+        selected_type, dual_axis = apply_axis_split(
+            selected_type, chart_series, records, bool(x_profile and x_profile["is_year"]),
+        )
     else:
         dual_axis = False
     chart = {
@@ -1015,7 +1045,7 @@ def _selection_plan_spec(
             else f"표에서 고른 두 지표를 항목마다 계산해 '{derived_result.label}'을 그렸습니다."
             if derived_result is not None
             else "원본 표와 대조한 행·지표 선택 계획으로 차트 데이터를 구성했습니다."
-            + (f" {axis_split_reason(chart_series)}" if dual_axis else "")
+            + (f" {axis_split_reason(chart_series, selected_type)}" if dual_axis else "")
         ),
         "title": _chart_title(table, derived_result.label if derived_result else None),
         "x": "category" if relation else "metric" if single_row else x_column,
@@ -1133,9 +1163,9 @@ def _wide_year_selected_rows_spec(
         for label in labels
         if any(record.get("series") == label for record in records)
     ]
-    selected_type, dual_axis = apply_axis_split(selected_type, chart_series, records)
+    selected_type, dual_axis = apply_axis_split(selected_type, chart_series, records, True)
     if dual_axis:
-        reason = f"{reason} {axis_split_reason(chart_series)}"
+        reason = f"{reason} {axis_split_reason(chart_series, selected_type)}"
 
     chart = {
         "type": selected_type,
@@ -1718,9 +1748,11 @@ def build_plot_spec(
     ] if has_group and series_source == "metric" else []
     dual_axis = False
     if chart_series:
-        selected_type, dual_axis = apply_axis_split(selected_type, chart_series, records)
+        selected_type, dual_axis = apply_axis_split(
+            selected_type, chart_series, records, x_is_year,
+        )
         if dual_axis:
-            reason = f"{reason} {axis_split_reason(chart_series)}"
+            reason = f"{reason} {axis_split_reason(chart_series, selected_type)}"
 
     chart = {
         "type": selected_type,
