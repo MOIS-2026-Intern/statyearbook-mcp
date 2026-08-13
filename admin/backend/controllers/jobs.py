@@ -24,6 +24,14 @@ router = APIRouter(
 )
 
 
+# 업로드 확장자로 적재 파이프라인의 입력 형식을 결정한다. 통계연보는 HWPX 원본을 파싱하고,
+# 주요통계집은 미리 파싱해 둔 JSON 패키지를 공통 적재 포맷으로 변환한다.
+UPLOAD_INPUT_FORMATS = {
+    ".hwpx": "hwpx",
+    ".json": "major_statistics_json",
+}
+
+
 # 최근 관리자 적재 작업을 최신순으로 반환한다.
 @router.get("")
 def list_jobs(request: Request) -> list[dict]:
@@ -71,11 +79,19 @@ async def create_job(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     filename = Path(file.filename or ARTIFACT_NAMES.source_yearbook).name
-    if Path(filename).suffix.lower() != ".hwpx":
-        raise HTTPException(status_code=422, detail="only .hwpx files are accepted")
+    input_format = UPLOAD_INPUT_FORMATS.get(Path(filename).suffix.lower())
+    if input_format is None:
+        raise HTTPException(
+            status_code=422,
+            detail="only .hwpx or .json files are accepted",
+        )
 
     job_id, workspace = create_workspace(settings.workspace_dir)
-    input_path = workspace / ARTIFACT_NAMES.source_yearbook
+    input_path = workspace / (
+        ARTIFACT_NAMES.source_yearbook
+        if input_format == "hwpx"
+        else ARTIFACT_NAMES.source_json
+    )
     try:
         await UploadedYearbookService().save(
             file,
@@ -93,6 +109,7 @@ async def create_job(
         title=title.strip(),
         pub_no=(pub_no or "").strip() or None,
         publication_kind=publication_kind,
+        input_format=input_format,
         target=target,
         load_mode=load_mode,
         embedding_model=embedding_model,
