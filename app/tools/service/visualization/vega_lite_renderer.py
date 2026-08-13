@@ -56,10 +56,6 @@ VALUE_LABEL_CHARTS = frozenset({
 COMPACT_UNITS = ((10**12, "조"), (10**8, "억"), (10**4, "만"))
 # 부호를 붙여 읽는 증감 차트는 라벨 형식이 달라 줄이지 않고, 자리가 없으면 접기만 한다.
 SIGNED_LABEL_CHARTS = frozenset({"diverging_bar", "waterfall"})
-# 가로로 눕힐 수 있는 차트. 선·콤보는 방향을 바꿀 수 없어 가로 막대를 권하지 않는다.
-HORIZONTAL_CAPABLE_CHARTS = frozenset({
-    "bar", "grouped_bar", "lollipop", "diverging_bar", "waterfall", "dumbbell",
-})
 # 계열이 여럿이어도 라벨이 가로로 갈라지지 않는 차트. 그룹 막대와 달리 같은 x 위에 겹쳐 놓인다.
 STACKED_LABEL_CHARTS = frozenset({"line", "area", "scatter"})
 
@@ -1168,14 +1164,12 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
             else:
                 labels = None
                 chart["value_labels"] = False
-                advice = (
-                    " 가로 막대로 요청하면 값을 함께 표시할 수 있습니다."
-                    if chart["type"] in HORIZONTAL_CAPABLE_CHARTS
-                    else ""
-                )
+                # warnings는 모델이 읽는 자리다. 여기에 '가로 막대로 요청하면'처럼 다시 부를 방법을
+                # 적어 두면 모델이 그대로 따라 같은 데이터를 방향만 바꿔 한 번 더 그리고, 사용자
+                # 화면에는 같은 차트가 둘 남는다. 일어난 일만 적고 고쳐 부를 방법은 적지 않는다.
                 spec.setdefault("warnings", []).append(
                     f"항목이 {len({value.get('x') for value in values})}개라 값 라벨이 서로 겹쳐 "
-                    f"숨겼습니다. 값은 차트에 마우스를 올리면 볼 수 있습니다.{advice}"
+                    "숨겼습니다. 값은 차트에 마우스를 올리면 볼 수 있습니다."
                 )
         # 축을 나눈 차트는 계열마다 눈금이 달라 값만으로 라벨 높이를 가늠할 수 없다.
         if labels is not None and chart["type"] in STACKED_LABEL_CHARTS and not chart.get("dual_axis"):
