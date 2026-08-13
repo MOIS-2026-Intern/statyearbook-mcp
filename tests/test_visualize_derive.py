@@ -464,9 +464,9 @@ class DerivedMetricToolTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DerivedMetricRenderTests(unittest.TestCase):
-    # 값 라벨을 접었을 때 warnings에 다시 부를 방법을 적으면 모델이 그대로 따라 같은 데이터를
-    # 방향만 바꿔 한 번 더 그린다. 화면에는 같은 차트가 둘 남으므로 일어난 일만 적어야 한다.
-    def test_folded_value_labels_do_not_invite_another_call(self) -> None:
+    # 17개 시도쯤은 라벨이 조금 스치더라도 값을 적는 편이 낫다. tooltip에만 남기면 화면만 보고는
+    # 값을 하나도 읽을 수 없다.
+    def test_seventeen_regions_still_show_values(self) -> None:
         names = [
             "서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "경기",
             "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주",
@@ -484,12 +484,11 @@ class DerivedMetricRenderTests(unittest.TestCase):
             query="주민 1만 명당 정원",
             derive={"op": "per_capita", "per": 10000},
         )
-        spec["vega_lite"] = build_vega_lite_spec(spec)
+        vega_lite = build_vega_lite_spec(spec)
 
-        folded = [warning for warning in spec["warnings"] if "값 라벨이 서로 겹쳐" in warning]
-        self.assertTrue(folded, spec["warnings"])
-        self.assertNotIn("가로 막대로 요청", folded[0])
-        self.assertNotIn("요청하면", folded[0])
+        self.assertIsNot(spec["chart"].get("value_labels"), False)
+        self.assertFalse([w for w in spec["warnings"] if "값 라벨이 서로 겹쳐" in w])
+        self.assertEqual(vega_lite["layer"][1]["encoding"]["text"]["field"], "value")
 
     # 계열이 하나인 파생 지표에는 색 범례를 붙이지 않아야 한다.
     def test_rendered_chart_has_no_series_legend(self) -> None:

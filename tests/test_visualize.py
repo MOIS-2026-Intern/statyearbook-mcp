@@ -701,7 +701,12 @@ class ValueLabelTests(unittest.TestCase):
         self.assertEqual(len(vega_lite["layer"]), 1)
         tooltip_fields = [item["field"] for item in vega_lite["layer"][0]["encoding"]["tooltip"]]
         self.assertEqual(tooltip_fields, ["x", "series", "value"])
-        self.assertTrue(any("겹쳐" in warning for warning in spec["warnings"]))
+        # 접었다는 warnings에 다시 부를 방법을 적으면 모델이 그대로 따라 같은 데이터를 방향만 바꿔
+        # 한 번 더 그린다. 화면에는 같은 차트가 둘 남으므로 일어난 일만 적어야 한다.
+        folded = [warning for warning in spec["warnings"] if "겹쳐" in warning]
+        self.assertTrue(folded, spec["warnings"])
+        self.assertNotIn("가로 막대로 요청", folded[0])
+        self.assertNotIn("요청하면", folded[0])
 
     # 선그래프는 같은 연도의 라벨이 한 자리에 겹치므로 값이 붙은 쪽을 비워야 한다.
     def test_line_chart_blanks_labels_that_land_on_each_other(self) -> None:

@@ -41,9 +41,11 @@ STACK_LABEL_SIDE_PADDING_PX = 12
 
 # 프론트엔드가 차트에 주는 가로 폭. 값 라벨이 들어갈 자리를 이 폭으로 가늠한다.
 VIEW_WIDTH_PX = 640
-# 값 라벨 한 글자의 대략적인 폭과 이웃 라벨 사이에 남겨야 할 여백.
+# 값 라벨 한 글자의 대략적인 폭.
 LABEL_CHAR_WIDTH_PX = 7
-LABEL_GAP_PX = 6
+# 라벨이 이웃과 살짝 스치더라도 값이 보이는 편이 낫다. 항목 한 칸보다 이만큼까지 넓어도 그대로
+# 적고, 이 선을 넘어야 라벨을 접는다. 정확한 값은 tooltip에 그대로 남는다.
+LABEL_OVERLAP_TOLERANCE = 1.15
 # 가로 막대는 값을 막대 오른쪽에 적으므로 이만큼 떨어뜨리고, 축 끝에 라벨 자리를 남긴다.
 HORIZONTAL_LABEL_DX_PX = 8
 MAX_VALUE_HEADROOM = 0.4
@@ -81,11 +83,12 @@ def _label_slot_width(chart: dict[str, Any], values: list[dict[str, Any]]) -> fl
     return width
 
 
-# 가장 긴 라벨이 주어진 폭 안에 들어가는지 본다.
+# 가장 긴 라벨이 주어진 폭 안에 들어가는지 본다. 살짝 넘치는 정도는 들어가는 것으로 본다.
 def _labels_fit(labels: list[str], width: float) -> bool:
     if not labels:
         return True
-    return max(len(label) for label in labels) * LABEL_CHAR_WIDTH_PX + LABEL_GAP_PX <= width
+    longest = max(len(label) for label in labels) * LABEL_CHAR_WIDTH_PX
+    return longest <= width * LABEL_OVERLAP_TOLERANCE
 
 
 # 만·억 단위로 줄인 값의 자릿수를 정한다. 세 자리 정도만 남겨 라벨을 짧게 유지한다.
@@ -97,10 +100,9 @@ def _scaled_label(scaled: float) -> str:
     return f"{scaled:,.2f}"
 
 
-# 자리가 빠듯할 때 쓸 짧은 라벨을 만든다. 한 차트는 한 단위만 쓰며, 값 하나라도 그 단위에
+# 자리가 빠듯할 때 쓸 짧은 라벨을 만든다. 한 눈금은 한 단위만 쓰며, 값 하나라도 그 단위에
 # 못 미치면(0.12만처럼) 읽기 어려워지므로 줄이지 않는다.
-def _compact_labels(values: list[dict[str, Any]]) -> list[str] | None:
-    numbers = [float(value.get("value") or 0) for value in values]
+def _compact_group_labels(numbers: list[float]) -> list[str] | None:
     magnitudes = [abs(number) for number in numbers if number]
     if not magnitudes:
         return None
@@ -108,6 +110,55 @@ def _compact_labels(values: list[dict[str, Any]]) -> list[str] | None:
         if min(magnitudes) >= size:
             return [f"{_scaled_label(number / size)}{name}" for number in numbers]
     return None
+
+
+# 한 눈금에 놓인 값들의 라벨을 고른다. 값 그대로가 들어가면 그대로 쓰고, 자리가 모자라면
+# 만·억 단위로 줄여 본다. 줄여도 넘치면 None을 돌려 그 값들의 라벨을 비운다.
+def _fit_group_labels(
+    numbers: list[float],
+    width: float,
+    allow_compact: bool,
+) -> tuple[list[str], bool] | None:
+    raw = [_format_number(number) for number in numbers]
+    if _labels_fit(raw, width):
+        return raw, False
+    compact = _compact_group_labels(numbers) if allow_compact else None
+    if compact and _labels_fit(compact, width):
+        return compact, True
+    return None
+
+
+# 값 라벨을 만든다. 계열마다 값 축이 따로인 차트(칸을 나눈 차트·이중 축)는 계열별로 따로 고른다.
+# 자릿수가 다른 계열을 한 단위로 묶으면 작은 계열이 0.00에 눌리고, 한 계열이 길다는 이유로
+# 나머지 계열의 라벨까지 접히기 때문이다. 한 축을 함께 쓰는 계열은 서로 견줘야 하므로 함께 고른다.
+# 자리가 없는 계열은 그 계열만 라벨을 비우고 이름을 돌려준다(값은 tooltip에 그대로 남는다).
+def _fit_value_labels(
+    values: list[dict[str, Any]],
+    width: float,
+    chart: dict[str, Any],
+) -> tuple[list[str] | None, bool, list[str]]:
+    numbers = [float(value.get("value") or 0) for value in values]
+    allow_compact = chart["type"] not in SIGNED_LABEL_CHARTS
+    groups: dict[Any, list[int]] = {}
+    for index, value in enumerate(values):
+        key = value.get("series") if chart.get("dual_axis") else None
+        groups.setdefault(key, []).append(index)
+
+    labels = [""] * len(values)
+    custom = len(groups) > 1
+    hidden: list[str] = []
+    for key, indexes in groups.items():
+        fitted = _fit_group_labels([numbers[index] for index in indexes], width, allow_compact)
+        if fitted is None:
+            hidden.append(str(key))
+            custom = True
+            continue
+        for index, label in zip(indexes, fitted[0]):
+            labels[index] = label
+        custom = custom or fitted[1]
+    if len(hidden) == len(groups):
+        return None, False, hidden
+    return labels, custom, hidden
 
 
 # 계열이 여럿이면 같은 x에 라벨이 겹쳐 놓인다. 값이 비슷한 계열끼리는 세로로도 가까워
@@ -1197,29 +1248,21 @@ def build_vega_lite_spec(spec: dict[str, Any]) -> dict[str, Any] | None:
     # 만·억 단위로 줄여 보고, 그래도 안 들어가면 라벨을 접고 값은 tooltip에 남긴다.
     if values and chart.get("value_labels") is None and chart["type"] in VALUE_LABEL_CHARTS:
         width = _label_slot_width(chart, values)
-        labels: list[str] | None = [
-            _format_number(float(value.get("value") or 0)) for value in values
-        ]
-        custom = False
-        if not _labels_fit(labels, width):
-            # 축을 나눈 차트는 계열마다 값의 자릿수가 달라 한 단위로 줄이면 한쪽이 0에 눌린다.
-            compact = (
-                None
-                if chart.get("dual_axis") or chart["type"] in SIGNED_LABEL_CHARTS
-                else _compact_labels(values)
+        labels, custom, hidden = _fit_value_labels(values, width, chart)
+        if labels is None:
+            chart["value_labels"] = False
+            # warnings는 모델이 읽는 자리다. 여기에 '가로 막대로 요청하면'처럼 다시 부를 방법을
+            # 적어 두면 모델이 그대로 따라 같은 데이터를 방향만 바꿔 한 번 더 그리고, 사용자
+            # 화면에는 같은 차트가 둘 남는다. 일어난 일만 적고 고쳐 부를 방법은 적지 않는다.
+            spec.setdefault("warnings", []).append(
+                f"항목이 {len({value.get('x') for value in values})}개라 값 라벨이 서로 겹쳐 "
+                "숨겼습니다. 값은 차트에 마우스를 올리면 볼 수 있습니다."
             )
-            if compact and _labels_fit(compact, width):
-                labels, custom = compact, True
-            else:
-                labels = None
-                chart["value_labels"] = False
-                # warnings는 모델이 읽는 자리다. 여기에 '가로 막대로 요청하면'처럼 다시 부를 방법을
-                # 적어 두면 모델이 그대로 따라 같은 데이터를 방향만 바꿔 한 번 더 그리고, 사용자
-                # 화면에는 같은 차트가 둘 남는다. 일어난 일만 적고 고쳐 부를 방법은 적지 않는다.
-                spec.setdefault("warnings", []).append(
-                    f"항목이 {len({value.get('x') for value in values})}개라 값 라벨이 서로 겹쳐 "
-                    "숨겼습니다. 값은 차트에 마우스를 올리면 볼 수 있습니다."
-                )
+        elif hidden:
+            spec.setdefault("warnings", []).append(
+                f"{', '.join(hidden)} 값은 라벨이 서로 겹쳐 숨겼습니다. "
+                "값은 차트에 마우스를 올리면 볼 수 있습니다."
+            )
         # 축을 나눈 차트는 계열마다 눈금이 달라 값만으로 라벨 높이를 가늠할 수 없다.
         if labels is not None and chart["type"] in STACKED_LABEL_CHARTS and not chart.get("dual_axis"):
             custom = _blank_overlapping_labels(values, labels) or custom
