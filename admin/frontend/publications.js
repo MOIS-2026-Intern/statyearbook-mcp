@@ -15,6 +15,11 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+// 반기 코드를 화면에 보여 줄 한국어 이름으로 바꾼다. 반기가 없는 통계연보는 빈칸이다.
+function publicationPeriodLabel(period) {
+  return ({ H1: "상반기", H2: "하반기" })[period] || "-";
+}
+
 // 체크된 발간물 요소의 data 속성을 숫자 ID 목록으로 변환한다.
 function selectedPublicationIds() {
   return [...document.querySelectorAll("[data-publication-id]:checked")]
@@ -50,11 +55,12 @@ function renderPublications(rows) {
         <td class="checkbox-cell"><input type="checkbox" data-publication-id="${escapeHtml(publication.pub_id)}" aria-label="${escapeHtml(publication.title)} 선택" /></td>
         <td>${escapeHtml(publication.pub_id)}</td>
         <td>${escapeHtml(publication.publication_kind || "yearbook")}</td>
+        <td>${escapeHtml(publicationPeriodLabel(publication.period))}</td>
         <td>${escapeHtml(publication.year)}</td>
         <td>${escapeHtml(publication.pub_no || "-")}</td>
         <td class="publication-title">${escapeHtml(publication.title)}</td>
       </tr>`).join("")
-    : '<tr><td colspan="6" class="empty-table">등록된 publication이 없습니다.</td></tr>';
+    : '<tr><td colspan="7" class="empty-table">등록된 publication이 없습니다.</td></tr>';
   $("selectAllPublications").checked = false;
   updateSelectionState();
 }
@@ -70,7 +76,7 @@ export function configurePublicationTargets(targets) {
 // 선택 DB의 발간물을 조회해 표를 갱신하고 오류는 화면 안에 표시한다.
 export async function loadPublications() {
   $("publicationMessage").hidden = true;
-  $("publicationList").innerHTML = '<tr><td colspan="6" class="empty-table">목록을 불러오는 중입니다.</td></tr>';
+  $("publicationList").innerHTML = '<tr><td colspan="7" class="empty-table">목록을 불러오는 중입니다.</td></tr>';
   try {
     const target = encodeURIComponent($("publicationTargetSelect").value);
     const response = await api(`${adminApiBasePath}/publications?target=${target}`);
@@ -88,7 +94,7 @@ async function deleteSelectedPublications() {
   // 확인창에는 현재 선택 ID와 일치하는 발간물만 포함한다.
   const selected = publications.filter((publication) => pubIds.includes(publication.pub_id));
   // 각 선택 항목을 사람이 재확인할 수 있는 연도·제목 한 줄로 만든다.
-  const description = selected.map((publication) => `${publication.publication_kind || "yearbook"} ${publication.year} ${publication.title}`).join("\n");
+  const description = selected.map((publication) => `${publication.publication_kind || "yearbook"} ${publication.year}${publication.period ? " " + publicationPeriodLabel(publication.period) : ""} ${publication.title}`).join("\n");
   if (!window.confirm(`다음 발간물과 연결된 모든 데이터를 삭제합니다.\n\n${description}\n\n이 작업은 되돌릴 수 없습니다.`)) return;
 
   const button = $("deletePublications");

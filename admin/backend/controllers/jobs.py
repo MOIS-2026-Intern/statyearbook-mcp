@@ -15,21 +15,17 @@ from admin.backend.services.upload import (
 )
 from admin.backend.services.load_dml import YEARBOOK_LOAD_MODES
 from admin.backend.services.load_workspace import create_workspace
-from utils.publication_kind import normalize_publication_kind
+from utils.publication_kind import (
+    MAJOR_STATISTICS_KIND,
+    normalize_publication_kind,
+    normalize_publication_period,
+)
 
 
 router = APIRouter(
     prefix=f"{ADMIN_API_PREFIX}/jobs",
     dependencies=[Depends(authorize_admin)],
 )
-
-
-# 업로드 확장자로 적재 파이프라인의 입력 형식을 결정한다. 통계연보는 HWPX 원본을 파싱하고,
-# 주요통계집은 미리 파싱해 둔 JSON 패키지를 공통 적재 포맷으로 변환한다.
-UPLOAD_INPUT_FORMATS = {
-    ".hwpx": "hwpx",
-    ".json": "major_statistics_json",
-}
 
 
 # 최근 관리자 적재 작업을 최신순으로 반환한다.
@@ -56,6 +52,7 @@ async def create_job(
     title: str = Form(...),
     pub_no: str | None = Form(default=None),
     publication_kind: str = Form(default="yearbook"),
+    publication_period: str = Form(default=""),
     target: str | None = Form(default=None),
     load_mode: str = Form(default="reject"),
     embedding_model: str = Form(default="bge-m3"),
@@ -70,8 +67,19 @@ async def create_job(
         raise HTTPException(status_code=422, detail="invalid load mode")
     try:
         publication_kind = normalize_publication_kind(publication_kind)
+        publication_period = normalize_publication_period(publication_period)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if publication_kind == MAJOR_STATISTICS_KIND and not publication_period:
+        raise HTTPException(
+            status_code=422,
+            detail="주요통계집은 상반기(H1) 또는 하반기(H2)를 지정해야 합니다.",
+        )
+    if publication_kind != MAJOR_STATISTICS_KIND and publication_period:
+        raise HTTPException(
+            status_code=422,
+            detail="통계연보에는 발간 반기를 지정할 수 없습니다.",
+        )
     try:
         settings.target_dsn(target)
         settings.embedding_model(embedding_model)
@@ -79,19 +87,11 @@ async def create_job(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     filename = Path(file.filename or ARTIFACT_NAMES.source_yearbook).name
-    input_format = UPLOAD_INPUT_FORMATS.get(Path(filename).suffix.lower())
-    if input_format is None:
-        raise HTTPException(
-            status_code=422,
-            detail="only .hwpx or .json files are accepted",
-        )
+    if Path(filename).suffix.lower() != ".hwpx":
+        raise HTTPException(status_code=422, detail="only .hwpx files are accepted")
 
     job_id, workspace = create_workspace(settings.workspace_dir)
-    input_path = workspace / (
-        ARTIFACT_NAMES.source_yearbook
-        if input_format == "hwpx"
-        else ARTIFACT_NAMES.source_json
-    )
+    input_path = workspace / ARTIFACT_NAMES.source_yearbook
     try:
         await UploadedYearbookService().save(
             file,
@@ -109,7 +109,7 @@ async def create_job(
         title=title.strip(),
         pub_no=(pub_no or "").strip() or None,
         publication_kind=publication_kind,
-        input_format=input_format,
+        publication_period=publication_period,
         target=target,
         load_mode=load_mode,
         embedding_model=embedding_model,

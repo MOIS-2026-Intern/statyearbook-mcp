@@ -19,13 +19,14 @@ const ingestionStages = [
   ["verify", "결과 검증", "건수·모델 profile 확인"],
 ];
 const artifactLabels = { parsed_json:"파싱 JSON", review_markdown:"검수 Markdown", load_dml:"적재 SQL", embedding_dml:"제목 임베딩 SQL", table_embedding_dml:"표 검색 임베딩 SQL" };
-// 발간물 종류마다 받는 원본 형식이 다르다. 통계연보는 HWPX를 직접 파싱하고, 주요통계집은
-// 미리 파싱해 둔 JSON 패키지를 변환한다. 서버는 업로드 확장자로 입력 형식을 판별하므로
-// 종류를 바꿀 때 허용 확장자와 안내 문구, 기본 제목을 함께 맞춰 준다.
+// 두 발간물 모두 HWPX 원본을 직접 파싱한다. 계층 표기가 달라 파서만 다르며, 주요통계집은
+// 같은 해에 상반기·하반기 두 판이 나오므로 발간 반기를 함께 받아야 판이 구분된다.
+const UPLOAD_EXTENSION = ".hwpx";
 const publicationInputs = {
-  yearbook: { accept:".hwpx", format:"HWPX", panelTitle:"통계연보 파일", panelHint:"원본 HWPX 파일을 선택하세요.", titleSuffix:"행정안전통계연보" },
-  major_statistics: { accept:".json", format:"JSON", panelTitle:"주요통계집 파일", panelHint:"미리 파싱한 JSON 패키지를 선택하세요.", titleSuffix:"주요통계집" },
+  yearbook: { panelTitle:"통계연보 파일", panelHint:"원본 HWPX 파일을 선택하세요.", needsPeriod:false },
+  major_statistics: { panelTitle:"주요통계집 파일", panelHint:"원본 HWPX 파일을 선택하세요.", needsPeriod:true },
 };
+let publicationPeriodLabels = { "":"", H1:"상반기", H2:"하반기" };
 let currentJobId = null;
 let pollTimer = null;
 // 고정된 관리자 화면 요소를 ID로 조회한다.
@@ -134,6 +135,12 @@ function renderOptions(payload) {
   // 비활성 DB 대상은 보이지만 선택되지 않도록 option으로 변환한다.
   $("targetSelect").innerHTML = payload.targets.map((item) => `<option value="${escapeHtml(item.id)}" ${item.enabled ? "" : "disabled"}>${escapeHtml(item.label)}${item.enabled ? "" : " (비활성)"}</option>`).join("");
   $("publicationKindSelect").innerHTML = payload.publication_kinds.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`).join("");
+  // 반기 선택지와 이름은 서버가 정한 값을 그대로 쓴다.
+  const periods = payload.publication_periods || [];
+  if (periods.length) {
+    publicationPeriodLabels = Object.fromEntries([["", ""], ...periods.map((item) => [item.id, item.label])]);
+    $("publicationPeriodSelect").innerHTML = periods.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`).join("");
+  }
   // 적재 정책은 서버가 제공한 순서 그대로 선택 option으로 만든다.
   $("loadModeSelect").innerHTML = payload.load_modes.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`).join("");
   // 첫 활성 모델을 기본으로 보여주는 라디오 선택지를 렌더링한다.
@@ -147,24 +154,31 @@ function selectedPublicationInput() {
   return publicationInputs[$("publicationKindSelect").value] || publicationInputs.yearbook;
 }
 
-// 사용자가 직접 고친 제목은 덮어쓰지 않도록 기본 형식인지 확인한다.
-function isDefaultTitle(value) {
-  return !value.trim() || Object.values(publicationInputs).some((spec) => new RegExp(`^\\d{4} ${spec.titleSuffix}$`).test(value));
+// 선택한 종류·연도·반기로 만든 기본 제목이다. 주요통계집은 반기까지 제목에 넣는다.
+function defaultTitle() {
+  const year = $("yearInput").value;
+  if ($("publicationKindSelect").value !== "major_statistics") return `${year} 행정안전통계연보`;
+  return `${year}년 ${publicationPeriodLabels[$("publicationPeriodSelect").value] || ""} 주요통계집`.replace(/\s+/g, " ").trim();
 }
 
-// 발간물 종류에 맞게 허용 확장자·안내 문구·기본 제목을 맞추고 형식이 어긋난 선택은 비운다.
+// 사용자가 직접 고친 제목은 덮어쓰지 않도록 기본 형식인지 확인한다.
+function isDefaultTitle(value) {
+  if (!value.trim()) return true;
+  if (/^\d{4} 행정안전통계연보$/.test(value)) return true;
+  return /^\d{4}년 (상반기|하반기) 주요통계집$/.test(value);
+}
+
+// 발간물 종류에 맞게 안내 문구, 반기 입력 노출과 기본 제목을 맞춘다.
 function applyPublicationKind() {
   const spec = selectedPublicationInput();
-  $("fileInput").accept = spec.accept;
+  $("fileInput").accept = UPLOAD_EXTENSION;
   $("sourcePanelTitle").textContent = spec.panelTitle;
   $("sourcePanelHint").textContent = spec.panelHint;
-  $("uploadFormatLabel").textContent = spec.format;
-  if (isDefaultTitle($("titleInput").value)) $("titleInput").value = `${$("yearInput").value} ${spec.titleSuffix}`;
-  // 종류를 바꾸기 전에 고른 파일은 형식이 맞지 않으면 남겨 두지 않는다. 남겨 두면 확장자로
-  // 형식을 판별하는 서버가 종류와 어긋난 파서를 실행하게 된다.
-  if ($("fileInput").files[0] && !$("fileInput").files[0].name.toLowerCase().endsWith(spec.accept)) {
-    $("fileInput").value = ""; $("fileLabel").textContent = "파일을 끌어놓거나 클릭해 선택";
-  }
+  $("periodField").hidden = !spec.needsPeriod;
+  // 반기가 없는 발간물이 앞서 고른 반기 값을 그대로 보내지 않도록 비운다.
+  if (!spec.needsPeriod) $("publicationPeriodSelect").value = "";
+  else if (!$("publicationPeriodSelect").value) $("publicationPeriodSelect").value = "H1";
+  if (isDefaultTitle($("titleInput").value)) $("titleInput").value = defaultTitle();
 }
 
 // 서버 옵션과 기존 작업을 불러와 관리자 화면의 초기 상태를 구성한다.
@@ -174,9 +188,11 @@ async function initialize() {
 }
 
 // 기본 형식의 제목만 연도 입력에 맞춰 자동 갱신한다.
-$("yearInput").addEventListener("input", () => { if (isDefaultTitle($("titleInput").value)) $("titleInput").value = `${$("yearInput").value} ${selectedPublicationInput().titleSuffix}`; });
-// 발간물 종류를 바꾸면 업로드 형식과 안내 문구를 즉시 그 종류에 맞춘다.
+$("yearInput").addEventListener("input", () => { if (isDefaultTitle($("titleInput").value)) $("titleInput").value = defaultTitle(); });
+// 발간물 종류를 바꾸면 안내 문구와 반기 입력을 즉시 그 종류에 맞춘다.
 $("publicationKindSelect").addEventListener("change", applyPublicationKind);
+// 반기를 바꾸면 기본 제목도 그 반기로 맞춘다.
+$("publicationPeriodSelect").addEventListener("change", () => { if (isDefaultTitle($("titleInput").value)) $("titleInput").value = defaultTitle(); });
 // 교체 적재가 선택된 동안만 데이터 삭제 경고를 노출한다.
 $("loadModeSelect").addEventListener("change", () => { $("replaceWarning").hidden = $("loadModeSelect").value !== "replace"; });
 // 파일 선택 결과를 dropzone 라벨에 즉시 표시한다.
@@ -190,9 +206,8 @@ $("dropzone").addEventListener("dragleave", () => $("dropzone").classList.remove
 $("dropzone").addEventListener("drop", (event) => {
   event.preventDefault(); $("dropzone").classList.remove("dropzone--active");
   if (!event.dataTransfer.files.length) return;
-  const spec = selectedPublicationInput();
-  if (!event.dataTransfer.files[0].name.toLowerCase().endsWith(spec.accept)) {
-    $("formError").hidden = false; $("formError").textContent = `${spec.panelTitle}은 ${spec.format} 파일이어야 합니다.`; return;
+  if (!event.dataTransfer.files[0].name.toLowerCase().endsWith(UPLOAD_EXTENSION)) {
+    $("formError").hidden = false; $("formError").textContent = "업로드 파일은 HWPX 원본이어야 합니다."; return;
   }
   $("formError").hidden = true; $("fileInput").files = event.dataTransfer.files; $("fileLabel").textContent = event.dataTransfer.files[0].name;
 });
@@ -209,8 +224,9 @@ $("ingestionForm").addEventListener("submit", async (event) => {
   const form = new FormData(); const file = $("fileInput").files[0];
   const spec = selectedPublicationInput();
   if (!file) { $("formError").hidden = false; $("formError").textContent = `${spec.format} 파일을 선택하세요.`; $("submitButton").disabled = false; return; }
-  if (!file.name.toLowerCase().endsWith(spec.accept)) { $("formError").hidden = false; $("formError").textContent = `${spec.panelTitle}은 ${spec.format} 파일이어야 합니다.`; $("submitButton").disabled = false; return; }
-  form.append("file", file); form.append("year", $("yearInput").value); form.append("title", $("titleInput").value); form.append("publication_kind", $("publicationKindSelect").value); form.append("pub_no", $("pubNoInput").value); form.append("target", $("targetSelect").value); form.append("load_mode", $("loadModeSelect").value); form.append("embedding_model", document.querySelector("input[name=embedding_model]:checked").value);
+  if (!file.name.toLowerCase().endsWith(UPLOAD_EXTENSION)) { $("formError").hidden = false; $("formError").textContent = `${spec.panelTitle}은 HWPX 파일이어야 합니다.`; $("submitButton").disabled = false; return; }
+  if (spec.needsPeriod && !$("publicationPeriodSelect").value) { $("formError").hidden = false; $("formError").textContent = "주요통계집은 발간 반기를 선택해야 합니다."; $("submitButton").disabled = false; return; }
+  form.append("file", file); form.append("year", $("yearInput").value); form.append("title", $("titleInput").value); form.append("publication_kind", $("publicationKindSelect").value); form.append("publication_period", spec.needsPeriod ? $("publicationPeriodSelect").value : ""); form.append("pub_no", $("pubNoInput").value); form.append("target", $("targetSelect").value); form.append("load_mode", $("loadModeSelect").value); form.append("embedding_model", document.querySelector("input[name=embedding_model]:checked").value);
   // 작업이 완료 또는 실패할 때까지 상세 상태를 1초 간격으로 갱신한다.
   try { const job = await (await api(`${adminApiBasePath}/jobs`, { method:"POST", body:form })).json(); renderJob(job); await loadJobs(); pollTimer = setInterval(() => loadJob(job.job_id).catch(console.error), 1000); }
   catch (error) { $("formError").hidden = false; $("formError").textContent = error.message; $("submitButton").disabled = false; }

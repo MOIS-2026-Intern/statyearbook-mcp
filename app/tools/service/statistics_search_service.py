@@ -10,7 +10,13 @@ from app.query_embedding import (
     table_search_embedding_profile,
 )
 from app.tools.repository.statistics_search_repository import StatisticsSearchRepository
-from utils.publication_kind import DEFAULT_PUBLICATION_KIND, normalize_publication_kind
+from utils.publication_kind import (
+    DEFAULT_PUBLICATION_KIND,
+    NO_PUBLICATION_PERIOD,
+    normalize_publication_kind,
+    normalize_publication_period_filter,
+    publication_period_label,
+)
 
 
 SEARCH_TEXT_COLUMNS = (
@@ -147,6 +153,7 @@ def _base_candidate(row: dict) -> dict:
     return {
         "stat_id": row["stat_id"],
         "publication_kind": row.get("publication_kind", DEFAULT_PUBLICATION_KIND),
+        "publication_period": row.get("publication_period", NO_PUBLICATION_PERIOD),
         "publication_year": row["publication_year"],
         "ref_id": row["ref_id"],
         "chapter_no": row["chapter_no"],
@@ -284,12 +291,15 @@ def _empty_response(
     query: str,
     publication_year: int | None = None,
     publication_kind: str = DEFAULT_PUBLICATION_KIND,
+    publication_period: str | None = None,
 ) -> dict:
     return {
         "query": query,
         "tokens": [],
         "requested_publication_kind": publication_kind,
         "applied_publication_kind": publication_kind,
+        "requested_publication_period": publication_period,
+        "applied_publication_period": publication_period,
         "requested_publication_year": publication_year,
         "applied_publication_year": publication_year,
         "latest_edition_per_statistic": False,
@@ -304,7 +314,15 @@ def _empty_response(
 def _publication_scope_message(
     latest_editions: bool,
     filter_relaxed: bool,
+    publication_period: str | None = None,
+    empty: bool = False,
 ) -> str | None:
+    if empty and publication_period is not None:
+        label = publication_period_label(publication_period)
+        return (
+            f"{label} 발간판에는 후보가 없습니다. 반기를 지정하지 않고 다시 검색하면 "
+            "같은 해의 다른 반기까지 함께 찾습니다."
+        )
     if filter_relaxed:
         return (
             "요청한 발간연도에는 후보가 없어 통계별 최신 발간판으로 재검색했습니다. "
@@ -326,10 +344,12 @@ def search_statistics_data(
     publication_year: int | None = None,
     limit: int = 5,
     publication_kind: str = DEFAULT_PUBLICATION_KIND,
+    publication_period: str | None = None,
 ) -> dict:
     publication_kind = normalize_publication_kind(publication_kind)
+    publication_period = normalize_publication_period_filter(publication_period)
     if not query or not query.strip():
-        return _empty_response(query, publication_year, publication_kind)
+        return _empty_response(query, publication_year, publication_kind, publication_period)
 
     requested_publication_year = publication_year
     latest_editions = publication_year is None
@@ -348,6 +368,7 @@ def search_statistics_data(
         latest_editions,
         limit,
         publication_kind=publication_kind,
+        publication_period=publication_period,
     )
     results = _merge_candidates(query, *rows, limit)
     filter_relaxed = False
@@ -363,6 +384,7 @@ def search_statistics_data(
             latest_editions,
             limit,
             publication_kind=publication_kind,
+            publication_period=publication_period,
         )
         results = _merge_candidates(query, *rows, limit)
         filter_relaxed = True
@@ -372,11 +394,18 @@ def search_statistics_data(
         "tokens": tokens,
         "requested_publication_kind": publication_kind,
         "applied_publication_kind": publication_kind,
+        "requested_publication_period": publication_period,
+        "applied_publication_period": publication_period,
         "requested_publication_year": requested_publication_year,
         "applied_publication_year": None if latest_editions else publication_year,
         "latest_edition_per_statistic": latest_editions,
         "publication_year_filter_relaxed": filter_relaxed,
-        "message": _publication_scope_message(latest_editions, filter_relaxed),
+        "message": _publication_scope_message(
+            latest_editions,
+            filter_relaxed,
+            publication_period,
+            not results,
+        ),
         "count": len(results),
         "results": results,
     }

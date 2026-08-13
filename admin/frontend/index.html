@@ -49,7 +49,7 @@
                   <input id="fileInput" name="file" type="file" accept=".hwpx" required />
                   <span class="upload-icon">⇧</span>
                   <strong id="fileLabel">파일을 끌어놓거나 클릭해 선택</strong>
-                  <small><span id="uploadFormatLabel">HWPX</span> · 최대 <span id="maxUpload">300</span>MB</small>
+                  <small>HWPX · 최대 <span id="maxUpload">300</span>MB</small>
                 </label>
               </section>
 
@@ -59,11 +59,12 @@
                   <label><span>발간연도</span><input id="yearInput" name="year" type="number" min="1900" max="2200" value="2026" required /></label>
                   <label class="span-two"><span>발간물 제목</span><input id="titleInput" name="title" value="2026 행정안전통계연보" required /></label>
                   <label><span>발간물 종류</span><select id="publicationKindSelect" name="publication_kind"></select></label>
+                  <label id="periodField" hidden><span>발간 반기</span><select id="publicationPeriodSelect" name="publication_period"><option value="H1">상반기</option><option value="H2">하반기</option></select></label>
                   <label><span>발간번호 <em>선택</em></span><input id="pubNoInput" name="pub_no" placeholder="예: 11-1741000-000001-10" /></label>
                   <label><span>대상 DB</span><select id="targetSelect" name="target"></select></label>
-                  <label><span>같은 연도 처리</span><select id="loadModeSelect" name="load_mode"></select></label>
+                  <label><span>같은 판 처리</span><select id="loadModeSelect" name="load_mode"></select></label>
                 </div>
-                <div id="replaceWarning" class="warning" hidden><strong>주의</strong><span>선택한 연도의 기존 데이터만 삭제하고 새 파일로 교체합니다.</span></div>
+                <div id="replaceWarning" class="warning" hidden><strong>주의</strong><span>선택한 발간판(연도·반기)의 기존 데이터만 삭제하고 새 파일로 교체합니다.</span></div>
               </section>
 
               <section class="panel">
@@ -103,13 +104,14 @@
                       <th class="checkbox-cell"><input id="selectAllPublications" type="checkbox" aria-label="전체 선택" /></th>
                       <th>pub_id</th>
                       <th>kind</th>
+                      <th>반기</th>
                       <th>year</th>
                       <th>pub_no</th>
                       <th>title</th>
                     </tr>
                   </thead>
                   <tbody id="publicationList">
-                    <tr><td colspan="6" class="empty-table">목록을 불러오려면 삭제 화면을 여세요.</td></tr>
+                    <tr><td colspan="7" class="empty-table">목록을 불러오려면 삭제 화면을 여세요.</td></tr>
                   </tbody>
                 </table>
               </div>

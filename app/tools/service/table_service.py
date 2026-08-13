@@ -44,6 +44,7 @@ def cached_table(stat: dict, row: dict) -> dict:
     return {
         "stat_id": stat["stat_id"],
         "publication_kind": stat.get("publication_kind"),
+        "publication_period": stat.get("publication_period"),
         "ref_id": stat["ref_id"],
         "publication_year": stat["publication_year"],
         "chapter_no": stat["chapter_no"],
@@ -284,6 +285,7 @@ def build_response(
         "found": True,
         "stat_id": stat["stat_id"],
         "publication_kind": stat.get("publication_kind"),
+        "publication_period": stat.get("publication_period"),
         "ref_id": stat["ref_id"],
         "publication_year": stat["publication_year"],
         "chapter_no": stat["chapter_no"],

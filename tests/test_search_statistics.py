@@ -136,7 +136,7 @@ class SearchStatisticsTests(unittest.TestCase):
     # 최신 발간판에 같은 제목이 여러 건 실려 있으면 한 건만 남기지 말고 모두 남겨야 한다.
     def test_latest_edition_keeps_every_row_of_the_newest_publication(self) -> None:
         self.assertNotIn("DISTINCT ON", LATEST_EDITIONS_CTE)
-        self.assertIn("WHERE year = latest_year", LATEST_EDITIONS_CTE)
+        self.assertIn("WHERE edition_rank = latest_rank", LATEST_EDITIONS_CTE)
 
     # RRF의 관례값 60은 후보가 수천 건일 때를 전제한다. 여기서는 경로마다 후보가
     # max(20, limit*5)로 20~100건뿐이라 K가 후보 수보다 크면 1위와 꼴찌의 점수 차가 거의 없어져

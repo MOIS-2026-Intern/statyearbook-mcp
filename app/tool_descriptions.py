@@ -78,6 +78,11 @@ ANALYZE_PUBLICATIONS_FIELDS = {
         "조회할 발간물 종류. 통계연보는 yearbook, 주요통계집은 major_statistics를 사용한다. "
         "사용자가 주요통계집을 명시하지 않으면 yearbook을 기본값으로 둔다."
     ),
+    "publication_period": (
+        "조회할 발간 반기. 주요통계집만 같은 해에 상반기(H1)와 하반기(H2) 두 판이 나온다. "
+        "사용자가 반기를 말한 경우에만 전달하고, 말하지 않으면 생략해 그 해의 모든 판을 본다. "
+        "통계연보에는 반기가 없으므로 전달하지 않는다."
+    ),
     "all_publication_years": (
         "모든 발간판을 대상으로 비교·집계할 때만 true. publication_year와 동시에 사용하지 않는다."
     ),
@@ -143,11 +148,21 @@ COMPARE_PUBLICATIONS_FIELDS = {
     ),
     "base_publication_year": (
         "비교 기준이 되는 발간연도. '25년판에만 있고 26년판에 없는 자료'라면 2025다. "
-        "표 안 데이터 연도가 아니다. 두 연도를 모두 생략하면 가장 최근 두 발간판을 비교한다."
+        "표 안 데이터 연도가 아니다. 두 연도를 모두 생략하면 가장 최근 두 발간판을 비교한다. "
+        "주요통계집에서 같은 해의 두 반기를 비교하려면 두 연도를 같게 두고 반기를 다르게 준다."
     ),
     "publication_kind": (
         "비교할 발간물 종류. 통계연보끼리 비교하면 yearbook, 주요통계집끼리 비교하면 "
         "major_statistics를 사용한다."
+    ),
+    "base_publication_period": (
+        "base 발간판의 반기. 주요통계집은 같은 해에 상반기(H1)와 하반기(H2)가 모두 있어 "
+        "그 해를 지정하면 반기도 함께 주어야 판이 하나로 정해진다. "
+        "'25년 상반기와 하반기를 비교'하려면 base에 H1, target에 H2를 전달한다. "
+        "통계연보에는 반기가 없으므로 전달하지 않는다."
+    ),
+    "target_publication_period": (
+        "맞대어 볼 발간판의 반기. 값의 뜻은 base_publication_period와 같다."
     ),
     "target_publication_year": (
         "맞대어 볼 발간연도. '25년판에만 있고 26년판에 없는 자료'라면 2026이다. "
@@ -214,6 +229,12 @@ SEARCH_STATISTICS_FIELDS = {
     "publication_kind": (
         "검색할 발간물 종류. 통계연보는 yearbook, 주요통계집은 major_statistics다. "
         "사용자가 주요통계집을 말한 경우 반드시 major_statistics를 전달한다."
+    ),
+    "publication_period": (
+        "검색할 발간 반기. 주요통계집만 같은 해에 상반기(H1)와 하반기(H2) 두 판이 나온다. "
+        "'2025년 하반기 주요통계집'처럼 반기를 밝힌 경우에만 전달하고, 밝히지 않으면 생략해 "
+        "두 반기를 모두 검색한다. 통계연보에는 반기가 없으므로 전달하지 않는다. "
+        "결과의 publication_period가 그 후보가 실린 실제 반기다."
     ),
     "limit": "반환할 통계표 후보의 최대 개수.",
 }

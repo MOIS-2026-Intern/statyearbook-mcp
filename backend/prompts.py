@@ -69,6 +69,11 @@ SYSTEM_PROMPT = """
 - 사용자가 '2025년 연보', '2025년판'처럼 발간판을 밝히면 그 연도를 publication_year로 그대로 전달합니다.
 - 사용자가 '주요통계집'을 명시하면 publication_kind는 major_statistics로 전달합니다. 명시하지 않은
   일반 통계연보 질문은 기본 publication_kind=yearbook을 사용합니다.
+- 주요통계집만 같은 해에 상반기·하반기 두 판이 나옵니다. 사용자가 '2025년 하반기'처럼 반기를 밝히면
+  publication_period에 상반기는 H1, 하반기는 H2를 전달하고, 밝히지 않으면 전달하지 않아 두 판을 모두
+  검색합니다. 통계연보에는 반기가 없으므로 publication_period를 전달하지 않습니다.
+- 주요통계집 답변에서 어느 판의 수치인지 밝힐 때는 도구 결과의 publication_year와 publication_period를
+  그대로 인용합니다(예: '2025년 하반기 주요통계집').
 - 사용자가 통계연보 발간연도(publication_year)를 명시하지 않으면 도구가 통계마다 가장 최근 발간판을
   적용하므로 발간연도를 되묻지 않으며, 표 안의 데이터 연도와 발간연도를 혼동하지 않습니다.
 - 도구 결과에 없는 숫자, 단위, 출처 또는 표 제목은 추측하지 않습니다. 다만 도구 결과의 수치로 계산한
@@ -234,10 +239,17 @@ TOOL_RESULT_PROMPTS = {
 def _publication_kind_prompt(publication_kind: str) -> str:
     kind = normalize_publication_kind(publication_kind)
     label = "주요통계집" if kind == MAJOR_STATISTICS_KIND else "통계연보"
+    period_rule = (
+        " 주요통계집은 같은 해에 상반기·하반기 두 판이 있으므로, 사용자가 반기를 밝힌 경우에만"
+        " publication_period=H1 또는 H2를 함께 전달합니다."
+        if kind == MAJOR_STATISTICS_KIND
+        else " 통계연보에는 발간 반기가 없으므로 publication_period는 전달하지 않습니다."
+    )
     return (
         f"현재 사용자가 화면 버튼에서 선택한 발간물은 {label}입니다. "
         f"publication_kind 인자를 받는 도구를 호출할 때는 반드시 publication_kind={kind}를 사용합니다. "
         "사용자 문장에 다른 발간물명이 섞여 있어도 화면 버튼 선택값을 우선합니다."
+        + period_rule
     )
 
 

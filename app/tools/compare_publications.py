@@ -12,7 +12,11 @@ from app.tools.repository.publication_comparison_repository import (
 )
 from app.tools.service.publication_comparison_service import compare_publications_data
 from app.tool_descriptions import COMPARE_PUBLICATIONS, COMPARE_PUBLICATIONS_FIELDS
-from utils.publication_kind import DEFAULT_PUBLICATION_KIND, PublicationKind
+from utils.publication_kind import (
+    DEFAULT_PUBLICATION_KIND,
+    HalfYearPeriod,
+    PublicationKind,
+)
 
 
 # 발간판 비교 도구를 MCP에 등록한다.
@@ -51,6 +55,14 @@ def register(mcp: FastMCP) -> None:
                 le=2200,
             ),
         ] = None,
+        base_publication_period: Annotated[
+            HalfYearPeriod | None,
+            Field(description=COMPARE_PUBLICATIONS_FIELDS["base_publication_period"]),
+        ] = None,
+        target_publication_period: Annotated[
+            HalfYearPeriod | None,
+            Field(description=COMPARE_PUBLICATIONS_FIELDS["target_publication_period"]),
+        ] = None,
         fields: Annotated[
             list[CompareField] | None,
             Field(description=COMPARE_PUBLICATIONS_FIELDS["fields"]),
@@ -79,6 +91,8 @@ def register(mcp: FastMCP) -> None:
             publication_kind=publication_kind,
             base_publication_year=base_publication_year,
             target_publication_year=target_publication_year,
+            base_publication_period=base_publication_period,
+            target_publication_period=target_publication_period,
             fields=fields,
             compare_fields=compare_fields,
             limit=limit,

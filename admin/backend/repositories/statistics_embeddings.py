@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from admin.backend.models.embedding import EmbeddingBatch, WeightedEmbeddingTexts
 from utils.embedding import EmbeddingConfigurationError
-from utils.publication_kind import DEFAULT_PUBLICATION_KIND, normalize_publication_kind
+from utils.publication_kind import (
+    DEFAULT_PUBLICATION_KIND,
+    normalize_publication_kind,
+    normalize_publication_period,
+)
 from utils.vector import vector_literal
 
 
@@ -21,11 +25,12 @@ def _first_value(row):
 
 
 class StatisticsEmbeddingRepository:
-    # 선택한 발간연도로 모든 조회·갱신 범위를 제한할 저장소를 구성한다.
+    # 선택한 발간판(연도·반기)으로 모든 조회·갱신 범위를 제한할 저장소를 구성한다.
     def __init__(
         self,
         publication_year: int | None = None,
         publication_kind: str | None = None,
+        publication_period: str | None = None,
     ):
         self.publication_year = publication_year
         self.publication_kind = (
@@ -33,30 +38,44 @@ class StatisticsEmbeddingRepository:
             if publication_year is not None
             else None
         )
+        # 같은 해에 상반기·하반기가 함께 실리므로 반기까지 좁혀야 방금 적재한 판만 다시 만든다.
+        self.publication_period = (
+            normalize_publication_period(publication_period)
+            if publication_year is not None
+            else None
+        )
         self.name = (
             f"statistics:{self.publication_kind}:{publication_year}"
+            f"{':' + self.publication_period if self.publication_period else ''}"
             if publication_year is not None
             else "statistics"
         )
 
-    # 연도 필터 유무에 맞는 안전한 고정 SQL 조건을 반환한다.
+    # 발간판 필터 유무에 맞는 안전한 고정 SQL 조건을 반환한다.
     def _scope_sql(self) -> str:
         clauses = []
         if self.publication_year is not None:
             clauses.append("year = %s")
         if self.publication_kind is not None:
+            publication_filters = ["publication_kind = %s"]
+            if self.publication_period is not None:
+                publication_filters.append("period = %s")
             clauses.append(
-                "pub_id IN (SELECT pub_id FROM publications WHERE publication_kind = %s)"
+                "pub_id IN (SELECT pub_id FROM publications WHERE "
+                + " AND ".join(publication_filters)
+                + ")"
             )
         return " AND ".join(clauses) if clauses else "TRUE"
 
-    # 범위 SQL의 연도 자리표시자와 정확히 대응하는 인자를 만든다.
+    # 범위 SQL의 자리표시자와 정확히 대응하는 인자를 만든다.
     def _scope_params(self) -> list:
         params = []
         if self.publication_year is not None:
             params.append(self.publication_year)
         if self.publication_kind is not None:
             params.append(self.publication_kind)
+            if self.publication_period is not None:
+                params.append(self.publication_period)
         return params
 
     # PostgreSQL 카탈로그에서 실제 statistics 벡터 열 타입을 조회한다.

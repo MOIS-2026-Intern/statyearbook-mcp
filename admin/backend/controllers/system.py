@@ -4,7 +4,12 @@ from fastapi import APIRouter, Depends, Request
 
 from admin.backend.config import ADMIN_API_PREFIX
 from admin.backend.controllers.dependencies import authorize_admin
-from utils.publication_kind import DEFAULT_PUBLICATION_KIND, MAJOR_STATISTICS_KIND
+from utils.publication_kind import (
+    DEFAULT_PUBLICATION_KIND,
+    FIRST_HALF_PERIOD,
+    MAJOR_STATISTICS_KIND,
+    SECOND_HALF_PERIOD,
+)
 
 
 router = APIRouter(prefix=ADMIN_API_PREFIX, dependencies=[Depends(authorize_admin)])
@@ -31,19 +36,23 @@ def options(request: Request) -> dict:
             {
                 "id": MAJOR_STATISTICS_KIND,
                 "label": "주요통계집",
-                "description": "주요통계집 발간판입니다.",
+                "description": "주요통계집 발간판입니다. 상반기·하반기를 함께 지정합니다.",
             },
+        ],
+        "publication_periods": [
+            {"id": FIRST_HALF_PERIOD, "label": "상반기"},
+            {"id": SECOND_HALF_PERIOD, "label": "하반기"},
         ],
         "load_modes": [
             {
                 "id": "reject",
-                "label": "중복 연도 거부",
-                "description": "같은 연도가 있으면 안전하게 중단합니다.",
+                "label": "중복 발간판 거부",
+                "description": "같은 연도·반기의 판이 있으면 안전하게 중단합니다.",
             },
             {
                 "id": "replace",
-                "label": "해당 연도 교체",
-                "description": "선택 연도의 기존 데이터만 삭제한 뒤 다시 적재합니다.",
+                "label": "해당 발간판 교체",
+                "description": "선택한 연도·반기의 기존 데이터만 삭제한 뒤 다시 적재합니다.",
             },
         ],
         "embedding_models": [
