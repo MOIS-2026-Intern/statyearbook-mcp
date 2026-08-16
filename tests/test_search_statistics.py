@@ -225,9 +225,21 @@ class PublicationScopeSearchTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            [result["publication_kind"] for result in response["results"]],
+            [result["publication_kind"] for result in response["results"][:2]],
             ["yearbook", "major_statistics"],
         )
+
+    # 두 발간물의 표를 함께 읽어 답하려면 발간물마다 고를 후보가 남아 있어야 한다.
+    def test_limit_applies_to_each_publication(self) -> None:
+        yearbook = [{**YEARBOOK_ROW, "stat_id": index, "ref_id": f"1-1-{index}"} for index in range(4)]
+        major = [{**MAJOR_ROW, "stat_id": 90 + index, "ref_id": f"4-38-{index}"} for index in range(4)]
+
+        response = _search({"yearbook": yearbook, "major_statistics": major}, limit=2)
+
+        kinds = [result["publication_kind"] for result in response["results"]]
+        self.assertEqual(response["count"], 4)
+        self.assertEqual(kinds.count("yearbook"), 2)
+        self.assertEqual(kinds.count("major_statistics"), 2)
 
     # 한 발간물로 좁힌 범위에서는 다른 발간물을 조회하지 않아야 한다.
     def test_narrow_scope_searches_only_the_selected_publication(self) -> None:

@@ -429,6 +429,8 @@ def _search_publication_kind(
 # 발간물별 후보를 순위 자리마다 번갈아 남긴다. 점수만으로 줄 세우면 수록 통계가 많은
 # 발간물이 상위를 모두 채워, 다른 발간물에만 실린 표가 후보에서 통째로 빠진다.
 # 같은 순위 자리에서는 점수가 높은 발간물의 후보가 앞에 온다.
+# limit은 발간물마다 적용한다. 두 발간물의 표를 함께 읽어 답하려면 발간물마다 고를 후보가
+# 있어야 하는데, 전체를 limit개로 자르면 한쪽이 한두 건으로 줄어 고를 표가 남지 않는다.
 def _interleave_by_kind(searches: list[_KindSearch], limit: int) -> list[dict]:
     ordered = sorted(
         (
@@ -438,7 +440,7 @@ def _interleave_by_kind(searches: list[_KindSearch], limit: int) -> list[dict]:
         ),
         key=lambda item: item[:3],
     )
-    return [item[3] for item in ordered][:limit]
+    return [item[3] for item in ordered][: limit * len(searches)]
 
 
 # 자연어 질의를 임베딩하고 후보군을 결합해 최종 통계 검색 결과를 만든다.

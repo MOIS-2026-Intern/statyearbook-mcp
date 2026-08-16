@@ -76,6 +76,19 @@ class PublicationScopePromptTests(unittest.TestCase):
         self.assertIn("publication_kind=all", ALL_PUBLICATIONS_SCOPE_PROMPT)
         self.assertIn("같은 검색어로 다시 호출하지 않습니다", ALL_PUBLICATIONS_SCOPE_PROMPT)
 
+    # 전체를 고른 사용자는 개요(주요통계집)와 추이(통계연보)를 합친 답을 기대한다.
+    def test_all_scope_combines_both_publications_in_one_answer(self) -> None:
+        self.assertIn("두 표의 내용을 모두 근거로 하나의 답변을 만듭니다", ALL_PUBLICATIONS_SCOPE_PROMPT)
+        self.assertIn("한쪽 표만 읽고", ALL_PUBLICATIONS_SCOPE_PROMPT)
+        self.assertIn("개요와 최신 현황은 주요통계집에서", ALL_PUBLICATIONS_SCOPE_PROMPT)
+        self.assertIn("연도별 추이와 세부 내역은 통계연보에서", ALL_PUBLICATIONS_SCOPE_PROMPT)
+
+    # 한 발간물로 좁힌 범위에서는 두 발간물을 합치라는 규칙이 붙으면 안 된다.
+    def test_narrow_scope_has_no_combining_rule(self) -> None:
+        for scope in ("yearbook", "major_statistics"):
+            with self.subTest(scope=scope):
+                self.assertNotIn("하나의 답변을 만듭니다", build_system_prompt([], scope))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -241,7 +241,10 @@ SEARCH_STATISTICS_FIELDS = {
         "두 반기를 모두 검색한다. 통계연보에는 반기가 없어 이 조건은 주요통계집 검색에만 "
         "적용된다. 결과의 publication_period가 그 후보가 실린 실제 반기다."
     ),
-    "limit": "반환할 통계표 후보의 최대 개수.",
+    "limit": (
+        "발간물마다 반환할 통계표 후보의 최대 개수. publication_kind=all이면 두 발간물에서 "
+        "각각 최대 limit개를 돌려주므로 발간물별로 고를 후보가 남는다."
+    ),
 }
 SEARCH_TABLES = (
     "stat_id에 해당하는 통계표 원문(table_md), 제목 계층, 주석, 담당 부서·담당자·전화번호와 출처를 가져온다. "
