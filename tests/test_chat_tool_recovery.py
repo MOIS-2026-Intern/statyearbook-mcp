@@ -118,6 +118,68 @@ class ChatToolRecoveryTests(unittest.TestCase):
             model.calls[0]["instructions"],
         )
 
+    # 전체 범위는 두 발간물을 함께 도는 search_statistics만 받는다. 한 발간판 안에서만 집계하는
+    # analyze_publications에 all을 넣으면 도구가 입력 오류로 실패한다.
+    def test_all_scope_reaches_only_the_cross_publication_search(self) -> None:
+        request = ChatRequest(
+            conversationId="conversation-1",
+            message="생활인구 찾아줘",
+            publicationKind="all",
+        )
+        model = StubModelGateway(
+            [
+                ModelTurn(
+                    text="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="search_statistics",
+                            arguments={"query": "생활인구", "publication_kind": "yearbook"},
+                        ),
+                        ToolCall(
+                            id="call-2",
+                            name="analyze_publications",
+                            arguments={"operation": "count", "subject": "statistics"},
+                        ),
+                    ],
+                ),
+                ModelTurn(text="두 발간물에서 확인했습니다."),
+            ]
+        )
+        mcp = StubMcpGateway(
+            [
+                {
+                    "content": [{"type": "text", "text": "후보 1건"}],
+                    "structuredContent": {
+                        "count": 1,
+                        "searched_publication_kinds": ["yearbook", "major_statistics"],
+                        "results": [{"stat_id": 90, "title_ko": "생활인구"}],
+                    },
+                    "isError": False,
+                },
+                {
+                    "content": [{"type": "text", "text": "391건"}],
+                    "structuredContent": {"count": 391},
+                    "isError": False,
+                },
+            ]
+        )
+        service = ChatService(Settings(max_tool_rounds=5), model_gateway=model)
+
+        result = asyncio.run(
+            service._run_model_loop(
+                request=request,
+                mcp=mcp,
+                traces=[],
+                messages=_messages(),
+                tools=[],
+            )
+        )
+
+        self.assertEqual(result, "두 발간물에서 확인했습니다.")
+        self.assertEqual(mcp.calls[0][1]["publication_kind"], "all")
+        self.assertNotIn("publication_kind", mcp.calls[1][1])
+
     # 잘못 고른 analyze_publications 입력 오류를 모델에 돌려줘 검색 도구로 교정하게 한다.
     def test_retries_once_after_tool_input_error(self) -> None:
         model = StubModelGateway(

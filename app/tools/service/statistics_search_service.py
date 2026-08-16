@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 
 from app.query_embedding import (
     embed_query,
@@ -12,10 +13,16 @@ from app.query_embedding import (
 from app.tools.repository.statistics_search_repository import StatisticsSearchRepository
 from utils.publication_kind import (
     DEFAULT_PUBLICATION_KIND,
+    DEFAULT_PUBLICATION_SCOPE,
+    MAJOR_STATISTICS_KIND,
     NO_PUBLICATION_PERIOD,
-    normalize_publication_kind,
+    PublicationKind,
     normalize_publication_period_filter,
+    normalize_publication_scope,
+    publication_edition_label,
+    publication_kind_label,
     publication_period_label,
+    scope_publication_kinds,
 )
 
 
@@ -150,11 +157,20 @@ def _best_matched_text(
 
 # 통계 행을 여러 검색 경로가 공유할 랭킹 후보로 초기화한다.
 def _base_candidate(row: dict) -> dict:
+    publication_kind = row.get("publication_kind", DEFAULT_PUBLICATION_KIND)
+    publication_period = row.get("publication_period", NO_PUBLICATION_PERIOD)
     return {
         "stat_id": row["stat_id"],
-        "publication_kind": row.get("publication_kind", DEFAULT_PUBLICATION_KIND),
-        "publication_period": row.get("publication_period", NO_PUBLICATION_PERIOD),
+        "publication_kind": publication_kind,
+        "publication_period": publication_period,
         "publication_year": row["publication_year"],
+        # 두 발간물의 후보가 한 목록에 섞이므로, 어느 책의 몇 년 판인지 그대로 인용할 수 있는
+        # 이름을 후보마다 붙여 둔다.
+        "publication_label": publication_edition_label(
+            publication_kind,
+            row["publication_year"],
+            publication_period,
+        ),
         "ref_id": row["ref_id"],
         "chapter_no": row["chapter_no"],
         "section_no": row["section_no"],
@@ -290,14 +306,16 @@ def _merge_candidates(
 def _empty_response(
     query: str,
     publication_year: int | None = None,
-    publication_kind: str = DEFAULT_PUBLICATION_KIND,
+    publication_scope: str = DEFAULT_PUBLICATION_SCOPE,
     publication_period: str | None = None,
+    searched_kinds: tuple[str, ...] = (),
 ) -> dict:
     return {
         "query": query,
         "tokens": [],
-        "requested_publication_kind": publication_kind,
-        "applied_publication_kind": publication_kind,
+        "requested_publication_kind": publication_scope,
+        "applied_publication_kind": publication_scope,
+        "searched_publication_kinds": list(searched_kinds),
         "requested_publication_period": publication_period,
         "applied_publication_period": publication_period,
         "requested_publication_year": publication_year,
@@ -310,55 +328,71 @@ def _empty_response(
     }
 
 
-# 적용한 발간판 범위를 모델이 그대로 인용할 수 있는 안내 문구로 만든다.
+# 적용한 발간물과 발간판 범위를 모델이 그대로 인용할 수 있는 안내 문구로 만든다.
 def _publication_scope_message(
+    searched_kinds: tuple[str, ...],
     latest_editions: bool,
     filter_relaxed: bool,
     publication_period: str | None = None,
     empty: bool = False,
 ) -> str | None:
+    sentences: list[str] = []
+    if len(searched_kinds) > 1:
+        labels = "·".join(publication_kind_label(kind) for kind in searched_kinds)
+        sentences.append(
+            f"{labels}을 함께 검색했습니다. 후보마다 publication_kind와 publication_label이 "
+            "그 표가 실린 발간물과 판입니다."
+        )
+        if publication_period is not None:
+            sentences.append("반기는 주요통계집에만 있으므로 반기 조건은 주요통계집에만 적용했습니다.")
+
     if empty and publication_period is not None:
         label = publication_period_label(publication_period)
-        return (
+        sentences.append(
             f"{label} 발간판에는 후보가 없습니다. 반기를 지정하지 않고 다시 검색하면 "
             "같은 해의 다른 반기까지 함께 찾습니다."
         )
-    if filter_relaxed:
-        return (
+    elif filter_relaxed:
+        sentences.append(
             "요청한 발간연도에는 후보가 없어 통계별 최신 발간판으로 재검색했습니다. "
             "각 결과의 publication_year가 실제 발간판입니다."
         )
-    if latest_editions:
-        return (
+    elif latest_editions:
+        sentences.append(
             "발간연도를 지정하지 않아 통계마다 가장 최근 발간판을 적용했습니다. "
             "통계별로 최신 발간판이 다를 수 있으므로 각 결과의 publication_year를 사용하세요."
         )
-    return None
+    return " ".join(sentences) or None
 
 
-# 자연어 질의를 임베딩하고 후보군을 결합해 최종 통계 검색 결과를 만든다.
-# 발간연도를 지정하지 않으면 통계마다 가장 최근 발간판만 검색해 구판에만 있는 통계도 찾는다.
-# 지정 연도에 결과가 없을 때만 같은 최신판 범위로 한 번 더 검색한다.
-def search_statistics_data(
+@dataclass(frozen=True)
+class _KindSearch:
+    """한 발간물에서 실행한 검색의 후보와 그때 적용된 발간판 범위."""
+
+    results: list[dict]
+    latest_editions: bool
+    filter_relaxed: bool
+
+
+# 반기는 주요통계집에만 있다. 통계연보 조회에 반기 조건을 걸면 통계연보 후보가 통째로
+# 사라지므로, 사용자가 반기를 밝혀도 주요통계집 조회에만 적용한다.
+def _period_for_kind(kind: str, publication_period: str | None) -> str | None:
+    return publication_period if kind == MAJOR_STATISTICS_KIND else None
+
+
+# 한 발간물 안에서 후보를 찾는다. 지정 연도에 후보가 없으면 그 발간물의 최신판으로 한 번 더 찾는다.
+def _search_publication_kind(
+    kind: str,
     query: str,
-    publication_year: int | None = None,
-    limit: int = 5,
-    publication_kind: str = DEFAULT_PUBLICATION_KIND,
-    publication_period: str | None = None,
-) -> dict:
-    publication_kind = normalize_publication_kind(publication_kind)
-    publication_period = normalize_publication_period_filter(publication_period)
-    if not query or not query.strip():
-        return _empty_response(query, publication_year, publication_kind, publication_period)
-
-    requested_publication_year = publication_year
+    semantic_query: str,
+    query_vec: str,
+    title_profile_key: str,
+    table_profile_key: str,
+    publication_year: int | None,
+    publication_period: str | None,
+    limit: int,
+) -> _KindSearch:
     latest_editions = publication_year is None
-
-    tokens = _tokenize(query)
-    semantic_query = _lexical_query(query) or query.strip()
-    query_vec = embed_query(semantic_query)
-    title_profile_key = embedding_profile().profile_key
-    table_profile_key = table_search_embedding_profile().profile_key
     rows = SEARCH_REPOSITORY.fetch_rows(
         semantic_query,
         query_vec,
@@ -367,13 +401,13 @@ def search_statistics_data(
         publication_year,
         latest_editions,
         limit,
-        publication_kind=publication_kind,
+        publication_kind=kind,
         publication_period=publication_period,
     )
     results = _merge_candidates(query, *rows, limit)
     filter_relaxed = False
 
-    if not results and requested_publication_year is not None:
+    if not results and publication_year is not None:
         latest_editions = True
         rows = SEARCH_REPOSITORY.fetch_rows(
             semantic_query,
@@ -383,27 +417,97 @@ def search_statistics_data(
             None,
             latest_editions,
             limit,
-            publication_kind=publication_kind,
+            publication_kind=kind,
             publication_period=publication_period,
         )
         results = _merge_candidates(query, *rows, limit)
         filter_relaxed = True
 
+    return _KindSearch(results, latest_editions, filter_relaxed)
+
+
+# 발간물별 후보를 순위 자리마다 번갈아 남긴다. 점수만으로 줄 세우면 수록 통계가 많은
+# 발간물이 상위를 모두 채워, 다른 발간물에만 실린 표가 후보에서 통째로 빠진다.
+# 같은 순위 자리에서는 점수가 높은 발간물의 후보가 앞에 온다.
+def _interleave_by_kind(searches: list[_KindSearch], limit: int) -> list[dict]:
+    ordered = sorted(
+        (
+            (rank, -float(result["score"]), index, result)
+            for index, search in enumerate(searches)
+            for rank, result in enumerate(search.results)
+        ),
+        key=lambda item: item[:3],
+    )
+    return [item[3] for item in ordered][:limit]
+
+
+# 자연어 질의를 임베딩하고 후보군을 결합해 최종 통계 검색 결과를 만든다.
+# publication_kind가 all이면 통계연보와 주요통계집을 각각 검색해 두 발간물의 후보를 함께 돌려준다.
+# 발간연도를 지정하지 않으면 발간물마다 가장 최근 발간판만 검색해 구판에만 있는 통계도 찾는다.
+# 지정 연도에 결과가 없을 때만 그 발간물의 최신판 범위로 한 번 더 검색한다.
+def search_statistics_data(
+    query: str,
+    publication_year: int | None = None,
+    limit: int = 5,
+    publication_kind: str = DEFAULT_PUBLICATION_SCOPE,
+    publication_period: str | None = None,
+) -> dict:
+    publication_scope = normalize_publication_scope(publication_kind)
+    searched_kinds: tuple[PublicationKind, ...] = scope_publication_kinds(publication_scope)
+    publication_period = normalize_publication_period_filter(publication_period)
+    # 반기를 주요통계집에만 적용하므로, 주요통계집을 보지 않는 범위에서는 적용된 반기가 없다.
+    applied_period = publication_period if MAJOR_STATISTICS_KIND in searched_kinds else None
+    if not query or not query.strip():
+        return _empty_response(
+            query,
+            publication_year,
+            publication_scope,
+            applied_period,
+            searched_kinds,
+        )
+
+    tokens = _tokenize(query)
+    semantic_query = _lexical_query(query) or query.strip()
+    query_vec = embed_query(semantic_query)
+    title_profile_key = embedding_profile().profile_key
+    table_profile_key = table_search_embedding_profile().profile_key
+    searches = [
+        _search_publication_kind(
+            kind,
+            query,
+            semantic_query,
+            query_vec,
+            title_profile_key,
+            table_profile_key,
+            publication_year,
+            _period_for_kind(kind, publication_period),
+            limit,
+        )
+        for kind in searched_kinds
+    ]
+    results = _interleave_by_kind(searches, limit)
+    filter_relaxed = any(search.filter_relaxed for search in searches)
+    # 발간물마다 적용한 판이 다를 수 있다. 한 발간물이라도 최신판으로 넓혀 찾았으면 결과마다
+    # 실린 publication_year를 인용하게 한다.
+    latest_editions = all(search.latest_editions for search in searches) or filter_relaxed
+
     return {
         "query": query,
         "tokens": tokens,
-        "requested_publication_kind": publication_kind,
-        "applied_publication_kind": publication_kind,
+        "requested_publication_kind": publication_scope,
+        "applied_publication_kind": publication_scope,
+        "searched_publication_kinds": list(searched_kinds),
         "requested_publication_period": publication_period,
-        "applied_publication_period": publication_period,
-        "requested_publication_year": requested_publication_year,
+        "applied_publication_period": applied_period,
+        "requested_publication_year": publication_year,
         "applied_publication_year": None if latest_editions else publication_year,
         "latest_edition_per_statistic": latest_editions,
         "publication_year_filter_relaxed": filter_relaxed,
         "message": _publication_scope_message(
+            searched_kinds,
             latest_editions,
             filter_relaxed,
-            publication_period,
+            applied_period,
             not results,
         ),
         "count": len(results),

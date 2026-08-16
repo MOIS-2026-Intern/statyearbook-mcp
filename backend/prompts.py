@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 from utils.publication_kind import (
+    ALL_PUBLICATIONS_SCOPE,
     DEFAULT_PUBLICATION_KIND,
+    DEFAULT_PUBLICATION_SCOPE,
     MAJOR_STATISTICS_KIND,
-    normalize_publication_kind,
+    normalize_publication_scope,
 )
 
 
@@ -66,15 +68,15 @@ SYSTEM_PROMPT = """
   통계량만 묻는 요청에는 derive를 쓰지 않습니다.
 
 공통 원칙:
+- 어느 발간물을 검색할지는 아래 '조회 범위' 규칙을 따릅니다. 그 규칙이 이 문단보다 우선합니다.
 - 사용자가 '2025년 연보', '2025년판'처럼 발간판을 밝히면 그 연도를 publication_year로 그대로 전달합니다.
-- 사용자가 '주요통계집'을 명시하면 publication_kind는 major_statistics로 전달합니다. 명시하지 않은
-  일반 통계연보 질문은 기본 publication_kind=yearbook을 사용합니다.
 - 주요통계집만 같은 해에 상반기·하반기 두 판이 나옵니다. 사용자가 '2025년 하반기'처럼 반기를 밝히면
   publication_period에 상반기는 H1, 하반기는 H2를 전달하고, 밝히지 않으면 전달하지 않아 두 판을 모두
-  검색합니다. 통계연보에는 반기가 없으므로 publication_period를 전달하지 않습니다.
-- 주요통계집 답변에서 어느 판의 수치인지 밝힐 때는 도구 결과의 publication_year와 publication_period를
-  그대로 인용합니다(예: '2025년 하반기 주요통계집').
-- 사용자가 통계연보 발간연도(publication_year)를 명시하지 않으면 도구가 통계마다 가장 최근 발간판을
+  검색합니다. 통계연보에는 반기가 없으므로 이 조건은 주요통계집에만 적용됩니다.
+- 어느 발간물의 어느 판에서 나온 수치인지 밝힐 때는 도구 결과의 publication_label을, 그 값이 없으면
+  publication_kind·publication_year·publication_period를 그대로 인용합니다
+  (예: '2026년 통계연보', '2025년 하반기 주요통계집').
+- 사용자가 발간연도(publication_year)를 명시하지 않으면 도구가 통계마다 가장 최근 발간판을
   적용하므로 발간연도를 되묻지 않으며, 표 안의 데이터 연도와 발간연도를 혼동하지 않습니다.
 - 도구 결과에 없는 숫자, 단위, 출처 또는 표 제목은 추측하지 않습니다. 다만 도구 결과의 수치로 계산한
   통계량은 추측이 아니므로, 계산 기준을 밝히고 답합니다.
@@ -165,6 +167,10 @@ search_statistics 결과 처리:
 - latest_edition_per_statistic가 true이면 통계마다 최신 발간판을 적용한 결과이므로, 단일 발간연도를
   말하지 말고 인용한 통계의 publication_year를 그대로 밝힙니다. false이면 applied_publication_year가
   적용된 발간연도입니다.
+- searched_publication_kinds에 발간물이 둘이면 후보 목록에 두 발간물의 표가 순위대로 번갈아 섞여
+  있습니다. 목록 순서가 아니라 질문이 묻는 대상에 맞는지로 후보를 고르고, 고른 후보의
+  publication_kind와 publication_label을 답변에 밝힙니다. 이미 두 발간물을 모두 검색한 결과이므로
+  발간물만 바꿔 같은 검색어로 다시 호출하지 않습니다.
 - 다시 검색해도 직접 관련된 후보가 없으면 찾지 못했다고 답하고, 관련 없는 후보의 제목이나
   수치를 대신 사용하지 않습니다.
 """.strip()
@@ -236,30 +242,67 @@ TOOL_RESULT_PROMPTS = {
 }
 
 
-def _publication_kind_prompt(publication_kind: str) -> str:
-    kind = normalize_publication_kind(publication_kind)
-    label = "주요통계집" if kind == MAJOR_STATISTICS_KIND else "통계연보"
-    period_rule = (
-        " 주요통계집은 같은 해에 상반기·하반기 두 판이 있으므로, 사용자가 반기를 밝힌 경우에만"
-        " publication_period=H1 또는 H2를 함께 전달합니다."
-        if kind == MAJOR_STATISTICS_KIND
-        else " 통계연보에는 발간 반기가 없으므로 publication_period는 전달하지 않습니다."
-    )
-    return (
-        f"현재 사용자가 화면 버튼에서 선택한 발간물은 {label}입니다. "
-        f"publication_kind 인자를 받는 도구를 호출할 때는 반드시 publication_kind={kind}를 사용합니다. "
-        "사용자 문장에 다른 발간물명이 섞여 있어도 화면 버튼 선택값을 우선합니다."
-        + period_rule
-    )
+ALL_PUBLICATIONS_SCOPE_PROMPT = """
+조회 범위:
+- 현재 사용자가 화면 버튼에서 선택한 조회 범위는 전체(통계연보 + 주요통계집)입니다.
+- search_statistics는 publication_kind=all로 호출합니다. 한 번의 호출로 두 발간물을 각각의 최신
+  발간판부터 함께 검색하므로, 한 발간물에서 원하는 표를 찾지 못했다고 publication_kind를 바꿔
+  같은 검색어로 다시 호출하지 않습니다.
+- 후보의 publication_kind가 yearbook이면 통계연보, major_statistics이면 주요통계집의 표입니다.
+- 두 발간물에 같은 주제의 표가 있으면 질문이 묻는 항목·기준일·단위가 더 정확히 맞는 표를 골라
+  답하고, 한쪽에만 있으면 그 표로 답합니다. 두 발간물 어디에도 관련 표가 없을 때만 찾지 못했다고
+  답합니다.
+- 사용자가 '주요통계집에서', '연보에서'처럼 한 발간물을 콕 집어 말했으면 검색은 그대로 두고 그
+  발간물의 후보만 골라 답합니다.
+- 수치를 인용할 때는 어느 발간물의 몇 년 판인지 publication_label로 밝힙니다. 두 발간물의 수치를
+  한 표에 함께 담을 때는 행이나 열에 발간물을 표시해 어느 값이 어느 책의 값인지 구분합니다.
+- 서로 다른 발간물의 수치는 기준일과 집계 범위가 다를 수 있으므로, 두 값을 이어 붙여 하나의
+  추이처럼 설명하지 않습니다.
+- analyze_publications와 compare_publications는 한 발간물 안에서만 집계·비교합니다. 사용자가 말한
+  발간물의 publication_kind를 전달하고, 말하지 않았으면 publication_kind=yearbook을 사용합니다.
+""".strip()
+
+
+YEARBOOK_SCOPE_PROMPT = """
+조회 범위:
+- 현재 사용자가 화면 버튼에서 선택한 조회 범위는 통계연보입니다.
+- publication_kind 인자를 받는 도구는 반드시 publication_kind=yearbook으로 호출합니다.
+- 사용자 문장에 주요통계집이 언급되어 있어도 화면 버튼 선택을 우선해 통계연보에서만 찾습니다.
+- 통계연보에는 발간 반기가 없으므로 publication_period는 전달하지 않습니다.
+- 통계연보에서 찾지 못한 내용을 주요통계집의 수치나 이전 대화에서 본 주요통계집 내용으로 대신
+  답하지 않습니다. 검색어를 바꿔 다시 찾아도 없으면 통계연보에서 찾지 못했다고 밝히고, 조회 범위를
+  '전체'로 두면 주요통계집까지 함께 찾는다는 사실을 한 문장으로 알린 뒤 종료합니다.
+""".strip()
+
+
+MAJOR_STATISTICS_SCOPE_PROMPT = """
+조회 범위:
+- 현재 사용자가 화면 버튼에서 선택한 조회 범위는 주요통계집입니다.
+- publication_kind 인자를 받는 도구는 반드시 publication_kind=major_statistics로 호출합니다.
+- 사용자 문장에 통계연보가 언급되어 있어도 화면 버튼 선택을 우선해 주요통계집에서만 찾습니다.
+- 주요통계집은 같은 해에 상반기·하반기 두 판이 있으므로, 사용자가 반기를 밝힌 경우에만
+  publication_period=H1 또는 H2를 함께 전달합니다.
+- 주요통계집에서 찾지 못한 내용을 통계연보의 수치나 이전 대화에서 본 통계연보 내용으로 대신
+  답하지 않습니다. 검색어를 바꿔 다시 찾아도 없으면 주요통계집에서 찾지 못했다고 밝히고, 조회 범위를
+  '전체'로 두면 통계연보까지 함께 찾는다는 사실을 한 문장으로 알린 뒤 종료합니다.
+""".strip()
+
+
+PUBLICATION_SCOPE_PROMPTS = {
+    ALL_PUBLICATIONS_SCOPE: ALL_PUBLICATIONS_SCOPE_PROMPT,
+    DEFAULT_PUBLICATION_KIND: YEARBOOK_SCOPE_PROMPT,
+    MAJOR_STATISTICS_KIND: MAJOR_STATISTICS_SCOPE_PROMPT,
+}
 
 
 # 실제로 사용한 도구의 결과 규칙만 기본 시스템 프롬프트에 덧붙인다.
 def build_system_prompt(
     tool_names: list[str] | tuple[str, ...] = (),
-    publication_kind: str = DEFAULT_PUBLICATION_KIND,
+    publication_scope: str = DEFAULT_PUBLICATION_SCOPE,
 ) -> str:
-    """직전 도구 결과에 필요한 응답 규칙만 공통 프롬프트에 덧붙인다."""
-    sections = [SYSTEM_PROMPT, _publication_kind_prompt(publication_kind)]
+    """조회 범위 규칙과 직전 도구 결과에 필요한 응답 규칙만 공통 프롬프트에 덧붙인다."""
+    scope = normalize_publication_scope(publication_scope)
+    sections = [SYSTEM_PROMPT, PUBLICATION_SCOPE_PROMPTS[scope]]
     for name in dict.fromkeys(tool_names):
         prompt = TOOL_RESULT_PROMPTS.get(name)
         if prompt:
