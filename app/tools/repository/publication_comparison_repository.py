@@ -12,6 +12,12 @@ from app.tools.repository.publication_repository import (
     match_key_sql,
     simple_key_sql,
 )
+from utils.publication_kind import (
+    DEFAULT_PUBLICATION_KIND,
+    NO_PUBLICATION_PERIOD,
+    normalize_publication_kind,
+    publication_period_label,
+)
 
 
 CompareOperation = Literal[
@@ -47,7 +53,11 @@ CompareField = Literal[
     "source_system",
 ]
 
-PUBLICATION_YEARS_SQL = "SELECT year FROM publications ORDER BY year DESC"
+# 주요통계집은 같은 해에 두 판이 나오므로 발간판은 연도와 반기의 짝이다.
+PUBLICATION_EDITIONS_SQL = (
+    "SELECT year, period FROM publications WHERE publication_kind = %s"
+    " ORDER BY year DESC, period DESC"
+)
 SET_OPERATIONS = frozenset({"only_in_base", "only_in_target", "in_both", "changed"})
 PAIRED_OPERATIONS = frozenset({"in_both", "changed"})
 
@@ -297,11 +307,25 @@ OFFICER_FIELD_LIMITATIONS: tuple[str, ...] = (
 )
 
 
-# 적재된 발간연도를 최신순으로 조회한다.
-def _publication_years() -> list[int]:
+# 적재된 발간판(연도·반기)을 최신순으로 조회한다.
+def _publication_editions(
+    publication_kind: str = DEFAULT_PUBLICATION_KIND,
+) -> list[tuple[int, str]]:
+    publication_kind = normalize_publication_kind(publication_kind)
     with connect() as conn, conn.cursor() as cur:
-        cur.execute(PUBLICATION_YEARS_SQL)
-        return [int(row["year"]) for row in cur.fetchall()]
+        cur.execute(PUBLICATION_EDITIONS_SQL, (publication_kind,))
+        return [(int(row["year"]), str(row["period"] or "")) for row in cur.fetchall()]
+
+
+# 적재된 발간연도만 중복 없이 최신순으로 돌려준다. 응답의 안내 목록에 쓴다.
+def _publication_years(publication_kind: str = DEFAULT_PUBLICATION_KIND) -> list[int]:
+    return list(dict.fromkeys(year for year, _ in _publication_editions(publication_kind)))
+
+
+# 발간판을 사람이 읽을 수 있는 이름으로 만든다. 반기가 있으면 함께 적는다.
+def _edition_label(edition: tuple[int, str]) -> str:
+    year, period = edition
+    return f"{year} {publication_period_label(period)}" if period else str(year)
 
 
 # 허용된 operation/subject/match_by/필드 조합과 페이지 인자를 검증한다.
@@ -505,46 +529,87 @@ def _required_fields(
     )
 
 
-# 비교할 두 발간연도를 결정한다. 생략하면 가장 최근 두 발간판을 비교한다.
-def _resolve_publication_years(
+# 연도만 주어졌을 때 그 연도의 발간판을 고른다. 같은 해에 두 판이 있으면 반기를 요구한다.
+def _select_edition(
+    publication_year: int,
+    publication_period: str | None,
+    available: list[tuple[int, str]],
+    label: str,
+) -> tuple[int, str]:
+    known = ", ".join(_edition_label(edition) for edition in available)
+    matches = [
+        edition
+        for edition in available
+        if edition[0] == publication_year
+        and (publication_period is None or edition[1] == publication_period)
+    ]
+    if not matches:
+        raise ValueError(
+            f"{label} {_edition_label((publication_year, publication_period or ''))}"
+            f" is not loaded; available: {known}"
+        )
+    if len(matches) > 1:
+        halves = ", ".join(_edition_label(edition) for edition in matches)
+        raise ValueError(
+            f"{publication_year} has more than one edition ({halves}); "
+            f"pass {label.replace('_year', '_period')} to choose one"
+        )
+    return matches[0]
+
+
+# 비교할 두 발간판을 결정한다. 생략하면 가장 최근 두 판을 비교한다.
+# available은 최신순이므로 목록 위치가 그대로 판의 새로움 순서다.
+def _resolve_publication_editions(
     base_publication_year: int | None,
     target_publication_year: int | None,
-    available_years: list[int],
-) -> tuple[int, int, bool]:
-    if not available_years:
+    available: list[tuple[int, str]],
+    base_publication_period: str | None = None,
+    target_publication_period: str | None = None,
+) -> tuple[tuple[int, str], tuple[int, str], bool]:
+    if not available:
         raise ValueError("no publication is loaded")
-    known = ", ".join(str(year) for year in available_years)
-    for year in (base_publication_year, target_publication_year):
-        if year is not None and year not in available_years:
-            raise ValueError(
-                f"publication_year {year} is not loaded; available: {known}"
-            )
-    if base_publication_year is not None and target_publication_year is not None:
-        if base_publication_year == target_publication_year:
+    known = ", ".join(_edition_label(edition) for edition in available)
+    base = (
+        _select_edition(
+            base_publication_year, base_publication_period, available, "base_publication_year"
+        )
+        if base_publication_year is not None
+        else None
+    )
+    target = (
+        _select_edition(
+            target_publication_year,
+            target_publication_period,
+            available,
+            "target_publication_year",
+        )
+        if target_publication_year is not None
+        else None
+    )
+    if base is not None and target is not None:
+        if base == target:
             raise ValueError(
                 "base_publication_year and target_publication_year must differ"
             )
-        return base_publication_year, target_publication_year, False
-    if base_publication_year is not None:
-        later = [year for year in available_years if year > base_publication_year]
-        if not later:
+        return base, target, False
+    if base is not None:
+        position = available.index(base)
+        if position == 0:
             raise ValueError(
-                f"no publication is newer than {base_publication_year}; available: {known}"
+                f"no publication is newer than {_edition_label(base)}; available: {known}"
             )
-        return base_publication_year, min(later), True
-    if target_publication_year is not None:
-        earlier = [year for year in available_years if year < target_publication_year]
-        if not earlier:
+        # 최신순 목록에서 바로 앞이 base 다음으로 가까운 최신 판이다.
+        return base, available[position - 1], True
+    if target is not None:
+        position = available.index(target)
+        if position == len(available) - 1:
             raise ValueError(
-                f"no publication is older than {target_publication_year}; "
-                f"available: {known}"
+                f"no publication is older than {_edition_label(target)}; available: {known}"
             )
-        return max(earlier), target_publication_year, True
-    if len(available_years) < 2:
-        raise ValueError(
-            f"comparison requires two publications; available: {known}"
-        )
-    return available_years[1], available_years[0], True
+        return available[position + 1], target, True
+    if len(available) < 2:
+        raise ValueError(f"comparison requires two publications; available: {known}")
+    return available[1], available[0], True
 
 
 # 한 발간판의 비교 항목을 match_key마다 한 행으로 접는 CTE를 만든다.
@@ -573,7 +638,8 @@ def _items_cte_sql(
             f"                   COUNT(*) OVER (PARTITION BY {key_sql}) AS record_count",
             "            FROM publications p",
             f"            {join_sql}",
-            f"            WHERE p.year = %s AND {key_sql} IS NOT NULL",
+            "            WHERE p.publication_kind = %s AND p.year = %s AND p.period = %s",
+            f"                  AND {key_sql} IS NOT NULL",
             f"        ) matched ORDER BY match_key, {spec.dedupe_order_sql}",
             "    )",
         )
@@ -609,12 +675,16 @@ def build_query_plan(
     match_by: CompareMatchBy,
     base_publication_year: int,
     target_publication_year: int,
+    publication_kind: str = DEFAULT_PUBLICATION_KIND,
+    base_publication_period: str = NO_PUBLICATION_PERIOD,
+    target_publication_period: str = NO_PUBLICATION_PERIOD,
     fields: list[CompareField] | None = None,
     compare_fields: list[CompareField] | None = None,
     limit: int = 500,
     offset: int = 0,
 ) -> QueryPlan:
     spec = SUBJECTS[subject]
+    publication_kind = normalize_publication_kind(publication_kind)
     key_sql = spec.match_keys[match_by]
     selected = _selected_fields(spec, fields)
     required = _required_fields(spec, fields, compare_fields)
@@ -626,7 +696,14 @@ def build_query_plan(
             _items_cte_sql("target_items", spec, key_sql, required),
         )
     )
-    years = (base_publication_year, target_publication_year)
+    years = (
+        publication_kind,
+        base_publication_year,
+        base_publication_period,
+        publication_kind,
+        target_publication_year,
+        target_publication_period,
+    )
 
     if operation == "summary":
         changed_sql = _changed_condition_sql(compare_pairs)

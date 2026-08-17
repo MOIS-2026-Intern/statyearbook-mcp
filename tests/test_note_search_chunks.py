@@ -150,7 +150,12 @@ class NoteSearchRankingTests(unittest.TestCase):
             "app.tools.service.statistics_search_service.table_search_embedding_profile",
             return_value=SimpleNamespace(profile_key="table-profile-key"),
         ):
-            return search_statistics_data("자원봉사자 제외", publication_year=2025)
+            # 랭킹만 확인하므로 한 발간물로 좁혀 두 발간물의 후보가 섞이지 않게 한다.
+            return search_statistics_data(
+                "자원봉사자 제외",
+                publication_year=2025,
+                publication_kind="yearbook",
+            )
 
     # 주석으로만 찾은 통계는 근거가 주석임을 그대로 밝혀야 한다.
     def test_note_match_is_reported_as_footnote(self) -> None:

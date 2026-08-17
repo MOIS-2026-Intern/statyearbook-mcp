@@ -15,6 +15,11 @@ from admin.backend.services.upload import (
 )
 from admin.backend.services.load_dml import YEARBOOK_LOAD_MODES
 from admin.backend.services.load_workspace import create_workspace
+from utils.publication_kind import (
+    MAJOR_STATISTICS_KIND,
+    normalize_publication_kind,
+    normalize_publication_period,
+)
 
 
 router = APIRouter(
@@ -46,6 +51,8 @@ async def create_job(
     year: int = Form(...),
     title: str = Form(...),
     pub_no: str | None = Form(default=None),
+    publication_kind: str = Form(default="yearbook"),
+    publication_period: str = Form(default=""),
     target: str | None = Form(default=None),
     load_mode: str = Form(default="reject"),
     embedding_model: str = Form(default="bge-m3"),
@@ -58,6 +65,21 @@ async def create_job(
         raise HTTPException(status_code=422, detail="publication title is required")
     if load_mode not in YEARBOOK_LOAD_MODES:
         raise HTTPException(status_code=422, detail="invalid load mode")
+    try:
+        publication_kind = normalize_publication_kind(publication_kind)
+        publication_period = normalize_publication_period(publication_period)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if publication_kind == MAJOR_STATISTICS_KIND and not publication_period:
+        raise HTTPException(
+            status_code=422,
+            detail="주요통계집은 상반기(H1) 또는 하반기(H2)를 지정해야 합니다.",
+        )
+    if publication_kind != MAJOR_STATISTICS_KIND and publication_period:
+        raise HTTPException(
+            status_code=422,
+            detail="통계연보에는 발간 반기를 지정할 수 없습니다.",
+        )
     try:
         settings.target_dsn(target)
         settings.embedding_model(embedding_model)
@@ -86,6 +108,8 @@ async def create_job(
         year=year,
         title=title.strip(),
         pub_no=(pub_no or "").strip() or None,
+        publication_kind=publication_kind,
+        publication_period=publication_period,
         target=target,
         load_mode=load_mode,
         embedding_model=embedding_model,

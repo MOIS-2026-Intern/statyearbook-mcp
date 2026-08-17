@@ -11,14 +11,21 @@ from app.tools.repository.publication_comparison_repository import (
     MATCH_KEY_DEFINITIONS,
     SUBJECTS,
     _comparison_fields,
+    _edition_label,
     _execute_plan,
     _limitations,
+    _publication_editions,
     _publication_years,
-    _resolve_publication_years,
+    _resolve_publication_editions,
     _selected_fields,
     _source_tables,
     _validate_request,
     build_query_plan,
+)
+from utils.publication_kind import (
+    DEFAULT_PUBLICATION_KIND,
+    normalize_publication_kind,
+    normalize_publication_period_filter,
 )
 
 
@@ -40,13 +47,19 @@ def compare_publications_data(
     operation: CompareOperation,
     subject: CompareSubject = "statistics",
     match_by: CompareMatchBy = "title",
+    publication_kind: str = DEFAULT_PUBLICATION_KIND,
     base_publication_year: int | None = None,
     target_publication_year: int | None = None,
+    base_publication_period: str | None = None,
+    target_publication_period: str | None = None,
     fields: list[CompareField] | None = None,
     compare_fields: list[CompareField] | None = None,
     limit: int = 500,
     offset: int = 0,
 ) -> dict[str, Any]:
+    publication_kind = normalize_publication_kind(publication_kind)
+    base_publication_period = normalize_publication_period_filter(base_publication_period)
+    target_publication_period = normalize_publication_period_filter(target_publication_period)
     _validate_request(
         operation,
         subject,
@@ -56,19 +69,29 @@ def compare_publications_data(
         limit,
         offset,
     )
-    available_years = _publication_years()
-    base_year, target_year, publication_years_defaulted = _resolve_publication_years(
-        base_publication_year,
-        target_publication_year,
-        available_years,
+    available_editions = _publication_editions(publication_kind)
+    available_years = list(dict.fromkeys(year for year, _ in available_editions))
+    base_edition, target_edition, publication_years_defaulted = (
+        _resolve_publication_editions(
+            base_publication_year,
+            target_publication_year,
+            available_editions,
+            base_publication_period,
+            target_publication_period,
+        )
     )
+    base_year, base_period = base_edition
+    target_year, target_period = target_edition
     spec = SUBJECTS[subject]
     plan = build_query_plan(
         operation=operation,
         subject=subject,
         match_by=match_by,
+        publication_kind=publication_kind,
         base_publication_year=base_year,
         target_publication_year=target_year,
+        base_publication_period=base_period,
+        target_publication_period=target_period,
         fields=fields,
         compare_fields=compare_fields,
         limit=limit,
@@ -82,6 +105,7 @@ def compare_publications_data(
         "ok": True,
         "operation": operation,
         "subject": subject,
+        "publication_kind": publication_kind,
         "match_by": match_by,
         "match_key_definition": (
             f"{spec.definition}을(를) {MATCH_KEY_DEFINITIONS[match_by]}으로 잇는다"
@@ -90,14 +114,22 @@ def compare_publications_data(
         "requested_target_publication_year": target_publication_year,
         "base_publication_year": base_year,
         "target_publication_year": target_year,
+        "base_publication_period": base_period,
+        "target_publication_period": target_period,
         "publication_years_defaulted": publication_years_defaulted,
         "available_publication_years": available_years,
+        "available_publication_editions": [
+            _edition_label(edition) for edition in available_editions
+        ],
         "selected_fields": list(selected),
         "compared_fields": list(compared),
-        "definition": _definition(operation, spec, base_year, target_year),
+        "definition": _definition(
+            operation, spec, _edition_label(base_edition), _edition_label(target_edition)
+        ),
         "basis": (
-            f"{base_year}년판과 {target_year}년판의 {spec.unit_label}을(를) "
-            f"{MATCH_KEY_DEFINITIONS[match_by]} 기준으로 대응시킨 뒤 집합을 비교"
+            f"{_edition_label(base_edition)}년판과 {_edition_label(target_edition)}년판의 "
+            f"{spec.unit_label}을(를) {MATCH_KEY_DEFINITIONS[match_by]} 기준으로 "
+            "대응시킨 뒤 집합을 비교"
         ),
         "record_count_meaning": spec.record_count_note,
         "limitations": _limitations(subject, match_by, fields, compare_fields),
@@ -110,12 +142,14 @@ def compare_publications_data(
         response["results"] = rows
         response["base"] = {
             "publication_year": base_year,
+            "publication_period": base_period,
             "item_count": int(summary.get("base_item_count", 0)),
             "record_count": int(summary.get("base_record_count", 0)),
             "duplicate_key_count": int(summary.get("base_duplicate_key_count", 0)),
         }
         response["target"] = {
             "publication_year": target_year,
+            "publication_period": target_period,
             "item_count": int(summary.get("target_item_count", 0)),
             "record_count": int(summary.get("target_record_count", 0)),
             "duplicate_key_count": int(summary.get("target_duplicate_key_count", 0)),
@@ -144,8 +178,8 @@ def compare_publications_data(
 def _definition(
     operation: str,
     spec: CompareSubjectSpec,
-    base_year: int,
-    target_year: int,
+    base_year: str,
+    target_year: str,
 ) -> str:
     subject_label = f"{spec.definition}({spec.unit_label})"
     if operation == "summary":

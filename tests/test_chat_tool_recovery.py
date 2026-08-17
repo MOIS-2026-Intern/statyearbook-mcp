@@ -65,6 +65,121 @@ def _input_error() -> dict:
 
 
 class ChatToolRecoveryTests(unittest.TestCase):
+    # 화면 버튼에서 선택한 발간물 종류는 모델이 빼먹어도 도구 호출 인자에 강제로 들어가야 한다.
+    def test_applies_selected_publication_kind_to_search_tools(self) -> None:
+        request = ChatRequest(
+            conversationId="conversation-1",
+            message="생활인구 찾아줘",
+            publicationKind="major_statistics",
+        )
+        model = StubModelGateway(
+            [
+                ModelTurn(
+                    text="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="search_statistics",
+                            arguments={"query": "생활인구"},
+                        )
+                    ],
+                ),
+                ModelTurn(text="주요통계집에서 확인했습니다."),
+            ]
+        )
+        mcp = StubMcpGateway(
+            [
+                {
+                    "content": [{"type": "text", "text": "후보 1건"}],
+                    "structuredContent": {
+                        "count": 1,
+                        "results": [{"stat_id": 90, "title_ko": "생활인구"}],
+                    },
+                    "isError": False,
+                }
+            ]
+        )
+        service = ChatService(Settings(max_tool_rounds=5), model_gateway=model)
+
+        result = asyncio.run(
+            service._run_model_loop(
+                request=request,
+                mcp=mcp,
+                traces=[],
+                messages=_messages(),
+                tools=[],
+            )
+        )
+
+        self.assertEqual(result, "주요통계집에서 확인했습니다.")
+        self.assertEqual(mcp.calls[0][1]["publication_kind"], "major_statistics")
+        self.assertIn(
+            "publication_kind=major_statistics",
+            model.calls[0]["instructions"],
+        )
+
+    # 전체 범위는 두 발간물을 함께 도는 search_statistics만 받는다. 한 발간판 안에서만 집계하는
+    # analyze_publications에 all을 넣으면 도구가 입력 오류로 실패한다.
+    def test_all_scope_reaches_only_the_cross_publication_search(self) -> None:
+        request = ChatRequest(
+            conversationId="conversation-1",
+            message="생활인구 찾아줘",
+            publicationKind="all",
+        )
+        model = StubModelGateway(
+            [
+                ModelTurn(
+                    text="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="search_statistics",
+                            arguments={"query": "생활인구", "publication_kind": "yearbook"},
+                        ),
+                        ToolCall(
+                            id="call-2",
+                            name="analyze_publications",
+                            arguments={"operation": "count", "subject": "statistics"},
+                        ),
+                    ],
+                ),
+                ModelTurn(text="두 발간물에서 확인했습니다."),
+            ]
+        )
+        mcp = StubMcpGateway(
+            [
+                {
+                    "content": [{"type": "text", "text": "후보 1건"}],
+                    "structuredContent": {
+                        "count": 1,
+                        "searched_publication_kinds": ["yearbook", "major_statistics"],
+                        "results": [{"stat_id": 90, "title_ko": "생활인구"}],
+                    },
+                    "isError": False,
+                },
+                {
+                    "content": [{"type": "text", "text": "391건"}],
+                    "structuredContent": {"count": 391},
+                    "isError": False,
+                },
+            ]
+        )
+        service = ChatService(Settings(max_tool_rounds=5), model_gateway=model)
+
+        result = asyncio.run(
+            service._run_model_loop(
+                request=request,
+                mcp=mcp,
+                traces=[],
+                messages=_messages(),
+                tools=[],
+            )
+        )
+
+        self.assertEqual(result, "두 발간물에서 확인했습니다.")
+        self.assertEqual(mcp.calls[0][1]["publication_kind"], "all")
+        self.assertNotIn("publication_kind", mcp.calls[1][1])
+
     # 잘못 고른 analyze_publications 입력 오류를 모델에 돌려줘 검색 도구로 교정하게 한다.
     def test_retries_once_after_tool_input_error(self) -> None:
         model = StubModelGateway(
@@ -231,6 +346,52 @@ class ChatToolRecoveryTests(unittest.TestCase):
             ["analyze_publications", "search_statistics", "search_tables"],
         )
 
+    # search_statistics가 특정 행 라벨을 찾았으면 다음 search_tables 호출에는 그 라벨을 자동 전달한다.
+    def test_carries_row_label_match_from_search_statistics_to_search_tables(self) -> None:
+        model = StubModelGateway(
+            [
+                ModelTurn(text="", tool_calls=[
+                    ToolCall(
+                        id="call-1",
+                        name="search_statistics",
+                        arguments={"query": "지역사랑상품권 충남"},
+                    )
+                ]),
+                ModelTurn(text="", tool_calls=[
+                    ToolCall(id="call-2", name="search_tables", arguments={"stat_id": 132})
+                ]),
+                ModelTurn(text="충남은 15개 시군입니다."),
+            ]
+        )
+        mcp = StubMcpGateway([
+            {
+                "structuredContent": {
+                    "count": 1,
+                    "results": [
+                        {
+                            "stat_id": 132,
+                            "title_ko": "지역사랑상품권",
+                            "matched_source": "row_label",
+                            "matched_text": "충남",
+                        }
+                    ],
+                },
+                "isError": False,
+            },
+            {"structuredContent": {"found": True, "stat_id": 132, "tables": []}, "isError": False},
+        ])
+        service = ChatService(Settings(max_tool_rounds=3), model_gateway=model)
+
+        asyncio.run(service._run_model_loop(
+            request=_request(),
+            mcp=mcp,
+            traces=[],
+            messages=_messages(),
+            tools=[],
+        ))
+
+        self.assertEqual(mcp.calls[1], ("search_tables", {"stat_id": 132, "row_label": "충남"}))
+
     # 교정 호출도 입력 오류면 반복하지 않고 기존 실패 응답으로 종료해야 한다.
     def test_stops_after_one_input_error_retry(self) -> None:
         model = StubModelGateway(
@@ -395,15 +556,81 @@ class ChatToolRecoveryTests(unittest.TestCase):
 
 class SearchTablesResultTextTests(unittest.TestCase):
     @staticmethod
-    def _model_text(tables: list) -> str:
-        result = _model_result_for_tool(
+    def _model_result(tables: list) -> dict:
+        return _model_result_for_tool(
             "search_tables",
             {
                 "structuredContent": {"found": True, "stat_id": 329, "tables": tables},
                 "isError": False,
             },
         )
+
+    @classmethod
+    def _model_text(cls, tables: list) -> str:
+        result = cls._model_result(tables)
         return result["content"][0]["text"]
+
+    @staticmethod
+    def _table(rows: int) -> dict:
+        table_md = "\n".join(
+            [
+                "| 지역 | 값 |",
+                "| --- | --- |",
+                *[f"| 행 {index} | {index} |" for index in range(rows)],
+            ]
+        )
+        return {"seq": 1, "n_rows": rows, "n_cols": 2, "table_md": table_md}
+
+    # 표 행을 일부만 넘기면 모델이 빠진 행을 row_label로 한 행씩 되불러 같은 표를 몇 번씩 다시
+    # 조회하고 그 값을 손으로 옮겨 적는다. tool_output_max_chars가 표 하나를 통째로 담을 만큼
+    # 넉넉하므로 행을 미리 솎지 않고 원문 표 전체를 넘긴다.
+    def test_passes_every_table_row_to_the_model(self) -> None:
+        result = _model_result_for_tool(
+            "search_tables",
+            {
+                "structuredContent": {
+                    "found": True,
+                    "stat_id": 329,
+                    "title_ko": "생활인구",
+                    "tables": [self._table(40)],
+                },
+                "isError": False,
+            },
+        )
+
+        table = result["structuredContent"]["tables"][0]
+
+        self.assertEqual(table["table_md"], self._table(40)["table_md"])
+        self.assertIn("| 행 39 | 39 |", table["table_md"])
+
+    # row_label로 뽑은 행은 표 원문과 함께 그대로 남아야 지역을 지목한 질문에 쓸 수 있다.
+    def test_keeps_matched_rows_alongside_the_full_table(self) -> None:
+        source_table = self._table(15)
+        source_table.update({
+            "row_label_query": "행 12",
+            "matched_row_count": 1,
+            "matched_rows": [{"지역": "행 12", "값": "12"}],
+            "matched_rows_md": "| 지역 | 값 |\n| --- | --- |\n| 행 12 | 12 |",
+            "matched_rows_truncated": False,
+        })
+
+        result = _model_result_for_tool(
+            "search_tables",
+            {
+                "structuredContent": {
+                    "found": True,
+                    "stat_id": 329,
+                    "title_ko": "생활인구",
+                    "tables": [source_table],
+                },
+                "isError": False,
+            },
+        )
+        table = result["structuredContent"]["tables"][0]
+
+        self.assertIn("| 행 12 | 12 |", table["table_md"])
+        self.assertEqual(table["matched_rows"], [{"지역": "행 12", "값": "12"}])
+        self.assertIn("| 행 12 | 12 |", table["matched_rows_md"])
 
     # 조직도처럼 표가 없는 통계표는 조회가 성공해도 수치를 못 읽는다고 알려야 한다.
     def test_says_the_statistic_has_no_table_body(self) -> None:
@@ -412,11 +639,13 @@ class SearchTablesResultTextTests(unittest.TestCase):
         self.assertIn("표 본문이 없습니다", text)
         self.assertIn("has_tables", text)
 
-    # 표가 있으면 기존 문구를 그대로 유지해 불필요한 경로 변경을 유도하지 않는다.
-    def test_keeps_the_normal_message_when_a_table_exists(self) -> None:
-        text = self._model_text([{"seq": 1, "table_md": "| 구분 |\n|---|\n| 부 |"}])
+    # 표가 있으면 모델이 table_md를 직접 재작성하지 말고 그대로 복사해야 함을 알려야 한다.
+    def test_tells_the_model_to_copy_the_markdown_table_verbatim(self) -> None:
+        text = self._model_text([self._table(1)])
 
-        self.assertEqual(text, "통계표 원문과 메타데이터를 조회했습니다.")
+        self.assertIn("table_md", text)
+        self.assertIn("그대로", text)
+        self.assertIn("파이프", text)
 
 
 class DuplicatedToolPayloadTests(unittest.TestCase):

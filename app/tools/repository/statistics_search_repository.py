@@ -7,45 +7,72 @@ import psycopg
 
 from app.db import connect
 from app.tools.repository.publication_repository import match_key_sql
+from utils.publication_kind import (
+    DEFAULT_PUBLICATION_KIND,
+    normalize_publication_kind,
+    normalize_publication_period_filter,
+)
 
 
-LATEST_EDITIONS_KEY_SQL = f"COALESCE({match_key_sql('title_ko')}, '#' || stat_id)"
+LATEST_EDITIONS_KEY_SQL = f"COALESCE({match_key_sql('s.title_ko')}, '#' || s.stat_id)"
+# 주요통계집은 같은 해에 상반기·하반기가 나오므로 최신 판은 연도만으로 정해지지 않는다.
+# 연도와 반기를 한 정수로 접어 하반기가 같은 해 상반기보다 뒤에 오게 한다.
+EDITION_RANK_SQL = "(s.year * 10 + CASE p.period WHEN 'H2' THEN 2 WHEN 'H1' THEN 1 ELSE 0 END)"
 LATEST_EDITIONS_CTE = f"""
     WITH latest_editions AS (
         SELECT stat_id
         FROM (
-            SELECT stat_id, year,
-                   MAX(year) OVER (PARTITION BY {LATEST_EDITIONS_KEY_SQL}) AS latest_year
-            FROM statistics
+            SELECT s.stat_id, {EDITION_RANK_SQL} AS edition_rank,
+                   MAX({EDITION_RANK_SQL}) OVER (
+                       PARTITION BY p.publication_kind, {LATEST_EDITIONS_KEY_SQL}
+                   ) AS latest_rank
+            FROM statistics s
+            JOIN publications p ON p.pub_id = s.pub_id
         ) ranked
-        WHERE year = latest_year
+        WHERE edition_rank = latest_rank
     )
 """
 LATEST_EDITIONS_FILTER = "stat_id IN (SELECT stat_id FROM latest_editions)"
 
 
 def _edition_filters(
+    publication_kind: str,
     publication_year: int | None,
     latest_editions: bool,
-    alias: str = "",
+    publication_period: str | None = None,
+    stat_alias: str = "s",
+    publication_alias: str = "p",
 ) -> list[str]:
-    prefix = f"{alias}." if alias else ""
-    filters = []
+    stat_prefix = f"{stat_alias}." if stat_alias else ""
+    publication_prefix = f"{publication_alias}." if publication_alias else ""
+    filters = [f"{publication_prefix}publication_kind = %s"]
     if publication_year is not None:
-        filters.append(f"{prefix}year = %s")
+        filters.append(f"{stat_prefix}year = %s")
+    if publication_period is not None:
+        filters.append(f"{publication_prefix}period = %s")
     if latest_editions:
-        filters.append(f"{prefix}{LATEST_EDITIONS_FILTER}")
+        filters.append(f"{stat_prefix}{LATEST_EDITIONS_FILTER}")
     return filters
 
 
 def _edition_filter_sql(
+    publication_kind: str,
     publication_year: int | None,
     latest_editions: bool,
-    alias: str = "",
+    publication_period: str | None = None,
+    stat_alias: str = "s",
+    publication_alias: str = "p",
 ) -> str:
     return "".join(
         f" AND {condition}"
-        for condition in _edition_filters(publication_year, latest_editions, alias)
+        for condition in _edition_filters(
+            publication_kind,
+            publication_year,
+            latest_editions,
+            publication_period,
+            stat_alias,
+            publication_alias,
+        )
     )
 
 
@@ -61,47 +88,80 @@ def _has_tables_sql(alias: str) -> str:
     )
 
 
-def _where_sql(publication_year: int | None, latest_editions: bool) -> str:
+def _where_sql(
+    publication_kind: str,
+    publication_year: int | None,
+    latest_editions: bool,
+    publication_period: str | None,
+) -> str:
     where = [
-        "embedding IS NOT NULL",
-        "embedding_profile_key = %s",
-        *_edition_filters(publication_year, latest_editions),
+        "s.embedding IS NOT NULL",
+        "s.embedding_profile_key = %s",
+        *_edition_filters(
+            publication_kind,
+            publication_year,
+            latest_editions,
+            publication_period,
+        ),
     ]
     return " AND ".join(where)
+
+
+# 발간판 조건의 자리표시자 순서와 정확히 맞춘 인자를 만든다.
+def _edition_params(
+    publication_kind: str,
+    publication_year: int | None,
+    publication_period: str | None,
+) -> list:
+    params: list = [publication_kind]
+    if publication_year is not None:
+        params.append(publication_year)
+    if publication_period is not None:
+        params.append(publication_period)
+    return params
 
 
 def _params(
     query_vec: str,
     profile_key: str,
+    publication_kind: str,
     publication_year: int | None,
+    publication_period: str | None,
     limit: int,
 ) -> list:
     params: list = [query_vec, profile_key]
-    if publication_year is not None:
-        params.append(publication_year)
+    params.extend(_edition_params(publication_kind, publication_year, publication_period))
     params.extend([query_vec, limit])
     return params
 
 
-def _search_sql(publication_year: int | None, latest_editions: bool = False) -> str:
+def _search_sql(
+    publication_kind: str,
+    publication_year: int | None,
+    latest_editions: bool = False,
+    publication_period: str | None = None,
+) -> str:
     return f"""
         {_cte_sql(latest_editions)}
-        SELECT stat_id, year AS publication_year, ref_id,
-               chapter_no, section_no, level3_no, level4_no,
-               chapter, section, level3_title, level4_title,
-               title_ko, title_en, unit, base_date, page_start,
-               {_has_tables_sql("statistics")},
-               (embedding <=> %s::vector) AS distance
-        FROM statistics
-        WHERE {_where_sql(publication_year, latest_editions)}
-        ORDER BY embedding <=> %s::vector, year DESC, stat_id ASC
+        SELECT s.stat_id, p.publication_kind, p.period AS publication_period,
+               s.year AS publication_year, s.ref_id,
+               s.chapter_no, s.section_no, s.level3_no, s.level4_no,
+               s.chapter, s.section, s.level3_title, s.level4_title,
+               s.title_ko, s.title_en, s.unit, s.base_date, s.page_start,
+               {_has_tables_sql("s")},
+               (s.embedding <=> %s::vector) AS distance
+        FROM statistics s
+        JOIN publications p ON p.pub_id = s.pub_id
+        WHERE {_where_sql(publication_kind, publication_year, latest_editions, publication_period)}
+        ORDER BY s.embedding <=> %s::vector, s.year DESC, s.stat_id ASC
         LIMIT %s
     """
 
 
 def _table_metadata_sql() -> str:
     return f"""
-        s.stat_id, s.year AS publication_year, s.ref_id,
+        s.stat_id, p.publication_kind, p.period AS publication_period,
+        s.year AS publication_year, s.ref_id,
         s.chapter_no, s.section_no, s.level3_no, s.level4_no,
         s.chapter, s.section, s.level3_title, s.level4_title,
         s.title_ko, s.title_en, s.unit, s.base_date, s.page_start,
@@ -110,14 +170,22 @@ def _table_metadata_sql() -> str:
     """
 
 
-def _table_lexical_sql(publication_year: int | None, latest_editions: bool) -> str:
-    edition_filter = _edition_filter_sql(publication_year, latest_editions, "s")
+def _table_lexical_sql(
+    publication_kind: str,
+    publication_year: int | None,
+    latest_editions: bool,
+    publication_period: str | None = None,
+) -> str:
+    edition_filter = _edition_filter_sql(
+        publication_kind, publication_year, latest_editions, publication_period
+    )
     return f"""
         {_cte_sql(latest_editions)}
         SELECT {_table_metadata_sql()},
                ts_rank_cd(c.search_doc, plainto_tsquery('simple', %s)) AS lexical_rank
         FROM table_search_chunks c
         JOIN statistics s ON s.stat_id = c.stat_id
+        JOIN publications p ON p.pub_id = s.pub_id
         LEFT JOIN stat_tables t ON t.table_id = c.table_id
         WHERE c.search_doc @@ plainto_tsquery('simple', %s)
               {edition_filter}
@@ -126,14 +194,22 @@ def _table_lexical_sql(publication_year: int | None, latest_editions: bool) -> s
     """
 
 
-def _table_vector_sql(publication_year: int | None, latest_editions: bool) -> str:
-    edition_filter = _edition_filter_sql(publication_year, latest_editions, "s")
+def _table_vector_sql(
+    publication_kind: str,
+    publication_year: int | None,
+    latest_editions: bool,
+    publication_period: str | None = None,
+) -> str:
+    edition_filter = _edition_filter_sql(
+        publication_kind, publication_year, latest_editions, publication_period
+    )
     return f"""
         {_cte_sql(latest_editions)}
         SELECT {_table_metadata_sql()},
                (c.embedding <=> %s::vector) AS distance
         FROM table_search_chunks c
         JOIN statistics s ON s.stat_id = c.stat_id
+        JOIN publications p ON p.pub_id = s.pub_id
         LEFT JOIN stat_tables t ON t.table_id = c.table_id
         WHERE c.embedding IS NOT NULL
           AND c.embedding_profile_key = %s
@@ -157,12 +233,33 @@ class StatisticsSearchRepository:
         publication_year: int | None,
         latest_editions: bool,
         limit: int,
+        publication_kind: str = DEFAULT_PUBLICATION_KIND,
+        publication_period: str | None = None,
     ) -> tuple[list[dict], list[dict], list[dict]]:
+        publication_kind = normalize_publication_kind(publication_kind)
+        publication_period = normalize_publication_period_filter(publication_period)
         candidate_limit = max(20, limit * 5)
+        edition_params = _edition_params(
+            publication_kind,
+            publication_year,
+            publication_period,
+        )
         with self._connection_factory() as conn, conn.cursor() as cur:
             cur.execute(
-                _search_sql(publication_year, latest_editions),
-                _params(query_vec, title_profile_key, publication_year, candidate_limit),
+                _search_sql(
+                    publication_kind,
+                    publication_year,
+                    latest_editions,
+                    publication_period,
+                ),
+                _params(
+                    query_vec,
+                    title_profile_key,
+                    publication_kind,
+                    publication_year,
+                    publication_period,
+                    candidate_limit,
+                ),
             )
             title_rows = cur.fetchall()
             lexical_rows: list[dict] = []
@@ -170,21 +267,29 @@ class StatisticsSearchRepository:
             try:
                 if lexical_query:
                     lexical_params: list = [lexical_query, lexical_query]
-                    if publication_year is not None:
-                        lexical_params.append(publication_year)
+                    lexical_params.extend(edition_params)
                     lexical_params.append(candidate_limit)
                     cur.execute(
-                        _table_lexical_sql(publication_year, latest_editions),
+                        _table_lexical_sql(
+                            publication_kind,
+                            publication_year,
+                            latest_editions,
+                            publication_period,
+                        ),
                         lexical_params,
                     )
                     lexical_rows = cur.fetchall()
 
                 vector_params: list = [query_vec, table_profile_key]
-                if publication_year is not None:
-                    vector_params.append(publication_year)
+                vector_params.extend(edition_params)
                 vector_params.extend([query_vec, candidate_limit])
                 cur.execute(
-                    _table_vector_sql(publication_year, latest_editions),
+                    _table_vector_sql(
+                        publication_kind,
+                        publication_year,
+                        latest_editions,
+                        publication_period,
+                    ),
                     vector_params,
                 )
                 vector_rows = cur.fetchall()

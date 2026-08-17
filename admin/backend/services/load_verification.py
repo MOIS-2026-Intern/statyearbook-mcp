@@ -1,5 +1,6 @@
-# 이 파일은 적재된 발간연도의 통계표·원자료 표·임베딩 건수를 검증한다.
+# 이 파일은 적재된 발간판의 통계표·원자료 표·임베딩 건수를 검증한다.
 # 검증 결과가 model profile과 다르면 관리자 작업을 실패 처리한다.
+from utils.publication_kind import normalize_publication_period
 
 
 # dict-row와 tuple-row 모두에서 단일 집계값을 읽는다.
@@ -9,13 +10,17 @@ def _first_value(row):
 
 class YearbookVerificationService:
     # 호출자가 연 트랜잭션에서 적재 건수와 두 임베딩 프로필을 교차 검증한다.
+    # 같은 해에 상반기·하반기가 함께 실리므로 검증 범위도 반기까지 좁힌다.
     def verify_connection(
         self,
         conn,
         year: int,
-        profile_key: str | None,
+        publication_kind: str = "yearbook",
+        publication_period: str | None = None,
+        profile_key: str | None = None,
         table_profile_key: str | None = None,
     ) -> dict:
+        period = normalize_publication_period(publication_period)
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -23,9 +28,11 @@ class YearbookVerificationService:
                        COALESCE(SUM((
                            SELECT COUNT(*) FROM stat_tables t WHERE t.stat_id = s.stat_id
                        )), 0) AS table_count
-                FROM statistics s WHERE s.year = %s
+                FROM statistics s
+                JOIN publications p ON p.pub_id = s.pub_id
+                WHERE p.publication_kind = %s AND p.period = %s AND s.year = %s
                 """,
-                (year,),
+                (publication_kind, period, year),
             )
             counts = cur.fetchone()
             if isinstance(counts, dict):
@@ -39,11 +46,13 @@ class YearbookVerificationService:
             if profile_key:
                 cur.execute(
                     """
-                    SELECT COUNT(*) FROM statistics
-                    WHERE year = %s AND embedding IS NOT NULL
-                      AND embedding_profile_key = %s
+                    SELECT COUNT(*) FROM statistics s
+                    JOIN publications p ON p.pub_id = s.pub_id
+                    WHERE p.publication_kind = %s AND p.period = %s AND s.year = %s
+                      AND s.embedding IS NOT NULL
+                      AND s.embedding_profile_key = %s
                     """,
-                    (year, profile_key),
+                    (publication_kind, period, year, profile_key),
                 )
                 current_count = _first_value(cur.fetchone())
             cur.execute(
@@ -51,9 +60,10 @@ class YearbookVerificationService:
                 SELECT COUNT(*)
                 FROM table_search_chunks c
                 JOIN statistics s ON s.stat_id = c.stat_id
-                WHERE s.year = %s
+                JOIN publications p ON p.pub_id = s.pub_id
+                WHERE p.publication_kind = %s AND p.period = %s AND s.year = %s
                 """,
-                (year,),
+                (publication_kind, period, year),
             )
             table_chunk_count = _first_value(cur.fetchone())
             if table_profile_key:
@@ -62,10 +72,12 @@ class YearbookVerificationService:
                     SELECT COUNT(*)
                     FROM table_search_chunks c
                     JOIN statistics s ON s.stat_id = c.stat_id
-                    WHERE s.year = %s AND c.embedding IS NOT NULL
+                    JOIN publications p ON p.pub_id = s.pub_id
+                    WHERE p.publication_kind = %s AND p.period = %s AND s.year = %s
+                      AND c.embedding IS NOT NULL
                       AND c.embedding_profile_key = %s
                     """,
-                    (year, table_profile_key),
+                    (publication_kind, period, year, table_profile_key),
                 )
                 current_table_count = _first_value(cur.fetchone())
         if profile_key and current_count != statistics_count:

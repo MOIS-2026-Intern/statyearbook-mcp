@@ -22,6 +22,7 @@ from admin.backend.services.load_outline import (
     parse_section_cover,
     parse_toc_chapter_row,
 )
+from utils.publication_kind import DEFAULT_PUBLICATION_KIND, normalize_publication_kind
 
 HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
 
@@ -930,6 +931,7 @@ def check_units(units: list[dict]) -> dict:
 # 호출자가 덮어쓸 수 있는 기본 발간물 메타데이터를 페이지 수와 함께 만든다.
 def default_publication(page_count: int | None) -> dict:
     return {
+        "publication_kind": DEFAULT_PUBLICATION_KIND,
         "year": 2025,
         "pub_no": None,
         "title": "2025 행정안전통계연보",
@@ -953,6 +955,7 @@ def parse(
     publication_year: int | None = None,
     publication_title: str | None = None,
     publication_no: str | None = None,
+    publication_kind: str | None = None,
 ) -> dict:
     blocks = list(iter_blocks(hwpx_path))
     toc_tables = collect_toc_tables(blocks)
@@ -965,6 +968,7 @@ def parse(
     warnings = attach_content(body, headings, units_by_ref)
 
     publication = default_publication(estimate_page_count(hwpx_path))
+    publication["publication_kind"] = normalize_publication_kind(publication_kind)
     if publication_year is not None:
         publication["year"] = publication_year
     if publication_title:

@@ -17,6 +17,11 @@ from app.tools.repository.publication_repository import (
     normalize_match_key,
     officer_match_keys,
 )
+from utils.publication_kind import (
+    DEFAULT_PUBLICATION_KIND,
+    normalize_publication_kind,
+    normalize_publication_period_filter,
+)
 
 
 AnalysisOperation = Literal["overview", "count", "breakdown", "list"]
@@ -40,6 +45,8 @@ AnalysisGroup = Literal[
 ]
 AnalysisField = Literal[
     "publication_year",
+    "publication_kind",
+    "publication_period",
     "publication_title",
     "publication_page_count",
     "stat_id",
@@ -80,7 +87,15 @@ AnalysisValueFilterField = Literal[
     "note",
 ]
 
-LATEST_PUBLICATION_YEAR_SQL = "SELECT MAX(year) AS publication_year FROM publications"
+# 최신 발간연도는 반기 필터를 함께 적용해 구한다. 반기를 지정하면 그 반기가 나온
+# 가장 최근 연도가, 지정하지 않으면 종류 전체의 가장 최근 연도가 기본값이 된다.
+LATEST_PUBLICATION_YEAR_SQL = (
+    "SELECT MAX(year) AS publication_year FROM publications WHERE publication_kind = %s"
+)
+LATEST_PUBLICATION_YEAR_PERIOD_SQL = (
+    "SELECT MAX(year) AS publication_year FROM publications"
+    " WHERE publication_kind = %s AND period = %s"
+)
 
 
 @dataclass(frozen=True)
@@ -216,7 +231,7 @@ METRICS: dict[str, MetricSpec] = {
     ),
     "publications": MetricSpec(
         expression="COUNT(DISTINCT p.pub_id)",
-        definition="DB에 적재된 통계연보 발간판 수",
+        definition="DB에 적재된 발간판 수",
         basis="DISTINCT publications.pub_id",
         source_tables=("publications",),
     ),
@@ -275,6 +290,8 @@ GROUPS: dict[str, GroupSpec] = {
 
 FIELDS: dict[str, FieldSpec] = {
     "publication_year": FieldSpec("p.year", "publication_year"),
+    "publication_kind": FieldSpec("p.publication_kind", "publication_kind"),
+    "publication_period": FieldSpec("p.period", "publication_period"),
     "publication_title": FieldSpec("p.title", "publication_title"),
     "publication_page_count": FieldSpec(
         "p.page_count",
@@ -371,7 +388,12 @@ FIELDS: dict[str, FieldSpec] = {
 }
 
 PUBLICATION_FIELDS = frozenset(
-    {"publication_year", "publication_title", "publication_page_count"}
+    {
+        "publication_year",
+        "publication_kind",
+        "publication_title",
+        "publication_page_count",
+    }
 )
 STATISTIC_FIELDS = frozenset(
     {
@@ -434,6 +456,7 @@ LISTS: dict[str, ListSpec] = {
     "publications": ListSpec(
         default_fields=(
             "publication_year",
+            "publication_kind",
             "publication_title",
             "publication_page_count",
         ),
@@ -536,6 +559,8 @@ LISTS: dict[str, ListSpec] = {
 OVERVIEW_SQL = f"""
     SELECT
         p.year AS publication_year,
+        p.publication_kind,
+        p.period AS publication_period,
         p.title AS publication_title,
         p.page_count,
         COUNT(DISTINCT s.stat_id) AS statistics_count,
@@ -556,9 +581,17 @@ OVERVIEW_SQL = f"""
 
 
 # 최신 발간연도 기본값을 publications 테이블에서 조회한다.
-def _latest_publication_year() -> int | None:
+def _latest_publication_year(
+    publication_kind: str,
+    publication_period: str | None = None,
+) -> int | None:
+    sql = LATEST_PUBLICATION_YEAR_SQL
+    params: tuple[Any, ...] = (publication_kind,)
+    if publication_period is not None:
+        sql = LATEST_PUBLICATION_YEAR_PERIOD_SQL
+        params = (publication_kind, publication_period)
     with connect() as conn, conn.cursor() as cur:
-        cur.execute(LATEST_PUBLICATION_YEAR_SQL)
+        cur.execute(sql, params)
         row = cur.fetchone()
     if not row or row.get("publication_year") is None:
         return None
@@ -575,6 +608,7 @@ def _validate_request(
     required_fields: list[str] | None,
     deduplicate: bool | None,
     publication_year: int | None,
+    publication_kind: str,
     all_publication_years: bool,
     chapter_no: int | None,
     section_no: int | None,
@@ -712,25 +746,32 @@ def _resolve_value_filters(
 def _resolve_publication_scope(
     publication_year: int | None,
     all_publication_years: bool,
+    publication_kind: str,
+    publication_period: str | None = None,
 ) -> tuple[int | None, bool]:
     if all_publication_years:
         return None, False
     if publication_year is not None:
         return publication_year, False
-    latest = _latest_publication_year()
+    latest = _latest_publication_year(publication_kind, publication_period)
     return latest, latest is not None
 
 
 # 공통 연도·장·절 필터를 parameterized WHERE 절로 만든다.
 def _where_parts(
+    publication_kind: str,
     applied_publication_year: int | None,
     chapter_no: int | None,
     section_no: int | None,
     group: GroupSpec | None,
     value_filters: tuple[AppliedValueFilter, ...] = (),
+    publication_period: str | None = None,
 ) -> tuple[list[str], list[Any]]:
-    clauses: list[str] = []
-    params: list[Any] = []
+    clauses: list[str] = ["p.publication_kind = %s"]
+    params: list[Any] = [publication_kind]
+    if publication_period is not None:
+        clauses.append("p.period = %s")
+        params.append(publication_period)
     if applied_publication_year is not None:
         clauses.append("p.year = %s")
         params.append(applied_publication_year)
@@ -787,6 +828,7 @@ def build_query_plan(
     group_by: AnalysisGroup | None,
     distinct_field: AnalysisField | None,
     applied_publication_year: int | None,
+    publication_kind: str,
     chapter_no: int | None,
     section_no: int | None,
     limit: int,
@@ -795,15 +837,18 @@ def build_query_plan(
     deduplicate: bool | None = None,
     offset: int = 0,
     value_filters: tuple[AppliedValueFilter, ...] = (),
+    publication_period: str | None = None,
 ) -> QueryPlan:
     metric = METRICS[subject]
     group = GROUPS[group_by] if group_by is not None else None
     clauses, params = _where_parts(
+        publication_kind,
         applied_publication_year,
         chapter_no,
         section_no,
         group,
         value_filters,
+        publication_period,
     )
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
@@ -813,7 +858,7 @@ def build_query_plan(
             for part in (
                 OVERVIEW_SQL,
                 where_sql,
-                "GROUP BY p.year, p.title, p.page_count",
+                "GROUP BY p.year, p.publication_kind, p.period, p.title, p.page_count",
                 "ORDER BY p.year DESC",
             )
             if part

@@ -8,12 +8,14 @@ from app.tools.repository.contact_repository import ContactRepository
 
 
 STAT_SQL = """
-    SELECT stat_id, year AS publication_year, ref_id,
+    SELECT s.stat_id, p.publication_kind, p.period AS publication_period,
+           s.year AS publication_year, s.ref_id,
            chapter_no, section_no, level3_no, level4_no,
            chapter, section, level3_title, level4_title,
            title_ko, title_en, unit, base_date, page_start
-    FROM statistics
-    WHERE stat_id = %s
+    FROM statistics s
+    JOIN publications p ON p.pub_id = s.pub_id
+    WHERE s.stat_id = %s
 """
 TABLES_SQL = """
     SELECT seq, caption, n_rows, n_cols, body, table_md

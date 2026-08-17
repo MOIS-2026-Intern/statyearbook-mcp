@@ -70,6 +70,55 @@ class SearchTablesTests(unittest.TestCase):
         self.assertEqual(cached["body"]["columns"], ["연도", "건수"])
         self.assertEqual(cached["body"]["records"], [{"연도": "2024", "건수": "1,234"}])
 
+    # row_label을 넘기면 전체 Markdown 미리보기에 없을 수 있는 행도 별도 구조로 반환해야 한다.
+    def test_returns_rows_matching_the_requested_label(self) -> None:
+        table = {
+            "seq": 1,
+            "caption": "지자체별 지역사랑상품권 도입현황",
+            "n_rows": 20,
+            "n_cols": 7,
+            "table_md": "",
+            "body": {
+                "columns": ["구분", "계", "광역", "기초 / 총", "기초 / 발행", "기초 / 발행(179)", "기초 / 비고"],
+                "records": [
+                    {"구분": "충북", "계": "11", "광역": "-", "기초 / 총": "11",
+                     "기초 / 발행": "11", "기초 / 발행(179)": "청주시, 충주시", "기초 / 비고": ""},
+                    {"구분": "충남", "계": "15", "광역": "-", "기초 / 총": "15",
+                     "기초 / 발행": "15",
+                     "기초 / 발행(179)": "천안시, 공주시, 보령시, 아산시, 서산시, 논산시, 계룡시, 당진시, 금산군, 부여군, 서천군, 청양군, 홍성군, 예산군, 태안군",
+                     "기초 / 비고": ""},
+                ],
+            },
+        }
+
+        response = build_response(STAT, [table], [], [], row_label="충남")
+        matched = response["tables"][0]
+
+        self.assertEqual(matched["row_label_query"], "충남")
+        self.assertEqual(matched["matched_row_count"], 1)
+        self.assertEqual(matched["matched_rows"][0]["구분"], "충남")
+        self.assertEqual(matched["matched_rows"][0]["기초 / 발행"], "15")
+        self.assertIn("천안시", matched["matched_rows"][0]["기초 / 발행(179)"])
+        self.assertIn("| 충남 | 15 | - | 15 | 15 |", matched["matched_rows_md"])
+
+    # 사용자가 축약 지명을 말해도 원문 행 라벨이 정식 시도명인 표를 찾을 수 있어야 한다.
+    def test_matches_regional_aliases_for_row_labels(self) -> None:
+        table = {
+            "seq": 1,
+            "caption": None,
+            "n_rows": 1,
+            "n_cols": 2,
+            "table_md": "",
+            "body": {
+                "columns": ["시도", "값"],
+                "records": [{"시도": "충청남도", "값": "15"}],
+            },
+        }
+
+        response = build_response(STAT, [table], [], [], row_label="충남")
+
+        self.assertEqual(response["tables"][0]["matched_rows"][0]["시도"], "충청남도")
+
     # 열이 나뉜 통계표는 합쳐도 seq마다 하나씩 발급하지 않고 같은 핸들을 공유해야 한다.
     def test_shares_one_handle_across_column_split_tables(self) -> None:
         left = {
