@@ -32,7 +32,7 @@ from backend.serializers.mcp_result_serializer import (
     truncate_jsonable,
     truncate_text,
 )
-from utils.publication_kind import normalize_publication_kind
+from utils.publication_kind import ALL_PUBLICATIONS_SCOPE, normalize_publication_scope
 
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[ChatProgress], None]
@@ -378,7 +378,7 @@ class ChatService:
         traces: list[McpTrace],
         visualize_result_cache: dict[str, dict[str, Any]],
         search_table_row_hints: dict[int, str],
-        publication_kind: str,
+        publication_scope: str,
     ) -> ToolResult:
         trace_id = str(uuid4())
         started = time.perf_counter()
@@ -391,7 +391,7 @@ class ChatService:
                 raise ValueError("tool name is missing")
 
             arguments = mcp.prepare_tool_arguments(call.name, call.arguments)
-            arguments = _apply_publication_kind(arguments, call.name, publication_kind)
+            arguments = _apply_publication_scope(arguments, call.name, publication_scope)
             arguments = _apply_search_tables_row_hint(
                 arguments,
                 call.name,
@@ -481,17 +481,20 @@ def _response_tool_names(
     return _successful_tool_names(current_results) or historical_names
 
 
-def _apply_publication_kind(
+# 화면 버튼이 고른 조회 범위를 도구 인자에 강제로 넣는다. 두 발간물을 함께 도는 all은
+# search_statistics만 받으므로, 한 발간물 안에서만 집계·비교하는 나머지 도구에는 넣지 않고
+# 모델이 사용자 문장을 보고 고른 발간물을 그대로 둔다.
+def _apply_publication_scope(
     arguments: dict[str, Any],
     tool_name: str | None,
-    publication_kind: str,
+    publication_scope: str,
 ) -> dict[str, Any]:
     if tool_name not in _PUBLICATION_KIND_TOOLS:
         return arguments
-    return {
-        **arguments,
-        "publication_kind": normalize_publication_kind(publication_kind),
-    }
+    scope = normalize_publication_scope(publication_scope)
+    if scope == ALL_PUBLICATIONS_SCOPE and tool_name != "search_statistics":
+        return arguments
+    return {**arguments, "publication_kind": scope}
 
 
 def _apply_search_tables_row_hint(
@@ -822,10 +825,17 @@ def _tool_no_results_message(results: list[ToolResult]) -> str:
         if result.name == "search_statistics":
             query = str(structured.get("query") or "").strip()
             publication_year = structured.get("applied_publication_year")
+            searched_kinds = structured.get("searched_publication_kinds") or []
+            # 두 발간물을 모두 뒤진 뒤의 빈 결과는 한 발간물만 본 결과와 뜻이 다르다.
+            books = (
+                "통계연보와 주요통계집을 모두 검색했지만 "
+                if isinstance(searched_kinds, list) and len(searched_kinds) > 1
+                else ""
+            )
             scope = f"{publication_year}년 발간판에서 " if publication_year else ""
             query_text = f"검색어 '{query}'와 일치하는 " if query else ""
             return (
-                f"{scope}{query_text}통계표 후보가 반환되지 않아 답변에 필요한 자료를 "
+                f"{books}{scope}{query_text}통계표 후보가 반환되지 않아 답변에 필요한 자료를 "
                 "확인하지 못했습니다. 확인되지 않은 내용은 추측해 답하지 않겠습니다."
             )
 

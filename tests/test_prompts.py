@@ -2,7 +2,13 @@
 """도구별 결과 표현 규칙이 모델 프롬프트에 포함되는지 검증한다."""
 import unittest
 
-from backend.prompts import COMPARE_PUBLICATIONS_RESULT_PROMPT, build_system_prompt
+from backend.prompts import (
+    ALL_PUBLICATIONS_SCOPE_PROMPT,
+    COMPARE_PUBLICATIONS_RESULT_PROMPT,
+    MAJOR_STATISTICS_SCOPE_PROMPT,
+    YEARBOOK_SCOPE_PROMPT,
+    build_system_prompt,
+)
 
 
 class ToolResultPromptTests(unittest.TestCase):
@@ -37,6 +43,51 @@ class StatisticalCalculationPromptTests(unittest.TestCase):
 
         self.assertIn("'관계'라는 낱말만 보고 차트를 그리지 않습니다", prompt)
         self.assertIn("그래프·차트·그림을 요구했을 때만", prompt)
+
+
+class PublicationScopePromptTests(unittest.TestCase):
+    # 조회 범위마다 규칙이 다르므로 선택한 범위의 규칙만 붙어야 한다.
+    def test_each_scope_gets_its_own_rules(self) -> None:
+        expected = {
+            "all": ALL_PUBLICATIONS_SCOPE_PROMPT,
+            "yearbook": YEARBOOK_SCOPE_PROMPT,
+            "major_statistics": MAJOR_STATISTICS_SCOPE_PROMPT,
+        }
+        for scope, scope_prompt in expected.items():
+            with self.subTest(scope=scope):
+                prompt = build_system_prompt([], scope)
+
+                self.assertIn(scope_prompt, prompt)
+                for other, other_prompt in expected.items():
+                    if other != scope:
+                        self.assertNotIn(other_prompt, prompt)
+
+    # 범위를 주지 않으면 두 발간물을 함께 보는 전체 범위로 답해야 한다.
+    def test_default_scope_searches_both_publications(self) -> None:
+        self.assertIn(ALL_PUBLICATIONS_SCOPE_PROMPT, build_system_prompt())
+
+    # 한 발간물로 좁힌 범위에서 다른 발간물의 내용을 끌어다 쓰면 사용자가 고른 범위가 무너진다.
+    def test_narrow_scope_forbids_answering_from_the_other_publication(self) -> None:
+        self.assertIn("주요통계집의 수치나 이전 대화에서 본 주요통계집 내용으로 대신", YEARBOOK_SCOPE_PROMPT)
+        self.assertIn("통계연보의 수치나 이전 대화에서 본 통계연보 내용으로 대신", MAJOR_STATISTICS_SCOPE_PROMPT)
+
+    # 전체 범위에서는 한 번의 검색으로 두 발간물을 모두 보므로 발간물만 바꿔 다시 부르면 낭비다.
+    def test_all_scope_explains_the_single_cross_publication_search(self) -> None:
+        self.assertIn("publication_kind=all", ALL_PUBLICATIONS_SCOPE_PROMPT)
+        self.assertIn("같은 검색어로 다시 호출하지 않습니다", ALL_PUBLICATIONS_SCOPE_PROMPT)
+
+    # 전체를 고른 사용자는 개요(주요통계집)와 추이(통계연보)를 합친 답을 기대한다.
+    def test_all_scope_combines_both_publications_in_one_answer(self) -> None:
+        self.assertIn("두 표의 내용을 모두 근거로 하나의 답변을 만듭니다", ALL_PUBLICATIONS_SCOPE_PROMPT)
+        self.assertIn("한쪽 표만 읽고", ALL_PUBLICATIONS_SCOPE_PROMPT)
+        self.assertIn("개요와 최신 현황은 주요통계집에서", ALL_PUBLICATIONS_SCOPE_PROMPT)
+        self.assertIn("연도별 추이와 세부 내역은 통계연보에서", ALL_PUBLICATIONS_SCOPE_PROMPT)
+
+    # 한 발간물로 좁힌 범위에서는 두 발간물을 합치라는 규칙이 붙으면 안 된다.
+    def test_narrow_scope_has_no_combining_rule(self) -> None:
+        for scope in ("yearbook", "major_statistics"):
+            with self.subTest(scope=scope):
+                self.assertNotIn("하나의 답변을 만듭니다", build_system_prompt([], scope))
 
 
 if __name__ == "__main__":

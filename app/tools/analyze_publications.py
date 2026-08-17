@@ -17,7 +17,11 @@ from app.tool_descriptions import (
     ANALYZE_PUBLICATIONS_FIELDS,
     VALUE_FILTER_FIELDS,
 )
-from utils.publication_kind import DEFAULT_PUBLICATION_KIND, PublicationKind
+from utils.publication_kind import (
+    DEFAULT_PUBLICATION_KIND,
+    HalfYearPeriod,
+    PublicationKind,
+)
 
 
 class ValueFilter(BaseModel):
@@ -65,6 +69,10 @@ def register(mcp: FastMCP) -> None:
             PublicationKind,
             Field(description=ANALYZE_PUBLICATIONS_FIELDS["publication_kind"]),
         ] = DEFAULT_PUBLICATION_KIND,
+        publication_period: Annotated[
+            HalfYearPeriod | None,
+            Field(description=ANALYZE_PUBLICATIONS_FIELDS["publication_period"]),
+        ] = None,
         publication_year: Annotated[
             int | None,
             Field(
@@ -121,6 +129,7 @@ def register(mcp: FastMCP) -> None:
             ),
             deduplicate=deduplicate,
             publication_kind=publication_kind,
+            publication_period=publication_period,
             publication_year=publication_year,
             all_publication_years=all_publication_years,
             chapter_no=chapter_no,

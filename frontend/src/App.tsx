@@ -10,7 +10,8 @@ import { MAX_USER_MESSAGES_PER_CONVERSATION, RECENT_HISTORY_TURN_LIMIT } from ".
 import { seedConversations } from "./data/mockChat";
 import { useStickToBottom } from "./hooks/useStickToBottom";
 import { limitConversationState, loadConversationState, saveConversationState } from "./storage/conversationStore";
-import type { ChatMessage as ChatMessageType, ChatProgress, Conversation, McpTrace, PublicationKind } from "./types/chat";
+import { DEFAULT_PUBLICATION_SCOPE } from "./types/chat";
+import type { ChatMessage as ChatMessageType, ChatProgress, Conversation, McpTrace, PublicationScope } from "./types/chat";
 
 // 빈 메시지·trace와 고유 ID를 가진 새 대화를 만든다.
 function createConversation(): Conversation {
@@ -26,17 +27,18 @@ function createConversation(): Conversation {
 }
 
 // 사용자 입력을 현재 시각과 고유 ID가 있는 메시지로 구성한다.
-function createUserMessage(content: string): ChatMessageType {
+function createUserMessage(content: string, publicationScope: PublicationScope): ChatMessageType {
   return {
     id: crypto.randomUUID(),
     role: "user",
     content,
     createdAt: new Date().toISOString(),
+    publicationScope,
   };
 }
 
 // API 실패 내용을 대화에 표시할 assistant 메시지로 변환한다.
-function createErrorMessage(error: unknown): ChatMessageType {
+function createErrorMessage(error: unknown, publicationScope: PublicationScope): ChatMessageType {
   const details = error instanceof Error ? error.message : "알 수 없는 오류가 발생했습니다.";
 
   return {
@@ -44,17 +46,19 @@ function createErrorMessage(error: unknown): ChatMessageType {
     role: "assistant",
     content: `답변 처리 중 오류가 발생했습니다. ${details}`,
     createdAt: new Date().toISOString(),
+    publicationScope,
   };
 }
 
 // 사용자가 멈춘 응답 자리에 남길 안내 메시지를 만든다. 생성 중이던 본문과 trace는 버린다.
-function createStoppedMessage(): ChatMessageType {
+function createStoppedMessage(publicationScope: PublicationScope): ChatMessageType {
   return {
     id: crypto.randomUUID(),
     role: "assistant",
     content: "사용자에 의해 응답이 중단되었습니다",
     createdAt: new Date().toISOString(),
     stopped: true,
+    publicationScope,
   };
 }
 
@@ -67,6 +71,23 @@ function summarizeTitle(message: string) {
 // 질문 자체는 남겨, 중단한 뒤 이어서 물으면 모델이 앞 질문을 알고 답하게 한다.
 function excludeStoppedNotices(messages: ChatMessageType[]): ChatMessageType[] {
   return messages.filter((message) => !message.stopped);
+}
+
+// 지금 조회 범위에서 주고받은 마지막 구간만 남긴다. 범위를 바꾸면 이전 범위에서 본 내용은
+// 새 범위의 근거가 될 수 없다. 전체 범위에서 주요통계집 표를 본 뒤 통계연보로 좁히면, 그 표를
+// 기억한 모델이 통계연보에 없는 수치를 그대로 옮겨 적기 때문이다. 범위를 남기지 않은 옛 대화는
+// 두 발간물을 모두 볼 수 있는 전체 범위의 대화로 본다.
+function getScopedMessages(messages: ChatMessageType[], scope: PublicationScope): ChatMessageType[] {
+  let startIndex = messages.length;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if ((messages[index].publicationScope ?? DEFAULT_PUBLICATION_SCOPE) !== scope) {
+      break;
+    }
+    startIndex = index;
+  }
+
+  return messages.slice(startIndex);
 }
 
 // 모델에 보낼 최근 사용자 턴부터의 대화 메시지만 선택한다.
@@ -132,7 +153,7 @@ export default function App() {
   const [activeConversationId, setActiveConversationId] = useState(initialConversationState.activeConversationId);
   const [sendingConversationId, setSendingConversationId] = useState<string | null>(null);
   const [showMcpTrace, setShowMcpTrace] = useState(true);
-  const [publicationKind, setPublicationKind] = useState<PublicationKind>("yearbook");
+  const [publicationScope, setPublicationScope] = useState<PublicationScope>(DEFAULT_PUBLICATION_SCOPE);
   const [limitNoticeDismissed, setLimitNoticeDismissed] = useState(false);
   const [progressByConversation, setProgressByConversation] = useState<Record<string, ChatProgress>>({});
   const [streamingByConversation, setStreamingByConversation] = useState<Record<string, string>>({});
@@ -201,11 +222,11 @@ export default function App() {
       return;
     }
 
-    const userMessage = createUserMessage(message);
+    const userMessage = createUserMessage(message, publicationScope);
     const conversationId = activeConversation.id;
     const shouldRename = activeConversation.messages.length === 0;
     const history = getRecentTurnMessages(
-      excludeStoppedNotices(activeConversation.messages),
+      getScopedMessages(excludeStoppedNotices(activeConversation.messages), publicationScope),
       RECENT_HISTORY_TURN_LIMIT,
     );
     const historyTraces = getTracesForMessages(history, activeConversation.traces);
@@ -232,7 +253,7 @@ export default function App() {
         {
           conversationId,
           message,
-          publicationKind,
+          publicationKind: publicationScope,
           includeMcpTrace: true,
           history,
           traces: historyTraces,
@@ -267,7 +288,7 @@ export default function App() {
             ? {
                 ...conversation,
                 updatedAt: response.message.createdAt,
-                messages: [...conversation.messages, response.message],
+                messages: [...conversation.messages, { ...response.message, publicationScope }],
                 traces: [...conversation.traces, ...response.traces],
               }
             : conversation,
@@ -275,7 +296,9 @@ export default function App() {
       );
     } catch (error) {
       // 멈춤 버튼으로 끊은 요청은 오류가 아니다. 받다 만 본문과 trace는 버리고 안내만 남긴다.
-      const resultMessage = isChatStoppedError(error) ? createStoppedMessage() : createErrorMessage(error);
+      const resultMessage = isChatStoppedError(error)
+        ? createStoppedMessage(publicationScope)
+        : createErrorMessage(error, publicationScope);
 
       setConversations((current) =>
         current.map((conversation) =>
@@ -422,8 +445,8 @@ export default function App() {
         <footer className="composer-wrap">
           <Composer
             disabled={activeConversationIsSending || conversationMessageLimitReached}
-            publicationKind={publicationKind}
-            onPublicationKindChange={setPublicationKind}
+            publicationScope={publicationScope}
+            onPublicationScopeChange={setPublicationScope}
             sending={activeConversationIsSending}
             onSendMessage={sendMessage}
             onStopMessage={stopMessage}

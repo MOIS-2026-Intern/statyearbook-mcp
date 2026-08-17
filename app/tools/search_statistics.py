@@ -6,7 +6,11 @@ from pydantic import Field
 
 from app.tools.service.statistics_search_service import search_statistics_data
 from app.tool_descriptions import SEARCH_STATISTICS, SEARCH_STATISTICS_FIELDS
-from utils.publication_kind import DEFAULT_PUBLICATION_KIND, PublicationKind
+from utils.publication_kind import (
+    DEFAULT_PUBLICATION_SCOPE,
+    HalfYearPeriod,
+    PublicationScope,
+)
 
 
 # 자연어 통계표 검색 MCP 도구를 등록한다.
@@ -19,12 +23,22 @@ def register(mcp: FastMCP) -> None:
             Field(description=SEARCH_STATISTICS_FIELDS["publication_year"]),
         ] = None,
         publication_kind: Annotated[
-            PublicationKind,
+            PublicationScope,
             Field(description=SEARCH_STATISTICS_FIELDS["publication_kind"]),
-        ] = DEFAULT_PUBLICATION_KIND,
+        ] = DEFAULT_PUBLICATION_SCOPE,
+        publication_period: Annotated[
+            HalfYearPeriod | None,
+            Field(description=SEARCH_STATISTICS_FIELDS["publication_period"]),
+        ] = None,
         limit: Annotated[
             int,
             Field(description=SEARCH_STATISTICS_FIELDS["limit"], ge=1, le=20),
         ] = 5,
     ) -> dict:
-        return search_statistics_data(query, publication_year, limit, publication_kind)
+        return search_statistics_data(
+            query,
+            publication_year,
+            limit,
+            publication_kind,
+            publication_period,
+        )

@@ -6,6 +6,7 @@ from copy import deepcopy
 from app.tools.repository.table_repository import TableRepository
 from app.tools.service.contact_service import ContactService
 from app.table_cache import cache_table
+from utils.publication_kind import publication_edition_label
 
 
 TABLE_REPOSITORY = TableRepository()
@@ -44,6 +45,7 @@ def cached_table(stat: dict, row: dict) -> dict:
     return {
         "stat_id": stat["stat_id"],
         "publication_kind": stat.get("publication_kind"),
+        "publication_period": stat.get("publication_period"),
         "ref_id": stat["ref_id"],
         "publication_year": stat["publication_year"],
         "chapter_no": stat["chapter_no"],
@@ -284,6 +286,13 @@ def build_response(
         "found": True,
         "stat_id": stat["stat_id"],
         "publication_kind": stat.get("publication_kind"),
+        "publication_period": stat.get("publication_period"),
+        # 두 발간물을 함께 검색하면 이 표가 어느 책의 몇 년 판인지 답변에 밝혀야 한다.
+        "publication_label": publication_edition_label(
+            stat.get("publication_kind"),
+            stat["publication_year"],
+            stat.get("publication_period"),
+        ),
         "ref_id": stat["ref_id"],
         "publication_year": stat["publication_year"],
         "chapter_no": stat["chapter_no"],

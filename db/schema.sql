@@ -6,9 +6,14 @@ BEGIN;
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
+-- period는 한 해에 두 번 나오는 발간물의 반기다. 주요통계집은 'H1'(상반기) 또는
+-- 'H2'(하반기)를 갖고, 해마다 한 판뿐인 통계연보는 빈 문자열이다. NULL을 쓰면
+-- (종류, 연도, 반기) 유일 색인에서 NULL끼리 다른 값으로 취급되어 같은 판을 두 번
+-- 적재할 수 있으므로 반기 없음도 값으로 저장한다.
 CREATE TABLE IF NOT EXISTS publications (
     pub_id      SERIAL PRIMARY KEY,
     publication_kind TEXT NOT NULL DEFAULT 'yearbook',
+    period      TEXT NOT NULL DEFAULT '',
     year        INT NOT NULL,
     pub_no      TEXT,
     title       TEXT NOT NULL,
@@ -129,6 +134,17 @@ ALTER TABLE publications
     ADD CONSTRAINT publications_kind_check
     CHECK (publication_kind IN ('yearbook', 'major_statistics'));
 
+-- 이미 만들어진 DB에도 발간 반기를 더한다. 기존 발간물은 반기 없음으로 둔다.
+ALTER TABLE publications ADD COLUMN IF NOT EXISTS period TEXT;
+UPDATE publications SET period = '' WHERE period IS NULL;
+ALTER TABLE publications ALTER COLUMN period SET DEFAULT '';
+ALTER TABLE publications ALTER COLUMN period SET NOT NULL;
+ALTER TABLE publications
+    DROP CONSTRAINT IF EXISTS publications_period_check;
+ALTER TABLE publications
+    ADD CONSTRAINT publications_period_check
+    CHECK (period IN ('', 'H1', 'H2'));
+
 ALTER TABLE statistics ADD COLUMN IF NOT EXISTS ordinal INT;
 
 -- 이미 만들어진 DB의 table_search_chunks를 통계 단위 주석 청크까지 담도록 넓힌다.
@@ -191,11 +207,12 @@ BEGIN
 END
 $statyearbook_dup_guard$;
 
--- 같은 종류의 발간물 안에서 한 연도에 하나의 판만 허용한다.
--- 통계연보와 주요통계집은 같은 연도를 각각 가질 수 있다.
+-- 같은 종류·연도·반기 조합마다 하나의 판만 허용한다. 통계연보와 주요통계집은 같은
+-- 연도를 각각 가질 수 있고, 주요통계집은 같은 연도에 상반기·하반기를 함께 가질 수 있다.
 DROP INDEX IF EXISTS idx_publications_unique_year;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_publications_unique_kind_year
-    ON publications(publication_kind, year);
+DROP INDEX IF EXISTS idx_publications_unique_kind_year;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_publications_unique_kind_year_period
+    ON publications(publication_kind, year, period);
 -- 한 발간물 안에서 표 번호는 유일하다. 파서가 같은 표를 두 번 넣거나 번호를 밀어
 -- 쓰는 사고를 적재 단계에서 곧바로 막는다.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_statistics_unique_pub_ref

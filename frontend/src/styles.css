@@ -952,7 +952,9 @@ button {
 .publication-switch {
   display: inline-flex;
   align-items: center;
-  height: 34px;
+  /* 조회 범위가 셋이라 좁은 화면에서는 줄바꿈이 필요하다. */
+  flex-wrap: wrap;
+  min-height: 34px;
   gap: 2px;
   border: 1px solid var(--border);
   border-radius: 8px;

@@ -1,22 +1,37 @@
 import { FormEvent, KeyboardEvent, useState } from "react";
-import { BookOpen, DatabaseZap, FileText, Mic, Paperclip, SendHorizontal, Square } from "lucide-react";
-import type { PublicationKind } from "../types/chat";
+import { BookOpen, DatabaseZap, FileText, Library, Mic, Paperclip, SendHorizontal, Square } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import type { PublicationScope } from "../types/chat";
+
+interface ScopeOption {
+  value: PublicationScope;
+  label: string;
+  title: string;
+  icon: LucideIcon;
+}
+
+// 조회 범위 버튼은 넓은 범위부터 좁은 범위 순으로 놓고 기본값인 전체를 맨 앞에 둔다.
+const SCOPE_OPTIONS: ScopeOption[] = [
+  { value: "all", label: "전체", title: "통계연보와 주요통계집 함께 조회", icon: Library },
+  { value: "yearbook", label: "통계연보", title: "통계연보만 조회", icon: BookOpen },
+  { value: "major_statistics", label: "주요통계집", title: "주요통계집만 조회", icon: FileText },
+];
 
 interface ComposerProps {
   disabled: boolean;
   sending: boolean;
-  publicationKind: PublicationKind;
-  onPublicationKindChange: (kind: PublicationKind) => void;
+  publicationScope: PublicationScope;
+  onPublicationScopeChange: (scope: PublicationScope) => void;
   onSendMessage: (message: string) => void;
   onStopMessage: () => void;
 }
 
-// 메시지 입력, 발간물 선택, 전송 상태를 관리하는 작성기를 렌더링한다.
+// 메시지 입력, 조회 범위 선택, 전송 상태를 관리하는 작성기를 렌더링한다.
 export function Composer({
   disabled,
   sending,
-  publicationKind,
-  onPublicationKindChange,
+  publicationScope,
+  onPublicationScopeChange,
   onSendMessage,
   onStopMessage,
 }: ComposerProps) {
@@ -59,29 +74,26 @@ export function Composer({
           <button className="icon-button" type="button" aria-label="파일 첨부" title="파일 첨부">
             <Paperclip size={18} />
           </button>
-          <div className="publication-switch" role="group" aria-label="조회 발간물">
-            <button
-              className={publicationKind === "yearbook" ? "publication-switch__button publication-switch__button--active" : "publication-switch__button"}
-              type="button"
-              aria-pressed={publicationKind === "yearbook"}
-              disabled={disabled}
-              onClick={() => onPublicationKindChange("yearbook")}
-              title="통계연보 조회"
-            >
-              <BookOpen size={15} />
-              <span>통계연보</span>
-            </button>
-            <button
-              className={publicationKind === "major_statistics" ? "publication-switch__button publication-switch__button--active" : "publication-switch__button"}
-              type="button"
-              aria-pressed={publicationKind === "major_statistics"}
-              disabled={disabled}
-              onClick={() => onPublicationKindChange("major_statistics")}
-              title="주요통계집 조회"
-            >
-              <FileText size={15} />
-              <span>주요통계집</span>
-            </button>
+          <div className="publication-switch" role="group" aria-label="조회 범위">
+            {SCOPE_OPTIONS.map((option) => {
+              const active = publicationScope === option.value;
+              const Icon = option.icon;
+
+              return (
+                <button
+                  key={option.value}
+                  className={active ? "publication-switch__button publication-switch__button--active" : "publication-switch__button"}
+                  type="button"
+                  aria-pressed={active}
+                  disabled={disabled}
+                  onClick={() => onPublicationScopeChange(option.value)}
+                  title={option.title}
+                >
+                  <Icon size={15} />
+                  <span>{option.label}</span>
+                </button>
+              );
+            })}
           </div>
           <button className="tool-chip" type="button">
             <DatabaseZap size={16} />
