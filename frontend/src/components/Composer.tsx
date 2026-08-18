@@ -1,7 +1,7 @@
 import { FormEvent, KeyboardEvent, useState } from "react";
 import { BookOpen, DatabaseZap, FileText, Library, SendHorizontal, Square } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { PublicationScope } from "../types/chat";
+import type { ChatModelOption, PublicationScope } from "../types/chat";
 
 interface ScopeOption {
   value: PublicationScope;
@@ -20,6 +20,10 @@ const SCOPE_OPTIONS: ScopeOption[] = [
 interface ComposerProps {
   disabled: boolean;
   sending: boolean;
+  modelOptions: ChatModelOption[];
+  modelOptionsError: boolean;
+  selectedModel: string;
+  onSelectedModelChange: (model: string) => void;
   publicationScope: PublicationScope;
   onPublicationScopeChange: (scope: PublicationScope) => void;
   onSendMessage: (message: string) => void;
@@ -30,6 +34,10 @@ interface ComposerProps {
 export function Composer({
   disabled,
   sending,
+  modelOptions,
+  modelOptionsError,
+  selectedModel,
+  onSelectedModelChange,
   publicationScope,
   onPublicationScopeChange,
   onSendMessage,
@@ -99,6 +107,25 @@ export function Composer({
         </div>
 
         <div className="composer__actions">
+          <label className="model-select">
+            <span className="sr-only">대화 모델</span>
+            <select
+              aria-label="대화 모델"
+              disabled={disabled || modelOptions.length === 0}
+              value={selectedModel}
+              onChange={(event) => onSelectedModelChange(event.target.value)}
+            >
+              {modelOptions.length === 0 ? (
+                <option value="">
+                  {modelOptionsError ? "모델 목록 오류" : "모델 불러오는 중"}
+                </option>
+              ) : modelOptions.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.label}
+                </option>
+              ))}
+            </select>
+          </label>
           {sending ? (
             <button
               className="send-button send-button--stop"

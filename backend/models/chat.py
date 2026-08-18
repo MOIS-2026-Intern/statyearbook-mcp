@@ -46,6 +46,9 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     conversationId: str
     message: str = Field(min_length=1)
+    # 생략한 기존 클라이언트는 배포 환경의 기본 모델을 사용한다. 값이 있으면 백엔드의
+    # 허용 목록을 통과한 모델별 gateway로 요청을 보낸다.
+    model: str | None = Field(default=None, min_length=1)
     # 화면 버튼이 고른 조회 범위다. 발간물 하나(yearbook·major_statistics) 또는 둘 다(all)이며,
     # 필드 이름은 기존 클라이언트가 보내는 값을 그대로 받기 위해 유지한다.
     publicationKind: PublicationScope = DEFAULT_PUBLICATION_SCOPE
@@ -63,3 +66,13 @@ class ChatProgress(BaseModel):
     stage: ChatProgressStage
     message: str
     tool: str | None = None
+
+
+class ChatModelOption(BaseModel):
+    id: str
+    label: str
+
+
+class ChatModelsResponse(BaseModel):
+    defaultModel: str
+    models: list[ChatModelOption]

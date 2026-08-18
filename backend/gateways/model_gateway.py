@@ -16,6 +16,10 @@ class ModelGatewayConfigurationError(RuntimeError):
     pass
 
 
+class UnsupportedChatModelError(ModelGatewayConfigurationError):
+    pass
+
+
 class ModelGateway(Protocol):
     # 현재 대화와 도구 결과로 다음 모델 턴을 생성한다.
     async def create_turn(

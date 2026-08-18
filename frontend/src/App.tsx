@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PanelLeftOpen, Sparkles, X } from "lucide-react";
-import { isChatStoppedError, sendChatMessage } from "./api/chat";
+import { fetchChatModels, isChatStoppedError, sendChatMessage } from "./api/chat";
 import { ChatMessage } from "./components/ChatMessage";
 import { Composer } from "./components/Composer";
 import { McpInspector } from "./components/McpInspector";
@@ -11,7 +11,14 @@ import { seedConversations } from "./data/mockChat";
 import { useStickToBottom } from "./hooks/useStickToBottom";
 import { limitConversationState, loadConversationState, saveConversationState } from "./storage/conversationStore";
 import { DEFAULT_PUBLICATION_SCOPE } from "./types/chat";
-import type { ChatMessage as ChatMessageType, ChatProgress, Conversation, McpTrace, PublicationScope } from "./types/chat";
+import type {
+  ChatMessage as ChatMessageType,
+  ChatModelOption,
+  ChatProgress,
+  Conversation,
+  McpTrace,
+  PublicationScope,
+} from "./types/chat";
 
 // 빈 메시지·trace와 고유 ID를 가진 새 대화를 만든다.
 function createConversation(): Conversation {
@@ -168,6 +175,9 @@ export default function App() {
   const [showSidebar, setShowSidebar] = useState(createInitialPanelVisibility);
   const [showMcpTrace, setShowMcpTrace] = useState(createInitialPanelVisibility);
   const [publicationScope, setPublicationScope] = useState<PublicationScope>(DEFAULT_PUBLICATION_SCOPE);
+  const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([]);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [modelOptionsError, setModelOptionsError] = useState(false);
   const [limitNoticeDismissed, setLimitNoticeDismissed] = useState(false);
   const [progressByConversation, setProgressByConversation] = useState<Record<string, ChatProgress>>({});
   const [streamingByConversation, setStreamingByConversation] = useState<Record<string, string>>({});
@@ -191,6 +201,34 @@ export default function App() {
   useEffect(() => {
     setLimitNoticeDismissed(false);
   }, [activeConversationId]);
+
+  // 모델 목록은 백엔드 설정을 단일 기준으로 사용한다. 환경에 모델을 추가하면 UI에도
+  // 자동으로 나타나며, 현재 선택이 없거나 사라졌으면 백엔드 기본값을 선택한다.
+  useEffect(() => {
+    const abortController = new AbortController();
+
+    fetchChatModels(abortController.signal)
+      .then((catalog) => {
+        if (catalog.models.length === 0) {
+          throw new Error("No chat models are configured");
+        }
+        setModelOptions(catalog.models);
+        setSelectedModel((current) => (
+          catalog.models.some((model) => model.id === current)
+            ? current
+            : catalog.defaultModel
+        ));
+        setModelOptionsError(false);
+      })
+      .catch((error: unknown) => {
+        if (!isChatStoppedError(error)) {
+          console.error("Failed to load chat models", error);
+          setModelOptionsError(true);
+        }
+      });
+
+    return () => abortController.abort();
+  }, []);
 
   // 데스크톱에서 열린 패널이 화면을 덮은 채 모바일 레이아웃으로 넘어가지 않게 한다.
   useEffect(() => {
@@ -279,6 +317,9 @@ export default function App() {
     if (conversationMessageLimitReached) {
       return;
     }
+    if (!selectedModel) {
+      return;
+    }
 
     const userMessage = createUserMessage(message, publicationScope);
     const conversationId = activeConversation.id;
@@ -311,6 +352,7 @@ export default function App() {
         {
           conversationId,
           message,
+          model: selectedModel,
           publicationKind: publicationScope,
           includeMcpTrace: true,
           history,
@@ -505,7 +547,11 @@ export default function App() {
 
         <footer className="composer-wrap">
           <Composer
-            disabled={activeConversationIsSending || conversationMessageLimitReached}
+            disabled={activeConversationIsSending || conversationMessageLimitReached || !selectedModel}
+            modelOptions={modelOptions}
+            modelOptionsError={modelOptionsError}
+            selectedModel={selectedModel}
+            onSelectedModelChange={setSelectedModel}
             publicationScope={publicationScope}
             onPublicationScopeChange={setPublicationScope}
             sending={activeConversationIsSending}

@@ -990,10 +990,11 @@ button {
   color: #1f2933;
 }
 
-.publication-switch__button--active {
-  background: #ffffff;
-  color: var(--accent-strong);
-  box-shadow: 0 1px 4px rgb(15 23 42 / 0.12);
+.publication-switch__button--active,
+.publication-switch__button--active:hover {
+  background: var(--green);
+  color: #ffffff;
+  box-shadow: 0 2px 7px rgb(33 128 107 / 0.28);
 }
 
 .publication-switch__button:disabled {
@@ -1010,6 +1011,31 @@ button {
   font-size: 13px;
   font-weight: 800;
   padding: 0 10px;
+}
+
+.model-select select {
+  width: 190px;
+  height: 34px;
+  max-width: 46vw;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  font-weight: 700;
+  outline: none;
+  padding: 0 6px;
+}
+
+.model-select select:hover,
+.model-select select:focus-visible {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.model-select select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .send-button {
