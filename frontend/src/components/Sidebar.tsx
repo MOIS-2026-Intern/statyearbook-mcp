@@ -1,10 +1,11 @@
-import { MessageSquarePlus, Search, Database, BarChart3, Settings2 } from "lucide-react";
+import { MessageSquarePlus, PanelLeftClose } from "lucide-react";
 import type { Conversation } from "../types/chat";
 import { ConversationListItem } from "./ConversationListItem";
 
 interface SidebarProps {
   conversations: Conversation[];
   activeConversationId: string;
+  onClose: () => void;
   onCreateConversation: () => void;
   onDeleteConversation: (conversationId: string) => void;
   onSelectConversation: (conversationId: string) => void;
@@ -14,6 +15,7 @@ interface SidebarProps {
 export function Sidebar({
   conversations,
   activeConversationId,
+  onClose,
   onCreateConversation,
   onDeleteConversation,
   onSelectConversation,
@@ -25,8 +27,14 @@ export function Sidebar({
           <span className="sidebar__eyebrow">MOIS</span>
           <strong>StatYearbook</strong>
         </div>
-        <button className="icon-button" type="button" aria-label="설정" title="설정">
-          <Settings2 size={18} />
+        <button
+          className="icon-button"
+          type="button"
+          onClick={onClose}
+          aria-label="대화 사이드바 닫기"
+          title="대화 사이드바 닫기"
+        >
+          <PanelLeftClose size={18} />
         </button>
       </div>
 
@@ -34,18 +42,6 @@ export function Sidebar({
         <button className="nav-button nav-button--primary" type="button" onClick={onCreateConversation}>
           <MessageSquarePlus size={18} />
           <span>새 채팅</span>
-        </button>
-        <button className="nav-button" type="button">
-          <Search size={18} />
-          <span>채팅 검색</span>
-        </button>
-        <button className="nav-button" type="button">
-          <Database size={18} />
-          <span>MCP 서버</span>
-        </button>
-        <button className="nav-button" type="button">
-          <BarChart3 size={18} />
-          <span>시각화 결과</span>
         </button>
       </div>
 
@@ -60,16 +56,6 @@ export function Sidebar({
             onSelect={onSelectConversation}
           />
         ))}
-      </div>
-
-      <div className="sidebar__footer">
-        <div className="avatar" aria-hidden="true">
-          S
-        </div>
-        <div>
-          <strong>Song</strong>
-          <span>GPT API Host</span>
-        </div>
       </div>
     </aside>
   );

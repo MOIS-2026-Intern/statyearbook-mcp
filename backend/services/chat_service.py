@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -15,6 +16,7 @@ from backend.gateways.mcp_gateway import McpGateway, describe_tool
 from backend.gateways.model_gateway import (
     ModelGateway,
     TextDeltaCallback,
+    UnsupportedChatModelError,
     create_model_gateway,
 )
 from backend.models.chat import (
@@ -36,6 +38,7 @@ from utils.publication_kind import ALL_PUBLICATIONS_SCOPE, normalize_publication
 
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[ChatProgress], None]
+ModelGatewayFactory = Callable[[Settings], ModelGateway]
 
 _TOOL_INPUT_ERROR_MARKERS = (
     "validation error",
@@ -60,10 +63,19 @@ _PUBLICATION_KIND_TOOLS = {
 
 
 class ChatService:
-    # 대화 설정과 선택된 모델 gateway를 서비스에 연결한다.
-    def __init__(self, settings: Settings, model_gateway: ModelGateway | None = None):
+    # 모델별 HTTP 연결 풀은 첫 요청에 만들고 이후 요청에서 재사용한다. 테스트나 별도 host가
+    # 주입한 gateway는 기본 모델 gateway로 등록한다.
+    def __init__(
+        self,
+        settings: Settings,
+        model_gateway: ModelGateway | None = None,
+        model_gateway_factory: ModelGatewayFactory = create_model_gateway,
+    ):
         self._settings = settings
-        self._model = model_gateway or create_model_gateway(settings)
+        self._model_gateway_factory = model_gateway_factory
+        self._models: dict[str, ModelGateway] = {}
+        if model_gateway is not None:
+            self._models[settings.chat_model] = model_gateway
 
     # MCP 도구 발견과 모델 루프를 실행해 최종 채팅 응답을 구성한다.
     async def respond(
@@ -75,6 +87,7 @@ class ChatService:
         started = time.perf_counter()
         metrics = _new_pipeline_metrics()
         outcome = "error"
+        selected_model = request.model.strip() if request.model else self._settings.chat_model
         connect_recorded = False
         traces: list[McpTrace] = []
         messages = _model_messages_from_request(request, self._settings.tool_output_max_chars)
@@ -86,6 +99,7 @@ class ChatService:
         )
         connect_started = time.perf_counter()
         try:
+            model = self._model_for(selected_model)
             async with McpGateway(self._settings) as mcp:
                 metrics["mcp_connect_ms"] += _elapsed_ms(connect_started)
                 connect_recorded = True
@@ -100,6 +114,7 @@ class ChatService:
 
                 final_text = await self._run_model_loop(
                     request=request,
+                    model=model,
                     mcp=mcp,
                     traces=traces,
                     messages=messages,
@@ -137,6 +152,7 @@ class ChatService:
                 metrics["mcp_connect_ms"] = _elapsed_ms(connect_started)
             _log_pipeline(
                 settings=self._settings,
+                model=selected_model,
                 metrics=metrics,
                 total_ms=_elapsed_ms(started),
                 outcome=outcome,
@@ -144,9 +160,27 @@ class ChatService:
 
     # 애플리케이션이 공유한 모델 HTTP 클라이언트의 연결 풀을 종료한다.
     async def close(self) -> None:
-        close = getattr(self._model, "close", None)
-        if close is not None:
-            await close()
+        models = list(self._models.values())
+        self._models.clear()
+        for model in models:
+            close = getattr(model, "close", None)
+            if close is not None:
+                await close()
+
+    # 요청 모델을 허용 목록으로 검증하고 해당 모델 설정을 가진 gateway를 돌려준다.
+    def _model_for(self, model_id: str) -> ModelGateway:
+        if model_id not in self._settings.chat_models:
+            allowed = ", ".join(self._settings.chat_models)
+            raise UnsupportedChatModelError(
+                f"Unsupported chat model: {model_id}. Allowed models: {allowed}"
+            )
+
+        model = self._models.get(model_id)
+        if model is None:
+            model_settings = replace(self._settings, chat_model=model_id)
+            model = self._model_gateway_factory(model_settings)
+            self._models[model_id] = model
+        return model
 
     # MCP 도구 목록을 조회하고 성공 또는 실패 trace를 남긴다.
     async def _list_tools(self, mcp: McpGateway, traces: list[McpTrace]) -> list[ToolSpec]:
@@ -198,6 +232,7 @@ class ChatService:
         self,
         *,
         request: ChatRequest,
+        model: ModelGateway | None = None,
         mcp: McpGateway,
         traces: list[McpTrace],
         messages: list[ModelMessage],
@@ -206,6 +241,9 @@ class ChatService:
         on_text_delta: TextDeltaCallback | None = None,
         metrics: dict[str, int] | None = None,
     ) -> str:
+        selected_model = model or self._model_for(
+            request.model.strip() if request.model else self._settings.chat_model
+        )
         pipeline_metrics = metrics if metrics is not None else _new_pipeline_metrics()
         state: object | None = None
         tool_results: list[ToolResult] = []
@@ -232,7 +270,7 @@ class ChatService:
             response_tool_names = _response_tool_names(tool_results, historical_tool_names)
             model_started = time.perf_counter()
             try:
-                turn = await self._model.create_turn(
+                turn = await selected_model.create_turn(
                     instructions=build_system_prompt(
                         response_tool_names,
                         request.publicationKind,
@@ -325,7 +363,7 @@ class ChatService:
         try:
             # 지금까지의 대화에는 도구 호출 기록이 남아 있다. 도구 목록을 빼고 보내면 모델이
             # 그 기록을 해석하지 못해 빈 응답을 돌려주므로, 목록은 그대로 두고 호출만 막는다.
-            final_turn = await self._model.create_turn(
+            final_turn = await selected_model.create_turn(
                 instructions=(
                     build_system_prompt(
                         _response_tool_names(tool_results, historical_tool_names),
@@ -947,6 +985,7 @@ def _new_pipeline_metrics() -> dict[str, int]:
 def _log_pipeline(
     *,
     settings: Settings,
+    model: str,
     metrics: dict[str, int],
     total_ms: int,
     outcome: str,
@@ -964,7 +1003,7 @@ def _log_pipeline(
         "model_ms=%s mcp_tools_ms=%s model_calls=%s tool_calls=%s",
         outcome,
         settings.model_provider,
-        settings.chat_model,
+        model,
         total_ms,
         bottleneck,
         metrics["mcp_connect_ms"],

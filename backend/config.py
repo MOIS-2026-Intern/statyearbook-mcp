@@ -42,6 +42,9 @@ class Settings:
     )
     model_provider: str = "openai"
     chat_model: str = "gpt-5-mini"
+    # UI에 노출하고 채팅 요청에서 허용할 모델 목록이다. 모델별 gateway는 이 목록을
+    # 기준으로 지연 생성하며, 기본 모델은 반드시 목록에 포함되어야 한다.
+    chat_models: tuple[str, ...] = ("gpt-5-mini",)
     model_timeout_seconds: float = 200.0
     model_max_output_tokens: int = 48000
     # 공급자마다 허용하는 추론 강도 값이 다르므로 배포 환경에서 고정한다. 빈 값이면
@@ -78,6 +81,18 @@ class Settings:
                 f"STATYEARBOOK_BACKEND_MODEL_PROVIDER must be one of: {allowed}"
             )
 
+        normalized_models = tuple(
+            dict.fromkeys(model.strip() for model in self.chat_models if model.strip())
+        )
+        object.__setattr__(self, "chat_models", normalized_models)
+        if not normalized_models:
+            raise RuntimeError("STATYEARBOOK_BACKEND_CHAT_MODELS must contain at least one model")
+        if self.chat_model not in normalized_models:
+            raise RuntimeError(
+                "STATYEARBOOK_BACKEND_CHAT_MODEL must be included in "
+                "STATYEARBOOK_BACKEND_CHAT_MODELS"
+            )
+
         if self.profile != "main":
             return
 
@@ -108,6 +123,9 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         profile = PROFILE
+        chat_model = os.environ.get(
+            "STATYEARBOOK_BACKEND_CHAT_MODEL", "gpt-5-mini"
+        ).strip()
         return cls(
             profile=profile,
             host=os.environ.get("STATYEARBOOK_BACKEND_HOST", "127.0.0.1"),
@@ -125,7 +143,13 @@ class Settings:
             model_provider=os.environ.get(
                 "STATYEARBOOK_BACKEND_MODEL_PROVIDER", "openai"
             ).strip().lower(),
-            chat_model=os.environ.get("STATYEARBOOK_BACKEND_CHAT_MODEL", "gpt-5-mini"),
+            chat_model=chat_model,
+            chat_models=tuple(
+                _csv(
+                    os.environ.get("STATYEARBOOK_BACKEND_CHAT_MODELS"),
+                    [chat_model],
+                )
+            ),
             model_timeout_seconds=float(
                 os.environ.get("STATYEARBOOK_BACKEND_MODEL_TIMEOUT_SECONDS", "200")
             ),

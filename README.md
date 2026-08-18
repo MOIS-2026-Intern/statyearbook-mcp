@@ -85,6 +85,12 @@ MCP 연결, 도구 확인, 모델 분석, 도구 호출, 결과 검토 상태를
 있습니다. backend는 종료 신호 뒤 진행 중인 요청을 기본 5초까지만 기다리며,
 `STATYEARBOOK_BACKEND_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS`로 조정할 수 있습니다.
 
+입력창의 모델 드롭다운은 backend의 `GET /api/models`에서 허용 목록을 읽습니다.
+`STATYEARBOOK_BACKEND_CHAT_MODELS`에 BizRouter 모델 ID를 쉼표로 추가하면 새 모델이
+드롭다운에 나타나고, `STATYEARBOOK_BACKEND_CHAT_MODEL`은 그 목록 안에서 기본값을
+정합니다. 채팅 요청의 `model`은 이 허용 목록으로 검증되며 모델별 gateway 연결 풀로
+분기됩니다.
+
 답변을 생성하는 동안 전송 버튼은 멈춤 버튼으로 바뀝니다. 멈춤은 스트림 연결을 끊고,
 backend는 그 자리에서 모델 추론과 MCP 도구 호출을 취소한 뒤 세션과 요청 상태를 버립니다
 (`event=chat.stream.stopped`, `event=chat.pipeline outcome=stopped`). 중단된 턴은 화면과

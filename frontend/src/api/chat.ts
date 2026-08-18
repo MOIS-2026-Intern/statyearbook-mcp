@@ -1,5 +1,5 @@
 import { createMockAssistantResponse } from "../data/mockChat";
-import type { ChatProgress, ChatRequest, ChatResponse } from "../types/chat";
+import type { ChatModelsResponse, ChatProgress, ChatRequest, ChatResponse } from "../types/chat";
 
 const rawBaseUrl = import.meta.env.VITE_BACKEND_BASE_URL
   ?? (import.meta.env.MODE === "development" ? "http://127.0.0.1:8000" : undefined);
@@ -32,9 +32,34 @@ type ChatStreamEvent =
   | ResultStreamEvent
   | ErrorStreamEvent;
 
+const mockModels: ChatModelsResponse = {
+  defaultModel: "openai/gpt-5-mini",
+  models: [
+    { id: "openai/gpt-5-mini", label: "GPT-5 mini" },
+    { id: "anthropic/claude-sonnet-5", label: "Claude Sonnet 5" },
+  ],
+};
+
 // 사용자가 멈춘 요청과 실제 오류를 호출한 쪽에서 구분한다.
 export function isChatStoppedError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+// 백엔드가 허용한 모델 목록과 기본 선택값을 불러온다.
+export async function fetchChatModels(signal?: AbortSignal): Promise<ChatModelsResponse> {
+  if (useMockApi) {
+    return mockModels;
+  }
+  if (!apiBaseUrl) {
+    throw new Error("VITE_BACKEND_BASE_URL is not configured");
+  }
+
+  const response = await fetch(`${apiBaseUrl}/api/models`, { signal });
+  if (!response.ok) {
+    throw new Error(`Model API request failed with ${response.status}`);
+  }
+
+  return response.json() as Promise<ChatModelsResponse>;
 }
 
 // 프로필 설정에 따라 mock 응답 또는 백엔드 진행 상태 스트림을 호출한다.

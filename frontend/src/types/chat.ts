@@ -51,6 +51,7 @@ export interface Conversation {
 export interface ChatRequest {
   conversationId: string;
   message: string;
+  model: string;
   // 백엔드 필드 이름은 그대로 두고 값만 조회 범위로 넓힌다.
   publicationKind: PublicationScope;
   includeMcpTrace: boolean;
@@ -61,6 +62,16 @@ export interface ChatRequest {
 export interface ChatResponse {
   message: ChatMessage;
   traces: McpTrace[];
+}
+
+export interface ChatModelOption {
+  id: string;
+  label: string;
+}
+
+export interface ChatModelsResponse {
+  defaultModel: string;
+  models: ChatModelOption[];
 }
 
 export type ChatProgressStage =

@@ -1,4 +1,4 @@
-import { Activity, Database, PanelRightClose } from "lucide-react";
+import { Activity, Database, X } from "lucide-react";
 import type { McpTrace } from "../types/chat";
 import { McpTraceCard } from "./McpTraceCard";
 
@@ -12,14 +12,14 @@ export function McpInspector({ traces, onClose }: McpInspectorProps) {
   const successCount = traces.filter((trace) => trace.status === "success").length;
 
   return (
-    <aside className="mcp-inspector" aria-label="MCP 추적">
+    <aside className="mcp-inspector" id="mcp-inspector" aria-label="MCP 추적">
       <div className="mcp-inspector__header">
         <div>
           <span className="section-label">MCP Trace</span>
           <strong>도구 요청/응답</strong>
         </div>
         <button className="icon-button" type="button" onClick={onClose} aria-label="MCP 패널 닫기" title="닫기">
-          <PanelRightClose size={18} />
+          <X size={18} />
         </button>
       </div>
 

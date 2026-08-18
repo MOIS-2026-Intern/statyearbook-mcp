@@ -55,13 +55,33 @@ button {
 }
 
 .app-shell {
+  --conversation-max-width: 1400px;
+  --assistant-max-width: 1240px;
+  --composer-max-width: 1240px;
   display: grid;
-  grid-template-columns: 284px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   height: 100vh;
   background: #fafafa;
 }
 
+.app-shell--with-sidebar {
+  --conversation-max-width: 1120px;
+  --assistant-max-width: 960px;
+  --composer-max-width: 1040px;
+  grid-template-columns: 284px minmax(0, 1fr);
+}
+
 .app-shell--with-inspector {
+  --conversation-max-width: 1120px;
+  --assistant-max-width: 960px;
+  --composer-max-width: 1040px;
+  grid-template-columns: minmax(0, 1fr) 372px;
+}
+
+.app-shell--with-sidebar.app-shell--with-inspector {
+  --conversation-max-width: 920px;
+  --assistant-max-width: 760px;
+  --composer-max-width: 920px;
   grid-template-columns: 284px minmax(0, 1fr) 372px;
 }
 
@@ -249,26 +269,6 @@ button {
   background: #f8e9e9;
 }
 
-.sidebar__footer {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-  border-top: 1px solid var(--border);
-  padding: 12px 14px;
-}
-
-.sidebar__footer strong,
-.sidebar__footer span {
-  display: block;
-}
-
-.sidebar__footer span {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.avatar,
 .message-avatar {
   display: grid;
   width: 34px;
@@ -307,6 +307,17 @@ button {
   gap: 16px;
   border-bottom: 1px solid rgba(221, 227, 234, 0.7);
   padding: 10px 24px;
+}
+
+.chat-header__identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.chat-header__identity > div {
+  min-width: 0;
 }
 
 .chat-header h1 {
@@ -447,7 +458,7 @@ button {
 
 .message-stack {
   display: grid;
-  width: min(100%, 920px);
+  width: min(100%, var(--conversation-max-width));
   gap: 28px;
   margin: 0 auto;
 }
@@ -464,7 +475,7 @@ button {
 
 .message {
   min-width: 0;
-  max-width: min(760px, 100%);
+  max-width: min(var(--assistant-max-width), 100%);
 }
 
 .message--user {
@@ -475,7 +486,7 @@ button {
 }
 
 .message--assistant {
-  width: min(760px, 100%);
+  width: min(var(--assistant-max-width), 100%);
   padding-top: 4px;
 }
 
@@ -890,7 +901,7 @@ button {
 }
 
 .composer-wrap {
-  width: min(100%, 920px);
+  width: min(100%, var(--composer-max-width));
   margin: 0 auto;
   padding: 0 24px 12px;
 }
@@ -979,10 +990,11 @@ button {
   color: #1f2933;
 }
 
-.publication-switch__button--active {
-  background: #ffffff;
-  color: var(--accent-strong);
-  box-shadow: 0 1px 4px rgb(15 23 42 / 0.12);
+.publication-switch__button--active,
+.publication-switch__button--active:hover {
+  background: var(--green);
+  color: #ffffff;
+  box-shadow: 0 2px 7px rgb(33 128 107 / 0.28);
 }
 
 .publication-switch__button:disabled {
@@ -999,6 +1011,31 @@ button {
   font-size: 13px;
   font-weight: 800;
   padding: 0 10px;
+}
+
+.model-select select {
+  width: 190px;
+  height: 34px;
+  max-width: 46vw;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  font-weight: 700;
+  outline: none;
+  padding: 0 6px;
+}
+
+.model-select select:hover,
+.model-select select:focus-visible {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.model-select select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .send-button {
@@ -1139,6 +1176,11 @@ button {
 @media (max-width: 1180px) {
   .app-shell,
   .app-shell--with-inspector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell--with-sidebar,
+  .app-shell--with-sidebar.app-shell--with-inspector {
     grid-template-columns: 260px minmax(0, 1fr);
   }
 
@@ -1158,14 +1200,21 @@ button {
   }
 
   .app-shell,
-  .app-shell--with-inspector {
+  .app-shell--with-sidebar,
+  .app-shell--with-inspector,
+  .app-shell--with-sidebar.app-shell--with-inspector {
     display: block;
     height: auto;
     min-height: 100vh;
   }
 
   .sidebar {
-    display: none;
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 25;
+    display: flex;
+    width: min(284px, 94vw);
+    box-shadow: 20px 0 44px rgba(15, 23, 42, 0.12);
   }
 
   .chat-layout {
