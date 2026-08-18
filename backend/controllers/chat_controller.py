@@ -11,8 +11,17 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from backend.config import settings
-from backend.gateways.model_gateway import ModelGatewayConfigurationError
-from backend.models.chat import ChatProgress, ChatRequest, ChatResponse
+from backend.gateways.model_gateway import (
+    ModelGatewayConfigurationError,
+    UnsupportedChatModelError,
+)
+from backend.models.chat import (
+    ChatModelOption,
+    ChatModelsResponse,
+    ChatProgress,
+    ChatRequest,
+    ChatResponse,
+)
 from backend.services.chat_service import ChatService
 from utils.logging import compact_json
 
@@ -20,6 +29,11 @@ from utils.logging import compact_json
 router = APIRouter()
 logger = logging.getLogger(__name__)
 _chat_service: ChatService | None = None
+
+_MODEL_LABELS = {
+    "openai/gpt-5-mini": "GPT-5 mini",
+    "anthropic/claude-sonnet-5": "Claude Sonnet 5",
+}
 
 
 # 모델 HTTP 연결 풀을 요청 사이에 재사용할 공유 채팅 서비스를 지연 생성한다.
@@ -37,6 +51,18 @@ async def close_chat_service() -> None:
     _chat_service = None
     if service is not None:
         await service.close()
+
+
+# UI가 백엔드와 같은 허용 목록과 기본값으로 모델 선택기를 구성하도록 공개한다.
+@router.get("/api/models", response_model=ChatModelsResponse)
+async def chat_models() -> ChatModelsResponse:
+    return ChatModelsResponse(
+        defaultModel=settings.chat_model,
+        models=[
+            ChatModelOption(id=model, label=_MODEL_LABELS.get(model, model))
+            for model in settings.chat_models
+        ],
+    )
 
 
 # 프록시 헤더를 우선해 로그에 남길 클라이언트 IP를 구한다.
@@ -61,6 +87,13 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     )
     try:
         return await _get_chat_service().respond(payload)
+    except UnsupportedChatModelError as exc:
+        logger.warning(
+            "event=chat.error error_type=%s error=%s",
+            exc.__class__.__name__,
+            compact_json(str(exc)),
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ModelGatewayConfigurationError as exc:
         logger.error(
             "event=chat.error error_type=%s error=%s",
