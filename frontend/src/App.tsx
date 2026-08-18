@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MoreHorizontal, PanelRightOpen, Share2, Sparkles, X } from "lucide-react";
+import { PanelLeftOpen, Sparkles, X } from "lucide-react";
 import { isChatStoppedError, sendChatMessage } from "./api/chat";
 import { ChatMessage } from "./components/ChatMessage";
 import { Composer } from "./components/Composer";
@@ -146,13 +146,27 @@ function createInitialConversationState() {
   return limitConversationState([nextConversation, ...savedState.conversations], nextConversation.id);
 }
 
+const MOBILE_VIEWPORT_QUERY = "(max-width: 820px)";
+
+function isMobileViewport() {
+  return typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia(MOBILE_VIEWPORT_QUERY).matches;
+}
+
+// 데스크톱에서는 양쪽 패널을 바로 보여주되, 모바일에서는 대화 화면부터 보여준다.
+function createInitialPanelVisibility() {
+  return !isMobileViewport();
+}
+
 // 대화 목록·메시지·MCP trace 상태와 주요 UI 흐름을 조정한다.
 export default function App() {
   const [initialConversationState] = useState(createInitialConversationState);
   const [conversations, setConversations] = useState<Conversation[]>(initialConversationState.conversations);
   const [activeConversationId, setActiveConversationId] = useState(initialConversationState.activeConversationId);
   const [sendingConversationId, setSendingConversationId] = useState<string | null>(null);
-  const [showMcpTrace, setShowMcpTrace] = useState(true);
+  const [showSidebar, setShowSidebar] = useState(createInitialPanelVisibility);
+  const [showMcpTrace, setShowMcpTrace] = useState(createInitialPanelVisibility);
   const [publicationScope, setPublicationScope] = useState<PublicationScope>(DEFAULT_PUBLICATION_SCOPE);
   const [limitNoticeDismissed, setLimitNoticeDismissed] = useState(false);
   const [progressByConversation, setProgressByConversation] = useState<Record<string, ChatProgress>>({});
@@ -178,6 +192,24 @@ export default function App() {
     setLimitNoticeDismissed(false);
   }, [activeConversationId]);
 
+  // 데스크톱에서 열린 패널이 화면을 덮은 채 모바일 레이아웃으로 넘어가지 않게 한다.
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") {
+      return;
+    }
+
+    const viewport = window.matchMedia(MOBILE_VIEWPORT_QUERY);
+    const closePanelsOnMobile = (event: MediaQueryListEvent) => {
+      if (event.matches) {
+        setShowSidebar(false);
+        setShowMcpTrace(false);
+      }
+    };
+
+    viewport.addEventListener("change", closePanelsOnMobile);
+    return () => viewport.removeEventListener("change", closePanelsOnMobile);
+  }, []);
+
   // 다른 대화로 옮기면 이전 대화에서 위로 올려 둔 위치를 물려받지 않는다.
   useEffect(() => {
     resetToBottom();
@@ -192,6 +224,32 @@ export default function App() {
     const next = createConversation();
     setConversations((current) => limitConversationState([next, ...current], next.id).conversations);
     setActiveConversationId(next.id);
+    if (isMobileViewport()) {
+      setShowSidebar(false);
+    }
+  };
+
+  // 모바일에서는 대화 선택 뒤 사이드바를 닫아 바로 메시지를 볼 수 있게 한다.
+  const selectConversation = (conversationId: string) => {
+    setActiveConversationId(conversationId);
+    if (isMobileViewport()) {
+      setShowSidebar(false);
+    }
+  };
+
+  // 좁은 화면에서는 좌우 패널이 서로 겹치지 않도록 하나만 연다.
+  const toggleSidebar = () => {
+    if (!showSidebar && isMobileViewport()) {
+      setShowMcpTrace(false);
+    }
+    setShowSidebar((value) => !value);
+  };
+
+  const toggleMcpTrace = () => {
+    if (!showMcpTrace && isMobileViewport()) {
+      setShowSidebar(false);
+    }
+    setShowMcpTrace((value) => !value);
   };
 
   // 선택한 대화를 삭제하고 필요하면 인접한 대화를 활성화한다.
@@ -339,46 +397,49 @@ export default function App() {
   }
 
   return (
-    <div className={`app-shell ${showMcpTrace ? "app-shell--with-inspector" : ""}`}>
-      <Sidebar
-        activeConversationId={activeConversationId}
-        conversations={conversations}
-        onCreateConversation={createNewChat}
-        onDeleteConversation={deleteConversation}
-        onSelectConversation={setActiveConversationId}
-      />
+    <div
+      className={`app-shell${showSidebar ? " app-shell--with-sidebar" : ""}${showMcpTrace ? " app-shell--with-inspector" : ""}`}
+    >
+      {showSidebar ? (
+        <Sidebar
+          activeConversationId={activeConversationId}
+          conversations={conversations}
+          onClose={() => setShowSidebar(false)}
+          onCreateConversation={createNewChat}
+          onDeleteConversation={deleteConversation}
+          onSelectConversation={selectConversation}
+        />
+      ) : null}
 
       <main className="chat-layout">
         <header className="chat-header">
-          <div>
-            <span className="section-label">통계연보 MCP</span>
-            <h1>{activeConversation.title}</h1>
+          <div className="chat-header__identity">
+            {!showSidebar ? (
+              <button
+                className="icon-button"
+                type="button"
+                onClick={toggleSidebar}
+                aria-label="대화 사이드바 열기"
+                title="대화 사이드바 열기"
+              >
+                <PanelLeftOpen size={18} />
+              </button>
+            ) : null}
+            <div>
+              <span className="section-label">통계연보 MCP</span>
+              <h1>{activeConversation.title}</h1>
+            </div>
           </div>
           <div className="chat-header__actions">
             <button
               className={`mcp-toggle ${showMcpTrace ? "mcp-toggle--active" : ""}`}
               type="button"
-              onClick={() => setShowMcpTrace((value) => !value)}
+              onClick={toggleMcpTrace}
+              aria-expanded={showMcpTrace}
+              aria-controls="mcp-inspector"
             >
               <Sparkles size={16} />
               <span>MCP 보기</span>
-            </button>
-            {!showMcpTrace ? (
-              <button
-                className="icon-button"
-                type="button"
-                onClick={() => setShowMcpTrace(true)}
-                aria-label="MCP 패널 열기"
-                title="MCP 패널 열기"
-              >
-                <PanelRightOpen size={18} />
-              </button>
-            ) : null}
-            <button className="icon-button" type="button" aria-label="공유" title="공유">
-              <Share2 size={18} />
-            </button>
-            <button className="icon-button" type="button" aria-label="더 보기" title="더 보기">
-              <MoreHorizontal size={19} />
             </button>
           </div>
         </header>
@@ -424,9 +485,9 @@ export default function App() {
             </div>
           ) : (
             <div className="welcome">
-              <span className="welcome__badge">GPT API + MCP Host</span>
+              <span className="welcome__badge">LLM + MCP Server</span>
               <h2>행정안전통계연보를 대화로 탐색하세요</h2>
-              <p>통계표 검색, 원자료 확인, 시각화 요청까지 하나의 대화 흐름에서 처리하는 웹 클라이언트입니다.</p>
+              <p>통계 검색부터 원자료 확인, 시각화까지 편하게 대화로 요청해 보세요.</p>
               <div className="prompt-grid">
                 <button type="button" onClick={() => sendMessage("경기도 새마을금고 회원 수 연도별 추이를 찾아줘.")}>
                   경기도 새마을금고 회원 수 연도별 추이

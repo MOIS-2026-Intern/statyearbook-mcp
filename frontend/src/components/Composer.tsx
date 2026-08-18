@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, useState } from "react";
-import { BookOpen, DatabaseZap, FileText, Library, Mic, Paperclip, SendHorizontal, Square } from "lucide-react";
+import { BookOpen, DatabaseZap, FileText, Library, SendHorizontal, Square } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { PublicationScope } from "../types/chat";
 
@@ -71,9 +71,6 @@ export function Composer({
 
       <div className="composer__bar">
         <div className="composer__tools">
-          <button className="icon-button" type="button" aria-label="파일 첨부" title="파일 첨부">
-            <Paperclip size={18} />
-          </button>
           <div className="publication-switch" role="group" aria-label="조회 범위">
             {SCOPE_OPTIONS.map((option) => {
               const active = publicationScope === option.value;
@@ -102,9 +99,6 @@ export function Composer({
         </div>
 
         <div className="composer__actions">
-          <button className="icon-button" type="button" aria-label="음성 입력" title="음성 입력">
-            <Mic size={18} />
-          </button>
           {sending ? (
             <button
               className="send-button send-button--stop"
