@@ -35,6 +35,7 @@ from .table_interpreter import (
     year_metric_columns,
     year_value_columns,
 )
+from utils.publication_kind import publication_edition_label
 
 
 ChartType = Literal[
@@ -591,6 +592,15 @@ def stat_block(table: dict) -> dict[str, Any]:
         "stat_id": table["stat_id"],
         "ref_id": table["ref_id"],
         "publication_year": table["publication_year"],
+        "publication_kind": table.get("publication_kind"),
+        "publication_period": table.get("publication_period"),
+        # 차트 아래 인용 줄은 표 답변과 같은 항목을 적어야 한다.
+        "publication_label": publication_edition_label(
+            table.get("publication_kind"),
+            table["publication_year"],
+            table.get("publication_period"),
+        ),
+        "department": table.get("department"),
         "chapter_no": table.get("chapter_no"),
         "section_no": table.get("section_no"),
         "level3_no": table.get("level3_no"),

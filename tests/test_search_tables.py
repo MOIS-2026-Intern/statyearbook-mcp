@@ -67,6 +67,8 @@ class SearchTablesTests(unittest.TestCase):
 
         cached = get_cached_table(response["tables"][0]["table_handle"])
         self.assertEqual(cached["stat_id"], 32)
+        # 같은 표로 그린 차트도 표 답변과 같은 담당 부서를 인용 줄에 적어야 한다.
+        self.assertEqual(cached["department"], "디지털안전정책과")
         self.assertEqual(cached["body"]["columns"], ["연도", "건수"])
         self.assertEqual(cached["body"]["records"], [{"연도": "2024", "건수": "1,234"}])
 
