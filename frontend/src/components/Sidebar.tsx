@@ -24,8 +24,8 @@ export function Sidebar({
     <aside className="sidebar" aria-label="대화 목록">
       <div className="sidebar__brand">
         <div>
-          <span className="sidebar__eyebrow">MOIS</span>
-          <strong>StatYearbook</strong>
+          <span className="sidebar__eyebrow">행정안전부</span>
+          <strong>통계연보 채팅 서비스</strong>
         </div>
         <button
           className="icon-button"

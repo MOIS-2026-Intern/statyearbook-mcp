@@ -868,9 +868,47 @@ button {
   line-height: 1.15;
 }
 
-/* 제목에서 발간물 이름만 브랜드 색으로 차분하게 강조한다. */
+/* 제목에서 발간물 이름만 브랜드 색으로 차분하게 강조한다. 대각선 밝은 띠가 한 번
+   지나가도록, 글자 안쪽을 단색 대신 가로로 길게 늘인 그라디언트로 칠한다. 멈춰 있을
+   때는 띠가 글자 밖에 있어 단색과 똑같이 보인다. */
 .welcome__title-name {
-  color: var(--accent-strong);
+  background-image: linear-gradient(
+    120deg,
+    var(--accent-strong) 0%,
+    var(--accent-strong) 42%,
+    #4aa8bd 47%,
+    #b9e8f2 49.3%,
+    #ffffff 50%,
+    #b9e8f2 50.7%,
+    #4aa8bd 53%,
+    var(--accent-strong) 58%,
+    var(--accent-strong) 100%
+  );
+  background-repeat: no-repeat;
+  background-size: 300% 100%;
+  background-position: 0 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: welcome-title-shine 850ms ease-out;
+}
+
+/* 조회 범위를 바꾸면 span이 새로 붙어 이 애니메이션이 처음부터 다시 재생된다. */
+@keyframes welcome-title-shine {
+  from {
+    background-position: 100% 0;
+  }
+
+  to {
+    background-position: 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .welcome__title-name {
+    animation: none;
+  }
 }
 
 .welcome p {

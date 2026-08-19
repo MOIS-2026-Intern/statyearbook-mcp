@@ -471,7 +471,7 @@ export default function App() {
               </button>
             ) : null}
             <div>
-              <span className="section-label">통계연보 MCP</span>
+              <span className="section-label">통계연보 CHAT BOT</span>
               <h1>{activeConversation.title}</h1>
             </div>
           </div>
@@ -532,7 +532,9 @@ export default function App() {
             <div className="welcome">
               <span className="welcome__badge">LLM + MCP Server</span>
               <h2>
-                <span className="welcome__title-name">{welcomeContent.titleName}</span>
+                <span className="welcome__title-name" key={publicationScope}>
+                  {welcomeContent.titleName}
+                </span>
                 {welcomeContent.titleParticle} 대화로 탐색하세요
               </h2>
               <p>통계 검색부터 원자료 확인, 시각화까지 편하게 대화로 요청해 보세요.</p>
