@@ -823,6 +823,35 @@ def pick_focus_row(
     return scored[0][2]
 
 
+# 고른 행에서 값이 하나로 좁혀진 컬럼인지 확인한다. 필터로 값을 하나만 남긴 컬럼이 여기 해당한다.
+def is_collapsed_axis(column: str | None, rows: list[dict[str, str]]) -> bool:
+    if not column or len(rows) < 2:
+        return False
+    return len({normalize_key(row.get(column)) for row in rows}) == 1
+
+
+# 고른 행을 실제로 서로 다르게 가르는 축 후보를 찾는다. 시점이 범주보다 축으로 읽기 좋아
+# 연도 컬럼을 먼저 보고, 없으면 값이 둘 이상인 범주 컬럼을 쓴다.
+def distinguishing_column(
+    rows: list[dict[str, str]], profiles: list[dict[str, Any]], exclude: set[str | None],
+) -> str | None:
+    candidates = [
+        profile["name"] for profile in profiles
+        if profile["is_year"] and profile["name"] not in exclude
+    ] + [
+        profile["name"] for profile in profiles
+        if profile.get("is_categorical", False) and profile["name"] not in exclude
+    ]
+    for name in candidates:
+        values = {
+            normalize_key(row.get(name)) for row in rows
+            if not is_missing_value(row.get(name))
+        }
+        if len(values) > 1:
+            return name
+    return None
+
+
 # x축으로 쓸 컬럼을 연도/범주 우선순위로 고른다.
 def pick_x_column(profiles: list[dict[str, Any]], query: str | None) -> str | None:
     year_columns = [profile["name"] for profile in profiles if profile["is_year"]]

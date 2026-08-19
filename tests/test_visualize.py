@@ -109,6 +109,38 @@ MIXED_UNIT_TABLE = {
         ["2025", "1,565,834", "1,326,261", "84.7"],
     ]),
 }
+LONG_CATEGORY_COLUMNS = [
+    "연도 Year",
+    "구분 Classification",
+    "데이터셋 다운로드 건수 No. of Downloaded Data Sets",
+    "합계 Total",
+]
+# 연도와 구분이 각각 열로 있어, 한 구분만 남기면 그 열의 값이 하나로 좁혀지는 모양.
+LONG_CATEGORY_TABLE = {
+    **TABLE,
+    "title_ko": "공공데이터 민간활용 실적",
+    "unit": "누적 건",
+    "body": body(LONG_CATEGORY_COLUMNS, [
+        ["2023", "중앙행정기관 Central Government", "11,679,293", "15,334,703"],
+        ["2023", "지방자치단체 Local Government", "21,882,057", "22,451,089"],
+        ["2024", "중앙행정기관 Central Government", "13,839,843", "17,775,028"],
+        ["2024", "지방자치단체 Local Government", "27,277,404", "27,999,097"],
+        ["2025", "중앙행정기관 Central Government", "17,593,345", "21,972,130"],
+        ["2025", "지방자치단체 Local Government", "33,471,339", "34,369,546"],
+    ]),
+}
+FLAT_CATEGORY_COLUMNS = ["구분 Classification", "합계 Total"]
+# 남은 행을 가를 컬럼이 구분 하나뿐이라, 그 구분을 좁히면 축으로 쓸 컬럼이 남지 않는 모양.
+FLAT_CATEGORY_TABLE = {
+    **TABLE,
+    "title_ko": "기관별 활용 실적",
+    "unit": "건",
+    "body": body(FLAT_CATEGORY_COLUMNS, [
+        ["중앙행정기관 Central Government", "10"],
+        ["중앙행정기관 Central Government", "20"],
+        ["지방자치단체 Local Government", "30"],
+    ]),
+}
 GRADE_COLUMNS = [
     "구분 Classification 기관 Organization",
     "계 Total",
@@ -961,6 +993,84 @@ class ValueLabelTests(unittest.TestCase):
         self.assertEqual(vega_lite["layer"][1]["encoding"]["text"]["field"], "value")
         largest = max(value["value"] for value in vega_lite["data"]["values"])
         self.assertGreater(vega_lite["encoding"]["x"]["scale"]["domainMax"], largest)
+
+
+# 필터로 값이 하나만 남은 컬럼을 x축에 두면 남은 행이 한 칸에 겹쳐 쌓여 합계 막대 하나가 된다.
+class CollapsedAxisTests(unittest.TestCase):
+    CENTRAL = {"column": "구분", "value": "중앙행정기관"}
+    YEARS = [2023, 2024, 2025]
+    TOTALS = [15334703.0, 17775028.0, 21972130.0]
+
+    # x로 지정한 구분 컬럼이 필터로 한 값만 남으면 연도 축으로 옮겨야 한다.
+    def test_filtered_column_given_as_x_moves_to_the_year_axis(self) -> None:
+        spec = build_plot_spec(
+            LONG_CATEGORY_TABLE, "중앙행정기관의 공공데이터 활용 건수 추이", "auto",
+            "구분 Classification", "합계 Total", None, None, "exclude",
+            filters=[self.CENTRAL],
+        )
+
+        records = spec["data"]["records"]
+        self.assertEqual(spec["chart"]["x"], "연도 Year")
+        self.assertEqual([record["x"] for record in records], self.YEARS)
+        self.assertEqual([record["value"] for record in records], self.TOTALS)
+        self.assertTrue(any(
+            "'구분 Classification'" in warning and "'연도 Year'" in warning
+            for warning in spec["warnings"]
+        ))
+
+    # metrics로 지표를 고른 선택 계획 경로도 같은 축 교정을 받아야 한다.
+    def test_selection_plan_moves_collapsed_x_to_the_year_axis(self) -> None:
+        spec = build_plot_spec(
+            LONG_CATEGORY_TABLE, "중앙행정기관의 공공데이터 활용 건수 추이", "auto",
+            "구분 Classification", None, None, None, "exclude",
+            filters=[self.CENTRAL],
+            metrics=[{"column": "합계 Total", "label": "합계"}],
+        )
+
+        records = spec["data"]["records"]
+        self.assertEqual(spec["chart"]["x"], "연도 Year")
+        self.assertEqual([record["x"] for record in records], self.YEARS)
+        self.assertEqual([record["value"] for record in records], self.TOTALS)
+
+    # 축을 지정하지 않아도 필터가 좁힌 컬럼이 축으로 뽑히면 안 된다.
+    def test_collapsed_column_is_not_picked_as_x_without_a_request(self) -> None:
+        spec = build_plot_spec(
+            LONG_CATEGORY_TABLE, "중앙행정기관 공공데이터 활용 추이", "auto",
+            None, "합계 Total", None, None, "exclude",
+            filters=[self.CENTRAL],
+        )
+
+        self.assertEqual([record["x"] for record in spec["data"]["records"]], self.YEARS)
+
+    # 옮길 컬럼이 없으면 조용히 쌓지 말고 왜 겹쳤는지 알려야 한다.
+    def test_collapsed_x_without_a_replacement_warns(self) -> None:
+        spec = build_plot_spec(
+            FLAT_CATEGORY_TABLE, "중앙행정기관 활용 실적", "auto",
+            "구분 Classification", None, None, None, "exclude",
+            filters=[self.CENTRAL],
+            metrics=[{"column": "합계 Total", "label": "합계"}],
+        )
+
+        self.assertEqual(spec["chart"]["x"], "구분 Classification")
+        self.assertTrue(any(
+            "'구분 Classification'" in warning and "겹쳐 쌓" in warning
+            for warning in spec["warnings"]
+        ))
+
+    # 값이 여럿 남은 컬럼은 축으로 멀쩡하므로 손대지 않아야 한다.
+    def test_category_column_with_many_values_stays_on_the_x_axis(self) -> None:
+        spec = build_plot_spec(
+            LONG_CATEGORY_TABLE, "2025년 기관별 공공데이터 활용 실적", "auto",
+            "구분 Classification", "합계 Total", None, None, "exclude", year=2025,
+        )
+
+        self.assertEqual(spec["chart"]["x"], "구분 Classification")
+        self.assertEqual(
+            [record["x"] for record in spec["data"]["records"]],
+            ["중앙행정기관", "지방자치단체"],
+        )
+        self.assertEqual(spec["warnings"], [])
+
 
 
 if __name__ == "__main__":

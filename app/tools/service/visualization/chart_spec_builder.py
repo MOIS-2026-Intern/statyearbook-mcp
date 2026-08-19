@@ -11,8 +11,10 @@ from .table_interpreter import (
     column_family,
     column_family_groups,
     display_category_label,
+    distinguishing_column,
     family_category_label,
     filter_chart_records,
+    is_collapsed_axis,
     is_total_column,
     is_total_label,
     normalize_key,
@@ -834,6 +836,36 @@ def _relation_selection_records(
     return records, provenance
 
 
+# 필터로 값이 하나만 남은 컬럼을 x축에 두면 고른 행이 모두 같은 칸에 들어가, 막대가 겹쳐 쌓이며
+# 합계 하나로 보인다. 값 자체가 틀리게 읽히므로 행을 실제로 가르는 컬럼으로 축을 옮기고,
+# 옮길 컬럼이 없으면 조용히 쌓지 않도록 알린다.
+def _resolve_collapsed_x(
+    x_column: str | None,
+    source_rows: list[dict[str, str]],
+    profiles: list[dict[str, Any]],
+    exclude: set[str | None],
+    warnings: list[str],
+) -> str | None:
+    if not is_collapsed_axis(x_column, source_rows):
+        return x_column
+
+    value = display_category_label(source_rows[0].get(x_column))
+    replacement = distinguishing_column(source_rows, profiles, exclude | {x_column})
+    if replacement is None:
+        warnings.append(
+            f"'{x_column}' 컬럼은 고른 행에서 값이 '{value}' 하나뿐이라 x축이 될 수 없는데, "
+            "행을 구분할 다른 컬럼도 찾지 못해 값이 한 칸에 겹쳐 쌓였습니다. "
+            "행을 가르는 컬럼을 x로 지정하거나 filters를 넓혀 주세요."
+        )
+        return x_column
+
+    warnings.append(
+        f"'{x_column}' 컬럼은 고른 행에서 값이 '{value}' 하나뿐이라 그대로 두면 모든 값이 한 칸에 "
+        f"쌓입니다. 행을 구분하는 '{replacement}' 컬럼을 x축으로 사용했습니다."
+    )
+    return replacement
+
+
 # 구조화된 선택 계획을 검증하고 같은 데이터셋으로 표와 차트 응답을 만든다.
 def _selection_plan_spec(
     table: dict,
@@ -927,6 +959,12 @@ def _selection_plan_spec(
         warnings.append(f"선택 계획의 x축 컬럼 '{x_column}'은 범주형 또는 연도형이 아닙니다.")
         x_column = None
     x_column = x_column or (axis_profiles[0]["name"] if axis_profiles else None)
+    # 파생 지표는 같은 항목의 여러 행을 먼저 더하고 나서 나누므로, 항목이 하나로 좁혀져도
+    # 값이 겹쳐 쌓이지 않는다. 축을 옮기면 오히려 더할 단위가 갈라진다.
+    if derive is None:
+        x_column = _resolve_collapsed_x(
+            x_column, source_rows, profiles, {metric["column"] for metric in validated}, warnings,
+        )
     x_profile = profile_map.get(x_column) if x_column else None
 
     records: list[dict[str, Any]] = []
@@ -1786,8 +1824,9 @@ def build_plot_spec(
     if family_validation_failed:
         source_rows = []
 
-    x_column = resolve_column(x, profiles) or pick_x_column(profiles, query)
     group_column = resolve_column(group, profiles)
+    x_column = resolve_column(x, profiles) or pick_x_column(profiles, query)
+    x_column = _resolve_collapsed_x(x_column, source_rows, profiles, {group_column}, warnings)
 
     # 상위 헤더를 지정했으면 그 아래 컬럼만 그린다. 지정하지 않으면 숫자 컬럼을 모두 쓴다.
     numeric_columns = [
