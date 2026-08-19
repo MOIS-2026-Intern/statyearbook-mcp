@@ -334,16 +334,38 @@ PUBLICATION_SCOPE_PROMPTS = {
 }
 
 
-# 실제로 사용한 도구의 결과 규칙만 기본 시스템 프롬프트에 덧붙인다.
+# 조회 범위까지 포함하지만 한 요청 안에서는 도구 라운드 내내 바뀌지 않는 부분이다.
+# 이 부분이 고정돼야 그 뒤에 오는 도구 스키마와 대화 이력까지 프롬프트 캐시가 이어진다.
+def build_base_system_prompt(
+    publication_scope: str = DEFAULT_PUBLICATION_SCOPE,
+) -> str:
+    """도구 결과 규칙을 뺀, 라운드 내내 고정되는 시스템 프롬프트를 구성한다."""
+    scope = normalize_publication_scope(publication_scope)
+    return "\n\n".join([SYSTEM_PROMPT, PUBLICATION_SCOPE_PROMPTS[scope]])
+
+
+# 직전 라운드에 쓴 도구가 무엇이냐에 따라 달라지는 부분이다. 시스템 프롬프트 앞쪽에 두면
+# 라운드마다 캐시가 끊기므로, gateway가 이 값을 대화 맨 끝으로 옮겨 싣는다.
+def build_tool_result_guidance(
+    tool_names: list[str] | tuple[str, ...] = (),
+) -> str:
+    """직전 도구 결과를 답변으로 옮길 때 필요한 응답 규칙만 이어 붙인다."""
+    sections = [
+        prompt
+        for name in dict.fromkeys(tool_names)
+        if (prompt := TOOL_RESULT_PROMPTS.get(name))
+    ]
+    return "\n\n".join(sections)
+
+
+# 위 둘을 합친, 모델이 한 턴에 받는 규칙 전체다. 실제 요청은 둘을 프롬프트의 앞과 끝에
+# 나눠 싣지만 규칙의 총합은 이 값과 같아야 하므로, 프롬프트 검증과 공급자가 분리 배치를
+# 거부했을 때의 합본이 이 형태를 기준으로 삼는다.
 def build_system_prompt(
     tool_names: list[str] | tuple[str, ...] = (),
     publication_scope: str = DEFAULT_PUBLICATION_SCOPE,
 ) -> str:
     """조회 범위 규칙과 직전 도구 결과에 필요한 응답 규칙만 공통 프롬프트에 덧붙인다."""
-    scope = normalize_publication_scope(publication_scope)
-    sections = [SYSTEM_PROMPT, PUBLICATION_SCOPE_PROMPTS[scope]]
-    for name in dict.fromkeys(tool_names):
-        prompt = TOOL_RESULT_PROMPTS.get(name)
-        if prompt:
-            sections.append(prompt)
-    return "\n\n".join(sections)
+    base = build_base_system_prompt(publication_scope)
+    guidance = build_tool_result_guidance(tool_names)
+    return f"{base}\n\n{guidance}" if guidance else base

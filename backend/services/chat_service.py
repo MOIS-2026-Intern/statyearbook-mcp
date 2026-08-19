@@ -28,7 +28,7 @@ from backend.models.chat import (
     McpTrace,
 )
 from backend.models.tooling import ModelMessage, ToolCall, ToolResult, ToolSpec
-from backend.prompts import build_system_prompt
+from backend.prompts import build_base_system_prompt, build_tool_result_guidance
 from backend.serializers.mcp_result_serializer import (
     json_dumps,
     truncate_jsonable,
@@ -54,6 +54,11 @@ _TOOL_INPUT_ERROR_MARKERS = (
     "cannot be",
     "does not accept",
     "requires ",
+)
+# 도구 라운드를 모두 쓴 마지막 턴에만 붙는 지시다. 이 턴에서만 유효하므로 고정 지시문이
+# 아니라 이번 턴 지시문으로 보낸다.
+_TOOL_ROUND_LIMIT_INSTRUCTION = (
+    "도구 호출 횟수 제한에 도달했습니다. 지금까지 받은 도구 결과만 사용해 답하세요."
 )
 _PUBLICATION_KIND_TOOLS = {
     "analyze_publications",
@@ -271,14 +276,14 @@ class ChatService:
             model_started = time.perf_counter()
             try:
                 turn = await selected_model.create_turn(
-                    instructions=build_system_prompt(
-                        response_tool_names,
-                        request.publicationKind,
-                    ),
+                    instructions=build_base_system_prompt(request.publicationKind),
                     messages=messages,
                     tools=tools,
                     tool_results=tool_results,
                     state=state,
+                    # 이 규칙만 라운드마다 달라진다. 고정 지시문과 떼어 넘겨야 gateway가
+                    # 프롬프트 앞부분을 그대로 두고 캐시를 이어 쓴다.
+                    turn_instructions=build_tool_result_guidance(response_tool_names) or None,
                     on_text_delta=on_text_delta,
                 )
             finally:
@@ -363,19 +368,21 @@ class ChatService:
         try:
             # 지금까지의 대화에는 도구 호출 기록이 남아 있다. 도구 목록을 빼고 보내면 모델이
             # 그 기록을 해석하지 못해 빈 응답을 돌려주므로, 목록은 그대로 두고 호출만 막는다.
+            final_guidance = build_tool_result_guidance(
+                _response_tool_names(tool_results, historical_tool_names)
+            )
             final_turn = await selected_model.create_turn(
-                instructions=(
-                    build_system_prompt(
-                        _response_tool_names(tool_results, historical_tool_names),
-                        request.publicationKind,
-                    )
-                    + "\n\n도구 호출 횟수 제한에 도달했습니다. 지금까지 받은 도구 결과만 사용해 답하세요."
-                ),
+                instructions=build_base_system_prompt(request.publicationKind),
                 messages=messages,
                 tools=tools,
                 tool_results=tool_results,
                 state=state,
                 tool_choice="none",
+                turn_instructions=(
+                    f"{final_guidance}\n\n{_TOOL_ROUND_LIMIT_INSTRUCTION}"
+                    if final_guidance
+                    else _TOOL_ROUND_LIMIT_INSTRUCTION
+                ),
                 on_text_delta=on_text_delta,
             )
         finally:

@@ -21,7 +21,9 @@ class UnsupportedChatModelError(ModelGatewayConfigurationError):
 
 
 class ModelGateway(Protocol):
-    # 현재 대화와 도구 결과로 다음 모델 턴을 생성한다.
+    # 현재 대화와 도구 결과로 다음 모델 턴을 생성한다. instructions는 요청 내내 고정되는
+    # 지시문이고, turn_instructions는 직전 도구 결과에 따라 라운드마다 달라지는 지시문이다.
+    # 둘을 나눠 받아야 gateway가 고정부를 프롬프트 앞에 그대로 두고 캐시를 이어 쓸 수 있다.
     async def create_turn(
         self,
         *,
@@ -31,6 +33,7 @@ class ModelGateway(Protocol):
         tool_results: list[ToolResult] | None = None,
         state: object | None = None,
         tool_choice: str | None = None,
+        turn_instructions: str | None = None,
         on_text_delta: TextDeltaCallback | None = None,
     ) -> ModelTurn:
         ...
