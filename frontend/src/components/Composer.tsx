@@ -72,7 +72,7 @@ export function Composer({
         disabled={disabled}
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={onKeyDown}
-        placeholder="행정안전통계연보에 대해 물어보세요..."
+        placeholder="통계자료에 대해 물어보세요..."
         rows={1}
         value={value}
       />

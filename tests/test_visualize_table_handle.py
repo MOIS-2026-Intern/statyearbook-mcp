@@ -94,6 +94,24 @@ class TableHandleFallbackTests(unittest.TestCase):
         self.assertEqual(self.repository.calls, 1)
         self.assertIn("stat_id", body["warnings"][0])
 
+    # 차트 아래 인용 줄에 적을 발간물·담당·페이지가 stats에 실려 있어야 한다.
+    def test_stats_carry_the_citation_fields(self) -> None:
+        handle = cache_table({
+            **TABLE,
+            "publication_kind": "major_statistics",
+            "publication_period": "H2",
+            "department": "지역공동체과",
+            "page_start": 42,
+        })
+
+        body = self.service.visualize(
+            stat_id=91, table_handle=handle, **VISUALIZE_ARGS,
+        ).structuredContent
+
+        self.assertEqual(body["stat"]["publication_label"], "2025년 하반기 주요통계집")
+        self.assertEqual(body["stat"]["department"], "지역공동체과")
+        self.assertEqual(body["stat"]["page_start"], 42)
+
     # stat_id로도 표를 찾지 못하면 그때는 오류로 끝낸다.
     def test_missing_table_still_errors(self) -> None:
         result = self.service.visualize(

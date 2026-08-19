@@ -12,7 +12,7 @@ from backend.gateways.openai_compatible_gateway import OpenAICompatibleGateway
 from backend.models.chat import ChatMessage, ChatProgress, ChatRequest, McpTrace
 from backend.models.tooling import ModelMessage, ModelTurn, ToolCall, ToolSpec
 from backend.prompts import SEARCH_STATISTICS_RESULT_PROMPT
-from backend.services.chat_service import ChatService
+from backend.services.chat_service import UNANSWERED_QUESTION_NOTE, ChatService
 
 
 def _request() -> ChatRequest:
@@ -277,6 +277,21 @@ class StoppedTurnFollowUpTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("사용자에 의해 응답이 중단되었습니다", "\n".join(contents))
         # 직전 도구 맥락도 복원되어 그 도구의 응답 규칙이 프롬프트에 붙는다.
         self.assertIn(SEARCH_STATISTICS_RESULT_PROMPT, first_call["instructions"])
+
+    # 답을 받지 못한 질문에는 배경 참고용이라는 표시가 붙어야, 맥락이 다른 새 질문에서 모델이
+    # 두 질문에 모두 답하지 않는다. 이미 답한 질문에는 이 표시가 붙지 않는다.
+    async def test_unanswered_question_is_marked_as_background_context(self) -> None:
+        model = StubModelGateway([ModelTurn(text="이어서 답합니다.", tool_calls=[], state=None)])
+        service = ChatService(Settings(), model_gateway=model)
+
+        with patch("backend.services.chat_service.McpGateway", StubMcpGateway):
+            await service.respond(_follow_up_request())
+
+        contents = [message.content for message in model.calls[0]["messages"]]
+        self.assertIn(UNANSWERED_QUESTION_NOTE, contents[2])
+        self.assertNotIn(UNANSWERED_QUESTION_NOTE, contents[0])
+        # 이번 질문 자체는 표시 없이 그대로 전달된다.
+        self.assertEqual(contents[3], "아까 찾은 표를 그래프로 그려줘")
 
 
 class ChatStreamStopTests(unittest.IsolatedAsyncioTestCase):
