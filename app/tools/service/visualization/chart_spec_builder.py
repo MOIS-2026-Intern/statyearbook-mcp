@@ -30,6 +30,7 @@ from .table_interpreter import (
     select_source_rows,
     wants_delta_chart,
     wants_trend_chart,
+    year_metric_columns,
     year_value_columns,
 )
 
@@ -81,6 +82,8 @@ RANK_WORDS = ("순위", "랭킹", "등수", "rank")
 RELATION_WORDS = ("관계", "상관", "산점", "scatter", "correlation")
 GAP_WORDS = ("격차", "차이", "간극", "gap", "difference")
 MAX_SERIES = 12
+# 이만큼 시점이 늘어서면 연도는 범례에 담을 것이 아니라 x축이 되어야 한다.
+MIN_YEARS_FOR_TIME_AXIS = 4
 _MISSING = object()
 CATEGORY_ALIASES = {"category", "classification", "label", "name", "구분", "분류"}
 VALUE_ALIASES = {"value", "count", "measure", "값", "수", "정원", "인원"}
@@ -538,6 +541,18 @@ def resolve_sort_order(
     return "descending" if wants_descending else "ascending"
 
 
+# 시간 축 정렬 키. 연도 컬럼이라도 중간에 소계나 증감률 행이 끼면 x가 숫자와 글자로 섞이므로
+# 숫자끼리 먼저 시간순으로 늘어놓고 시점이 아닌 값은 뒤에 붙인다.
+def _time_sort_key(record: dict[str, Any]) -> tuple[int, float, str, str]:
+    value = record.get("x")
+    series = str(record.get("series", ""))
+    if value is None:
+        return (2, 0.0, "", series)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return (0, float(value), "", series)
+    return (1, 0.0, str(value), series)
+
+
 # 시간 축은 시간순으로, 요청된 값 정렬은 범주별 값 합계 순으로 레코드를 정렬한다.
 def sort_records(
     records: list[dict[str, Any]],
@@ -546,7 +561,7 @@ def sort_records(
     sort_order: Literal["ascending", "descending"] | None,
 ) -> list[dict[str, Any]]:
     if x_is_year or chart_type in TIME_ORDERED_TYPES:
-        return sorted(records, key=lambda record: (record.get("x") is None, record.get("x"), str(record.get("series", ""))))
+        return sorted(records, key=_time_sort_key)
     if sort_order is None and chart_type == "diverging_bar":
         # 증감 차트는 많이 줄어든 쪽에서 늘어난 쪽으로 늘어놓아야 변화의 방향이 한눈에 읽힌다.
         sort_order = "ascending"
@@ -1097,10 +1112,9 @@ def _selection_plan_spec(
     )
 
 
-# 행이 지표, 열이 연도인 표에서 사용자가 고른 행들을 연도 축 시계열로 편다.
-# 이런 표에서 연도는 계열이 아니라 x축이므로, 고른 행 하나하나가 계열이 된다.
-# 행을 직접 고른 요청에만 적용해, 표 전체를 그리는 기존 경로는 건드리지 않는다.
-def _wide_year_selected_rows_spec(
+# 행이 지표, 열이 연도인 표를 연도 축 시계열로 편다. 이런 표에서 연도는 계열이 아니라 x축이므로,
+# 행 하나하나가 범례에 놓이는 계열이 된다.
+def _year_axis_series_spec(
     table: dict,
     query: str | None,
     chart_type: str,
@@ -1110,36 +1124,18 @@ def _wide_year_selected_rows_spec(
     top_n: int | None,
     total_mode: TotalMode,
     source_rows: list[dict[str, str]],
+    rows: list[dict[str, str]],
     profiles: list[dict[str, Any]],
-    metrics: list[dict[str, str | None]] | None,
     warnings: list[str],
     request_hints: dict[str, Any],
+    year_columns: list[tuple[int, str]],
+    category_column: str,
+    transform_type: str,
+    reason_prefix: str,
 ) -> dict[str, Any] | None:
-    if len(source_rows) < 2:
-        return None
-    year_columns = year_value_columns(profiles)
-    if len(year_columns) < 2:
-        return None
-
-    if metrics is not None:
-        # 연도 컬럼을 지표로 받아 왔다면 그건 계열이 아니라 x축이다. 연도가 아닌 컬럼이
-        # 하나라도 섞여 있으면 지표를 고른 요청이므로 이 경로를 쓰지 않는다.
-        requested = [
-            resolve_column(str(metric.get("column") or ""), profiles) for metric in metrics
-        ]
-        year_columns = [item for item in year_columns if item[1] in set(requested)]
-        if len(year_columns) < 2 or len(year_columns) != len(requested):
-            return None
-
-    category_column = (resolve_column(x, profiles) if x else None) or next(
-        (profile["name"] for profile in profiles if profile.get("is_categorical", False)), None,
-    )
-    if category_column is None:
-        return None
-
     records: list[dict[str, Any]] = []
     labels: list[str] = []
-    for row in source_rows:
+    for row in rows:
         label = display_category_label(row.get(category_column))
         for year, column in year_columns:
             value = parse_number(row.get(column))
@@ -1171,7 +1167,7 @@ def _wide_year_selected_rows_spec(
         "type": selected_type,
         "requested_type": chart_type,
         "decision_source": decision_source,
-        "reason": f"행이 지표, 열이 연도인 표에서 고른 행을 연도별 계열로 폈습니다. {reason}",
+        "reason": f"{reason_prefix} {reason}",
         "title": _chart_title(table),
         "x": "year",
         "y": "value",
@@ -1185,11 +1181,127 @@ def _wide_year_selected_rows_spec(
         records, source_rows, warnings,
         request_hints=request_hints,
         transform={
-            "type": "wide_year_selected_rows",
+            "type": transform_type,
             "category_column": category_column,
             "year_columns": [{"year": year, "column": column} for year, column in year_columns],
         },
     )
+
+
+# 열이 연도인 표에서 계열 라벨이 될 범주 컬럼을 고른다.
+def _year_axis_category_column(x: str | None, profiles: list[dict[str, Any]]) -> str | None:
+    return (resolve_column(x, profiles) if x else None) or next(
+        (profile["name"] for profile in profiles if profile.get("is_categorical", False)), None,
+    )
+
+
+# 행이 지표, 열이 연도인 표에서 사용자가 고른 행들을 연도 축 시계열로 편다.
+# 행을 직접 고른 요청에만 적용해, 표 전체를 그리는 경로와 갈라 둔다.
+def _wide_year_selected_rows_spec(
+    table: dict,
+    query: str | None,
+    chart_type: str,
+    x: str | None,
+    y: str | None,
+    group: str | None,
+    top_n: int | None,
+    total_mode: TotalMode,
+    source_rows: list[dict[str, str]],
+    profiles: list[dict[str, Any]],
+    metrics: list[dict[str, str | None]] | None,
+    warnings: list[str],
+    request_hints: dict[str, Any],
+) -> dict[str, Any] | None:
+    if len(source_rows) < 2:
+        return None
+    year_columns = year_value_columns(profiles)
+    if len(year_columns) < 2:
+        return None
+
+    if metrics is not None:
+        # 연도 컬럼을 지표로 받아 왔다면 그건 계열이 아니라 x축이다. 연도가 아닌 컬럼이
+        # 하나라도 섞여 있으면 지표를 고른 요청이므로 이 경로를 쓰지 않는다.
+        requested = [
+            resolve_column(str(metric.get("column") or ""), profiles) for metric in metrics
+        ]
+        year_columns = [item for item in year_columns if item[1] in set(requested)]
+        if len(year_columns) < 2 or len(year_columns) != len(requested):
+            return None
+
+    category_column = _year_axis_category_column(x, profiles)
+    if category_column is None:
+        return None
+
+    return _year_axis_series_spec(
+        table, query, chart_type, x, y, group, top_n, total_mode,
+        source_rows, source_rows, profiles, warnings, request_hints,
+        year_columns, category_column,
+        transform_type="wide_year_selected_rows",
+        reason_prefix="행이 지표, 열이 연도인 표에서 고른 행을 연도별 계열로 폈습니다.",
+    )
+
+
+# 열이 연도인 표를 행을 고르지 않아도 연도 축 시계열로 편다. 주요통계집의 추이표는 연도를 가로로
+# 늘어놓는 형태가 대부분이라, 표를 그대로 그리면 연도가 범례로 가고 지표가 x축에 놓인다. 그러면
+# 시점 사이의 흐름이 사라지고 범례만 연도 수만큼 늘어나 읽을 수 없다.
+def _wide_year_all_rows_spec(
+    table: dict,
+    query: str | None,
+    chart_type: str,
+    x: str | None,
+    y: str | None,
+    group: str | None,
+    top_n: int | None,
+    total_mode: TotalMode,
+    source_rows: list[dict[str, str]],
+    profiles: list[dict[str, Any]],
+    warnings: list[str],
+    target_year: int | None,
+    request_hints: dict[str, Any],
+) -> dict[str, Any] | None:
+    # 한 해를 집어 물은 요청은 시점끼리가 아니라 그해 항목끼리를 견주는 것이라 펴지 않는다.
+    if target_year is not None:
+        return None
+    year_columns = year_value_columns(profiles)
+    metric_label: str | None = None
+    if len(year_columns) < 2:
+        # "'24_순위"처럼 연도 아래에 지표가 붙은 표는 지표 하나를 골라야 연도 축이 선다.
+        year_columns, metric_label = year_metric_columns(profiles, query)
+    if len(year_columns) < 2:
+        return None
+    # 시점이 몇 개 없으면 연도를 범례에 두고 항목을 나란히 견주는 편이 나을 수 있다. 그런 표는
+    # 추이를 물었을 때만 편다.
+    if len(year_columns) < MIN_YEARS_FOR_TIME_AXIS and not wants_trend_chart(query, chart_type, x):
+        return None
+
+    category_column = _year_axis_category_column(x, profiles)
+    if category_column is None:
+        return None
+
+    # 합계 행은 개별 항목과 같은 축에 두면 혼자 위로 솟아 나머지 선을 바닥에 눌러 버린다.
+    rows = source_rows
+    if resolve_total_mode(total_mode, query) != "include":
+        rows = [row for row in source_rows if not is_total_label(row.get(category_column))]
+    if len(rows) < 2:
+        return None
+
+    reason_prefix = "열이 연도인 표라 연도를 x축에, 각 행을 범례 계열로 놓아 추이로 폈습니다."
+    if metric_label:
+        reason_prefix = f"{reason_prefix} 연도마다 지표가 여럿이라 '{metric_label}'만 그렸습니다."
+    spec = _year_axis_series_spec(
+        table, query, chart_type, x, y, group, top_n, total_mode,
+        source_rows, rows, profiles, warnings, request_hints,
+        year_columns, category_column,
+        transform_type="wide_year_rows_to_time_series",
+        reason_prefix=reason_prefix,
+    )
+    # 이 경로로 그려낸 뒤에만 알린다. 여기서 물러나면 다른 경로가 표 전체를 그리므로 안내가 어긋난다.
+    if spec is not None and metric_label:
+        spec["warnings"].append(
+            f"연도별로 지표가 여럿인 표라 '{metric_label}'만 그렸습니다. "
+            "다른 지표는 metrics로 지정해 주세요."
+        )
+    return spec
 
 
 # 행은 범주, 열은 연도인 표를 범주마다 한 줄씩 갖는 시계열로 편다.
@@ -1295,11 +1407,11 @@ def _wide_year_time_series_spec(
     if requested_type != chart_type:
         warnings.append(f"지원하지 않는 차트 타입 '{chart_type}' 대신 auto를 사용했습니다.")
 
-    if not wants_trend_chart(query, requested_type, x):
-        return None
-
     year_columns = year_value_columns(profiles)
     if len(year_columns) < 2:
+        return None
+    # 열이 여러 해에 걸쳐 있으면 그 표 자체가 시계열이라, 질의에 '추이'라는 말이 없어도 시점 축으로 읽는다.
+    if not wants_trend_chart(query, requested_type, x) and len(year_columns) < MIN_YEARS_FOR_TIME_AXIS:
         return None
 
     category_columns = [
@@ -1653,6 +1765,14 @@ def build_plot_spec(
     )
     if wide_spec is not None:
         return apply_display_title(wide_spec, title)
+
+    # 질의가 특정 행을 가리키지 않으면 표의 행 전체를 연도별 계열로 편다.
+    all_rows_spec = _wide_year_all_rows_spec(
+        table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles, warnings,
+        target_year, request_hints,
+    )
+    if all_rows_spec is not None:
+        return apply_display_title(all_rows_spec, title)
 
     wide_category_spec = _wide_row_category_spec(
         table, query, chart_type, x, y, group, top_n, total_mode, source_rows, profiles, warnings,
