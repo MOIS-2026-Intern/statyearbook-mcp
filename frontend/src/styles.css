@@ -868,6 +868,11 @@ button {
   line-height: 1.15;
 }
 
+/* 제목에서 발간물 이름만 브랜드 색으로 차분하게 강조한다. */
+.welcome__title-name {
+  color: var(--accent-strong);
+}
+
 .welcome p {
   width: min(100%, 560px);
   margin: 0 auto;

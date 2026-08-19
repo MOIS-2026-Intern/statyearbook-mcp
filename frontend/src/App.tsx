@@ -7,6 +7,7 @@ import { McpInspector } from "./components/McpInspector";
 import { Sidebar } from "./components/Sidebar";
 import { StreamingMessage } from "./components/StreamingMessage";
 import { MAX_USER_MESSAGES_PER_CONVERSATION, RECENT_HISTORY_TURN_LIMIT } from "./config/chatLimits";
+import { WELCOME_CONTENT } from "./config/welcomePrompts";
 import { seedConversations } from "./data/mockChat";
 import { useStickToBottom } from "./hooks/useStickToBottom";
 import { limitConversationState, loadConversationState, saveConversationState } from "./storage/conversationStore";
@@ -193,6 +194,8 @@ export default function App() {
     activeConversationUserMessageCount >= MAX_USER_MESSAGES_PER_CONVERSATION;
   const showConversationLimitNotice =
     conversationMessageLimitReached && !activeConversationIsSending && !limitNoticeDismissed;
+  // 첫 화면의 제목과 예시 질의는 지금 고른 조회 범위를 따른다.
+  const welcomeContent = WELCOME_CONTENT[publicationScope];
 
   useEffect(() => {
     saveConversationState(conversations, activeConversationId);
@@ -528,18 +531,17 @@ export default function App() {
           ) : (
             <div className="welcome">
               <span className="welcome__badge">LLM + MCP Server</span>
-              <h2>행정안전통계연보를 대화로 탐색하세요</h2>
+              <h2>
+                <span className="welcome__title-name">{welcomeContent.titleName}</span>
+                {welcomeContent.titleParticle} 대화로 탐색하세요
+              </h2>
               <p>통계 검색부터 원자료 확인, 시각화까지 편하게 대화로 요청해 보세요.</p>
               <div className="prompt-grid">
-                <button type="button" onClick={() => sendMessage("경기도 새마을금고 회원 수 연도별 추이를 찾아줘.")}>
-                  경기도 새마을금고 회원 수 연도별 추이
-                </button>
-                <button type="button" onClick={() => sendMessage("시도별 인구 이동 통계를 표로 정리해줘.")}>
-                  시도별 인구 이동 통계 정리
-                </button>
-                <button type="button" onClick={() => sendMessage("지방세 징수액을 연도별 그래프로 보고 싶어.")}>
-                  지방세 징수액 시각화
-                </button>
+                {welcomeContent.prompts.map((prompt) => (
+                  <button key={prompt.query} type="button" onClick={() => sendMessage(prompt.query)}>
+                    {prompt.label}
+                  </button>
+                ))}
               </div>
             </div>
           )}
