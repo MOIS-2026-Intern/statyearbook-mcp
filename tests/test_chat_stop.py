@@ -275,8 +275,10 @@ class StoppedTurnFollowUpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("지방세 징수액 통계표", contents[1])
         # 중단 안내는 모델이 만든 답이 아니므로 입력에 없어야 한다.
         self.assertNotIn("사용자에 의해 응답이 중단되었습니다", "\n".join(contents))
-        # 직전 도구 맥락도 복원되어 그 도구의 응답 규칙이 프롬프트에 붙는다.
-        self.assertIn(SEARCH_STATISTICS_RESULT_PROMPT, first_call["instructions"])
+        # 직전 도구 맥락도 복원되어 그 도구의 응답 규칙이 이번 턴 지시문으로 전달된다.
+        self.assertIn(SEARCH_STATISTICS_RESULT_PROMPT, first_call["turn_instructions"])
+        # 라운드마다 달라지는 이 규칙이 고정 지시문에 섞이면 프롬프트 캐시가 끊긴다.
+        self.assertNotIn(SEARCH_STATISTICS_RESULT_PROMPT, first_call["instructions"])
 
     # 답을 받지 못한 질문에는 배경 참고용이라는 표시가 붙어야, 맥락이 다른 새 질문에서 모델이
     # 두 질문에 모두 답하지 않는다. 이미 답한 질문에는 이 표시가 붙지 않는다.

@@ -63,6 +63,9 @@ class OpenAICompatibleGateway:
         self._streaming_supported = settings.model_streaming
         # 공급자가 표현하지 못한 파라미터는 한 번 확인한 뒤 다음 요청부터 아예 싣지 않는다.
         self._unsupported_params: set[str] = set()
+        # 라운드마다 바뀌는 지시문을 대화 끝 항목으로 실을 수 있는지 여부다. 공급자가 이
+        # 항목을 거부하면 한 번만 확인하고, 이후에는 예전처럼 instructions에 합쳐 보낸다.
+        self._turn_instruction_item_supported = True
 
     # 여러 채팅 요청이 재사용한 HTTP 클라이언트의 연결 풀을 정리한다.
     async def close(self) -> None:
@@ -113,7 +116,7 @@ class OpenAICompatibleGateway:
         logger.debug(
             "event=model.call provider=%s model=%s duration_ms=%s tool_calls=%s streamed=%s"
             " status=%s incomplete_reason=%s max_output_tokens=%s"
-            " input_tokens=%s output_tokens=%s reasoning_tokens=%s",
+            " input_tokens=%s cached_input_tokens=%s output_tokens=%s reasoning_tokens=%s",
             self._settings.model_provider,
             self._settings.chat_model,
             _elapsed_ms(started),
@@ -123,6 +126,7 @@ class OpenAICompatibleGateway:
             incomplete_reason,
             self._settings.model_max_output_tokens,
             _get(usage, "input_tokens"),
+            _cached_input_tokens(usage),
             _get(usage, "output_tokens"),
             _reasoning_tokens(usage),
         )
@@ -224,7 +228,8 @@ class OpenAICompatibleGateway:
             raise _StreamingUnsupportedError(missing)
         return final
 
-    # 대화 상태와 도구 결과를 이어 모델의 한 턴을 구성한다.
+    # 대화 상태와 도구 결과를 이어 모델의 한 턴을 구성한다. turn_instructions는 라운드마다
+    # 달라지는 지시문이라 instructions와 떨어뜨려 대화 맨 끝에 싣는다.
     async def create_turn(
         self,
         *,
@@ -234,6 +239,7 @@ class OpenAICompatibleGateway:
         tool_results: list[ToolResult] | None = None,
         state: object | None = None,
         tool_choice: str | None = None,
+        turn_instructions: str | None = None,
         on_text_delta: TextDeltaCallback | None = None,
     ) -> ModelTurn:
         input_items = _input_items_from_state(state, messages)
@@ -248,13 +254,25 @@ class OpenAICompatibleGateway:
 
         attempt = 0
         while True:
-            response = await self.create_response(
-                instructions=instructions,
-                input_items=input_items,
-                tools=openai_tools,
-                tool_choice=tool_choice,
-                on_text_delta=None if on_text_delta is None else collect,
+            # 다음 턴에 이어 쓸 상태에는 이 턴에만 유효한 지시문을 남기지 않는다. 남기면
+            # 라운드마다 쌓이는 데다 서로 다른 도구의 규칙이 겹쳐 답변 형식이 흔들린다.
+            request_instructions, request_items = self._turn_request(
+                instructions, turn_instructions, input_items
             )
+            try:
+                response = await self.create_response(
+                    instructions=request_instructions,
+                    input_items=request_items,
+                    tools=openai_tools,
+                    tool_choice=tool_choice,
+                    on_text_delta=None if on_text_delta is None else collect,
+                )
+            except Exception as exc:
+                # 이미 내보낸 조각이 있으면 되돌릴 수 없고, 지시문 항목 문제가 아니면
+                # 그대로 올린다. 되돌릴 수 있으면 지시문을 합친 예전 형태로 한 번 더 보낸다.
+                if streamed or not self._disable_turn_instruction_item(exc, turn_instructions):
+                    raise
+                continue
             output_items = to_jsonable(getattr(response, "output", []))
             tool_calls = _function_calls(response)
             text = _response_text(response, default="")
@@ -294,6 +312,44 @@ class OpenAICompatibleGateway:
             tool_calls=tool_calls,
             state=OpenAIContinuationState(input_items=input_items),
         )
+
+    # 고정 지시문과 이번 턴 지시문을 공급자에 보낼 형태로 배치한다. 이번 턴 지시문을
+    # instructions에 합치면 프롬프트 맨 앞이 라운드마다 달라져 그 뒤의 도구 스키마와 대화
+    # 이력까지 캐시가 끊기므로, 기본적으로는 대화 맨 끝 항목으로 보낸다.
+    def _turn_request(
+        self,
+        instructions: str,
+        turn_instructions: str | None,
+        input_items: list[Any],
+    ) -> tuple[str, list[Any]]:
+        if not turn_instructions:
+            return instructions, input_items
+        if not self._turn_instruction_item_supported:
+            return f"{instructions}\n\n{turn_instructions}", input_items
+        return instructions, [
+            *input_items,
+            {"role": "developer", "content": turn_instructions},
+        ]
+
+    # 공급자가 대화 끝 지시문 항목을 거부했는지 보고, 그렇다면 이후 요청에서 그 방식을 끈다.
+    def _disable_turn_instruction_item(
+        self, exc: BaseException, turn_instructions: str | None
+    ) -> bool:
+        if not turn_instructions or not self._turn_instruction_item_supported:
+            return False
+        if getattr(exc, "status_code", None) not in {400, 422}:
+            return False
+        message = str(exc).lower()
+        if "developer" not in message and "role" not in message:
+            return False
+        self._turn_instruction_item_supported = False
+        logger.warning(
+            "event=model.turn_instruction_item_unsupported provider=%s model=%s error=%s",
+            self._settings.model_provider,
+            self._settings.chat_model,
+            truncate_text(str(exc), 300),
+        )
+        return True
 
 
 # 오류 본문에서 공급자가 지목한 파라미터 이름을 찾는다. 게이트웨이마다 error를 한 겹 더
@@ -445,6 +501,11 @@ async def _close_stream(stream: Any) -> None:
 # Responses API usage에서 추론 토큰 수를 꺼낸다. 공급자가 제공하지 않으면 None이다.
 def _reasoning_tokens(usage: Any) -> Any:
     return _get(_get(usage, "output_tokens_details"), "reasoning_tokens")
+
+
+# 프롬프트 캐시가 실제로 재사용된 입력 토큰 수다. 캐시가 끊겼는지 로그로 확인할 유일한 값이다.
+def _cached_input_tokens(usage: Any) -> Any:
+    return _get(_get(usage, "input_tokens_details"), "cached_tokens")
 
 
 # 딕셔너리와 SDK 객체에서 동일한 방식으로 필드를 읽는다.
