@@ -1015,12 +1015,38 @@ def _log_pipeline(
     )
 
 
+# 답을 받지 못한 채 남은 이전 질문에 붙일 표시다. 이런 질문이 그대로 남아 있으면 모델은 아직
+# 처리하지 않은 요청으로 보고 이번 질문과 함께 답한다. 배경 자료임을 밝혀 이번 질문이 이어지는
+# 맥락일 때만 쓰이게 한다.
+UNANSWERED_QUESTION_NOTE = (
+    "[답변이 중단되어 답하지 않은 이전 질문 - 배경 참고용이다. "
+    "이번 질문이 이 질문을 이어갈 때만 참고하고, 다른 내용이면 이번 질문에만 답한다]"
+)
+
+
+# 이력에서 assistant 답변을 받지 못한 사용자 질문의 위치를 찾는다. 사용자가 응답을 멈춘 턴은
+# 중단 안내가 빠진 채 전달되므로, 뒤에 답변이 오지 않는 질문이 곧 중단된 질문이다.
+def _unanswered_user_indexes(history: list[ChatMessage]) -> set[int]:
+    unanswered: set[int] = set()
+
+    for index, message in enumerate(history):
+        if message.role != "user":
+            continue
+
+        following = history[index + 1] if index + 1 < len(history) else None
+        if following is None or following.role != "assistant":
+            unanswered.add(index)
+
+    return unanswered
+
+
 # 대화 이력과 연관 trace를 모델 입력 메시지로 구성한다.
 def _model_messages_from_request(request: ChatRequest, max_trace_chars: int) -> list[ModelMessage]:
     trace_by_id = {trace.id: trace for trace in request.traces}
+    unanswered_indexes = _unanswered_user_indexes(request.history)
     messages: list[ModelMessage] = []
 
-    for history_message in request.history:
+    for index, history_message in enumerate(request.history):
         content = history_message.content.strip()
         if history_message.role == "assistant":
             trace_context = _trace_context_for_message(history_message, trace_by_id)
@@ -1032,6 +1058,8 @@ def _model_messages_from_request(request: ChatRequest, max_trace_chars: int) -> 
                     "새 질문의 수치는 이번 요청의 도구 결과로 다시 확인한다]\n"
                     f"{trace_text}"
                 )
+        elif index in unanswered_indexes and content:
+            content = f"{content}\n\n{UNANSWERED_QUESTION_NOTE}"
 
         if content:
             messages.append(ModelMessage(role=history_message.role, content=content))

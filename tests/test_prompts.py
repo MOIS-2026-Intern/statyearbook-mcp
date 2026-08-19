@@ -4,6 +4,7 @@ import unittest
 
 from backend.prompts import (
     ALL_PUBLICATIONS_SCOPE_PROMPT,
+    CITATION_FIELD_RULES,
     COMPARE_PUBLICATIONS_RESULT_PROMPT,
     MAJOR_STATISTICS_SCOPE_PROMPT,
     YEARBOOK_SCOPE_PROMPT,
@@ -82,6 +83,40 @@ class PublicationScopePromptTests(unittest.TestCase):
         self.assertIn("한쪽 표만 읽고", ALL_PUBLICATIONS_SCOPE_PROMPT)
         self.assertIn("개요와 최신 현황은 주요통계집에서", ALL_PUBLICATIONS_SCOPE_PROMPT)
         self.assertIn("연도별 추이와 세부 내역은 통계연보에서", ALL_PUBLICATIONS_SCOPE_PROMPT)
+
+    # 전체 범위에서는 표와 시각화가 어느 발간물에서 왔는지 항상 보여야 한다.
+    def test_all_scope_always_labels_the_publication_under_the_table(self) -> None:
+        self.assertIn("사용 발간물: **{publication_label}**", ALL_PUBLICATIONS_SCOPE_PROMPT)
+
+    # 한 발간물로 좁힌 범위에서는 발간물을 맨 앞에 둔 한 줄로 적는다.
+    def test_narrow_scope_puts_the_publication_first_in_one_line(self) -> None:
+        for scope_prompt in (YEARBOOK_SCOPE_PROMPT, MAJOR_STATISTICS_SCOPE_PROMPT):
+            with self.subTest(scope_prompt=scope_prompt[:40]):
+                self.assertIn(
+                    "`사용 발간물: **{publication_label}** · 사용 통계: **{표 제목}**",
+                    scope_prompt,
+                )
+                self.assertIn("· 담당: **{담당 부서}**", scope_prompt)
+
+    # 인용 줄에는 페이지 번호를 적지 않는다.
+    def test_citation_never_asks_for_a_page_number(self) -> None:
+        for scope_prompt in (
+            ALL_PUBLICATIONS_SCOPE_PROMPT,
+            YEARBOOK_SCOPE_PROMPT,
+            MAJOR_STATISTICS_SCOPE_PROMPT,
+        ):
+            with self.subTest(scope_prompt=scope_prompt[:40]):
+                self.assertNotIn("페이지", scope_prompt)
+                self.assertNotIn("page_start", scope_prompt)
+
+    # 인용 줄 형식은 도구가 달라도 같아야 해서 범위 규칙 하나로만 정의한다.
+    def test_citation_format_is_shared_by_every_tool(self) -> None:
+        for scope in ("all", "yearbook", "major_statistics"):
+            for tool in ("search_tables", "visualize"):
+                with self.subTest(scope=scope, tool=tool):
+                    prompt = build_system_prompt([tool], scope)
+                    self.assertIn("'조회 범위'에 적힌 인용 줄 형식을 그대로 적습니다", prompt)
+                    self.assertIn(CITATION_FIELD_RULES, prompt)
 
     # 한 발간물로 좁힌 범위에서는 두 발간물을 합치라는 규칙이 붙으면 안 된다.
     def test_narrow_scope_has_no_combining_rule(self) -> None:

@@ -101,7 +101,7 @@ def _looks_like_data_row(row: list[str]) -> bool:
         return False
     numeric_like = sum(
         1 for value in nonempty
-        if parse_number(value) is not None or parse_year(value) is not None
+        if parse_number(value) is not None or _parse_full_year(value) is not None
     )
     return numeric_like >= 1
 
@@ -119,6 +119,61 @@ def _combine_header_rows(header_rows: list[list[str]], width: int) -> list[str]:
     return _unique_headers(headers)
 
 
+# 표가 지면 폭에 안 맞으면 뒷부분을 아래로 내려 붙이고 머리글을 한 번 더 적는다. 그 모양을 그대로
+# 읽으면 뒤 블록의 값이 앞 블록 열 이름 아래로 들어가, "'09년 값이 '17년 자리에 찍히는" 식으로
+# 시점이 통째로 어긋난다. 되풀이된 머리글을 찾아 뒤 블록을 다시 열로 되돌린다.
+def _fold_wrapped_blocks(
+    columns: list[str], rows: list[dict[str, str]],
+) -> tuple[list[str], list[dict[str, str]], bool]:
+    if len(columns) < 2 or len(rows) < 3:
+        return columns, rows, False
+    label_column = columns[0]
+    header_key = normalize_key(label_column)
+    if not header_key:
+        return columns, rows, False
+
+    # 첫 행이 머리글과 같으면 머리글을 덜 읽은 표이지 이어붙인 표가 아니다.
+    marks = [
+        index for index, row in enumerate(rows)
+        if index >= 1 and normalize_key(row.get(label_column)) == header_key
+    ]
+    if not marks:
+        return columns, rows, False
+
+    base = rows[:marks[0]]
+    if not base:
+        return columns, rows, False
+
+    value_columns = columns[1:]
+    folded_columns = list(columns)
+    folded = [dict(row) for row in base]
+    by_label = {normalize_key(row.get(label_column)): row for row in folded}
+
+    for start, end in zip(marks, marks[1:] + [len(rows)]):
+        names = [clean_label(rows[start].get(column)) for column in value_columns]
+        block = rows[start + 1:end]
+        # 열 이름이 비었거나 이미 있는 이름이면 이어붙인 블록으로 볼 수 없다.
+        if not block or not all(names) or len(set(names)) != len(names):
+            return columns, rows, False
+        if any(name in folded_columns for name in names):
+            return columns, rows, False
+
+        for offset, row in enumerate(block):
+            target = by_label.get(normalize_key(row.get(label_column)))
+            if target is None and offset < len(folded):
+                target = folded[offset]
+            if target is None:
+                return columns, rows, False
+            for name, column in zip(names, value_columns):
+                target[name] = row.get(column, "")
+        folded_columns.extend(names)
+
+    for row in folded:
+        for column in folded_columns:
+            row.setdefault(column, "")
+    return folded_columns, folded, True
+
+
 # 표 그리드를 dict row 목록으로 변환한다.
 def body_to_rows(body: dict) -> tuple[list[str], list[dict[str, str]], list[str]]:
     warnings: list[str] = []
@@ -129,7 +184,7 @@ def body_to_rows(body: dict) -> tuple[list[str], list[dict[str, str]], list[str]
             {column: clean_label(row.get(column, "")) for column in columns}
             for row in records
         ]
-        return columns, source_rows, warnings
+        return _folded(columns, source_rows, warnings)
 
     grid = _cells_to_grid(body)
     caption_rows = _caption_row_indexes(body)
@@ -162,7 +217,19 @@ def body_to_rows(body: dict) -> tuple[list[str], list[dict[str, str]], list[str]
 
     if not rows:
         warnings.append("헤더를 제외한 데이터 행을 찾지 못했습니다.")
-    return headers, rows, warnings
+    return _folded(headers, rows, warnings)
+
+
+# 이어붙인 블록을 되돌리고, 되돌렸으면 열이 왜 늘었는지 알린다.
+def _folded(
+    columns: list[str], rows: list[dict[str, str]], warnings: list[str],
+) -> tuple[list[str], list[dict[str, str]], list[str]]:
+    columns, rows, wrapped = _fold_wrapped_blocks(columns, rows)
+    if wrapped:
+        warnings.append(
+            "표 아래쪽에 머리글이 한 번 더 나와, 지면 폭 때문에 내려 붙인 뒷부분을 다시 열로 합쳤습니다."
+        )
+    return columns, rows, warnings
 
 
 # 문자열 숫자 표기를 float 값으로 변환한다.
@@ -186,20 +253,53 @@ def parse_number(value: Any) -> float | None:
     return float(normalized)
 
 
+# 통계집은 연도를 "2024"로도 "'24"로도 적는다. 주요통계집은 두 자리 표기가 더 흔하다.
+_QUOTE = "['\u2018\u2019`]"
+_YEAR_PREFIX = re.compile(rf"^\s*(?:(?P<full>(?:18|19|20)\d{{2}})|{_QUOTE}\s*(?P<short>\d{{2}})(?!\d))")
+# 열 이름 전체가 시점 하나를 가리킬 때만 연도 열로 본다. 뒤에 붙을 수 있는 것은 연/월 표기와
+# 별표 정도이며, "'24년 본예산"이나 "'23_징수액"처럼 지표 이름이 붙으면 시점이 아니라 지표다.
+_YEAR_HEADER = re.compile(
+    rf"^\s*(?:(?P<full>(?:18|19|20)\d{{2}})|{_QUOTE}\s*(?P<short>\d{{2}})(?!\d))"
+    r"\s*(?:년도?|말)?"
+    r"(?:\s*\.?\s*\d{1,2}\s*(?:월|\.)?)?"
+    r"\s*[.*]?\s*$"
+)
+# 두 자리 연도의 세기. 통계집이 다루는 기간이 1970년대 이후라 이 경계면 뒤집힐 일이 없다.
+_SHORT_YEAR_PIVOT = 69
+
+
+# 정규식이 잡아낸 연도 표기를 네 자리 연도로 편다.
+def _expand_year(match: re.Match | None) -> int | None:
+    if match is None:
+        return None
+    if match.group("full"):
+        return int(match.group("full"))
+    short = int(match.group("short"))
+    return 2000 + short if short <= _SHORT_YEAR_PIVOT else 1900 + short
+
+
 # 값 앞부분에서 연도를 추출한다.
 def parse_year(value: Any) -> int | None:
+    return _expand_year(_YEAR_PREFIX.match(str(value or "")))
+
+
+# 네 자리로 적힌 연도만 읽는다. 헤더 행과 데이터 행을 가를 때는 두 자리 표기를 세면
+# 연도 헤더 행까지 데이터로 보여 머리글이 밀린다.
+def _parse_full_year(value: Any) -> int | None:
     match = re.match(r"^\s*((?:18|19|20)\d{2})", str(value or ""))
-    if not match:
-        return None
-    return int(match.group(1))
+    return int(match.group(1)) if match else None
 
 
-# 헤더 문자열 안에서 연도를 추출한다.
-def _parse_header_year(value: Any) -> int | None:
-    match = re.search(r"((?:18|19|20)\d{2})", str(value or ""))
-    if not match:
+# 열 이름이 시점 하나만 가리키면 그 연도를 돌려준다. 괄호 주석은 "'24(잠정)"처럼 시점을 흐리지
+# 않으므로 떼고 본다. 다단 헤더를 평탄화한 '_'가 있으면 그 열은 시점이 아니라 지표라서 뺀다.
+def header_year(value: Any) -> int | None:
+    text = clean_label(value)
+    if "_" in text:
         return None
-    return int(match.group(1))
+    text = re.sub(r"\s*\([^()]*\)\s*$", "", text).strip()
+    if "~" in text:
+        return None
+    return _expand_year(_YEAR_HEADER.match(text))
 
 
 # 컬럼명/질의어 비교용 키로 정규화한다.
@@ -410,7 +510,7 @@ def wants_delta_chart(query: str | None) -> bool:
 
 # 질의에 명시된 단일 연도를 찾는다.
 def query_year(query: str | None) -> int | None:
-    years = {_parse_header_year(match) for match in re.findall(r"(?:18|19|20)\d{2}", query or "")}
+    years = {_parse_full_year(match) for match in re.findall(r"(?:18|19|20)\d{2}", query or "")}
     years.discard(None)
     return next(iter(years)) if len(years) == 1 else None
 
@@ -632,14 +732,47 @@ def resolve_total_mode(total_mode: TotalMode, query: str | None) -> TotalMode:
     return "auto"
 
 
-# 연도가 들어간 숫자 컬럼들을 연도순으로 찾는다.
+# 열 이름이 시점인 숫자 컬럼들을 연도순으로 찾는다. 같은 연도를 가리키는 열이 둘 이상이면
+# 그 표의 가로축은 시점이 아니라 시점별 지표라서 시계열로 펴지 않는다.
 def year_value_columns(profiles: list[dict[str, Any]]) -> list[tuple[int, str]]:
     columns = []
     for profile in profiles:
-        year = _parse_header_year(profile["name"])
+        year = header_year(profile["name"])
         if year is not None and profile["is_numeric"]:
             columns.append((year, profile["name"]))
+    years = [year for year, _ in columns]
+    if len(set(years)) != len(years):
+        return []
     return sorted(columns, key=lambda item: item[0])
+
+
+# 다단 헤더를 평탄화하면 "'24_순위"처럼 연도 아래에 지표가 붙는다. 연도마다 같은 지표가 되풀이되는
+# 표는 지표 하나를 골라야 연도 축이 선다. 두 지표를 한 축에 얹으면 순위와 비율처럼 잣대가 다른 값이
+# 같은 시점에 겹쳐 그려져 뜻이 어긋나므로, 질의가 가리키는 지표 하나만 남기고 나머지는 알린다.
+def year_metric_columns(
+    profiles: list[dict[str, Any]], query: str | None,
+) -> tuple[list[tuple[int, str]], str | None]:
+    by_metric: dict[str, dict[int, str]] = {}
+    for profile in profiles:
+        name = profile["name"]
+        if not profile["is_numeric"] or "_" not in name:
+            continue
+        prefix, leaf = name.split("_", 1)
+        year = header_year(prefix)
+        if year is None:
+            continue
+        years = by_metric.setdefault(clean_label(leaf), {})
+        if year in years:
+            return [], None
+        years[year] = name
+
+    metrics = [metric for metric, years in by_metric.items() if len(years) >= 2]
+    if not metrics:
+        return [], None
+
+    chosen = pick_column_from_query(query, metrics) or metrics[0]
+    columns = sorted(by_metric[chosen].items(), key=lambda item: item[0])
+    return columns, chosen
 
 
 # 행 라벨과 질의어를 비교할 검색어 후보를 만든다.
@@ -688,6 +821,35 @@ def pick_focus_row(
 
     scored.sort(key=lambda item: (-item[0], item[1]))
     return scored[0][2]
+
+
+# 고른 행에서 값이 하나로 좁혀진 컬럼인지 확인한다. 필터로 값을 하나만 남긴 컬럼이 여기 해당한다.
+def is_collapsed_axis(column: str | None, rows: list[dict[str, str]]) -> bool:
+    if not column or len(rows) < 2:
+        return False
+    return len({normalize_key(row.get(column)) for row in rows}) == 1
+
+
+# 고른 행을 실제로 서로 다르게 가르는 축 후보를 찾는다. 시점이 범주보다 축으로 읽기 좋아
+# 연도 컬럼을 먼저 보고, 없으면 값이 둘 이상인 범주 컬럼을 쓴다.
+def distinguishing_column(
+    rows: list[dict[str, str]], profiles: list[dict[str, Any]], exclude: set[str | None],
+) -> str | None:
+    candidates = [
+        profile["name"] for profile in profiles
+        if profile["is_year"] and profile["name"] not in exclude
+    ] + [
+        profile["name"] for profile in profiles
+        if profile.get("is_categorical", False) and profile["name"] not in exclude
+    ]
+    for name in candidates:
+        values = {
+            normalize_key(row.get(name)) for row in rows
+            if not is_missing_value(row.get(name))
+        }
+        if len(values) > 1:
+            return name
+    return None
 
 
 # x축으로 쓸 컬럼을 연도/범주 우선순위로 고른다.

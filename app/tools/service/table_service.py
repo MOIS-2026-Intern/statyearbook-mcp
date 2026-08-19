@@ -40,12 +40,14 @@ def fetch_table_data(stat_id: int) -> tuple[dict | None, list, list, list]:
 
 
 # 시각화 도구가 그대로 사용할 수 있는 원본 표 객체를 만든다.
-def cached_table(stat: dict, row: dict) -> dict:
+def cached_table(stat: dict, row: dict, department: str | None = None) -> dict:
     body = _table_body(row)
     return {
         "stat_id": stat["stat_id"],
         "publication_kind": stat.get("publication_kind"),
         "publication_period": stat.get("publication_period"),
+        # 시각화 답변도 표와 같은 인용 줄을 적어야 해 담당 부서를 표와 함께 캐시한다.
+        "department": department,
         "ref_id": stat["ref_id"],
         "publication_year": stat["publication_year"],
         "chapter_no": stat["chapter_no"],
@@ -223,8 +225,8 @@ def merge_bodies(bodies: list[dict]) -> dict:
 
 
 # 같은 stat_id의 모든 seq를 하나로 합쳐 visualize가 그대로 재사용할 원본 표를 만든다.
-def merged_cached_table(stat: dict, rows: list[dict]) -> dict:
-    base = cached_table(stat, rows[0])
+def merged_cached_table(stat: dict, rows: list[dict], department: str | None = None) -> dict:
+    base = cached_table(stat, rows[0], department)
     if len(rows) > 1:
         bodies = [
             json.loads(row["body"]) if isinstance(row["body"], str) else row["body"]
@@ -273,6 +275,15 @@ def source_result(row: dict) -> dict:
     }
 
 
+# 인용 줄에 적을 담당 부서는 담당 정보의 첫 부서 하나로 정한다.
+def first_department(source: list[dict]) -> str | None:
+    for row in source:
+        dept = (row.get("department") or "").strip()
+        if dept:
+            return dept
+    return None
+
+
 # 통계표 조회 결과를 MCP 응답 dict로 만든다.
 def build_response(
     stat: dict,
@@ -281,7 +292,10 @@ def build_response(
     source: list,
     row_label: str | None = None,
 ) -> dict:
-    table_handle = cache_table(merged_cached_table(stat, tables)) if tables else None
+    department = first_department(source)
+    table_handle = (
+        cache_table(merged_cached_table(stat, tables, department)) if tables else None
+    )
     return {
         "found": True,
         "stat_id": stat["stat_id"],

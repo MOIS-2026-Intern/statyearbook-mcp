@@ -109,6 +109,38 @@ MIXED_UNIT_TABLE = {
         ["2025", "1,565,834", "1,326,261", "84.7"],
     ]),
 }
+LONG_CATEGORY_COLUMNS = [
+    "연도 Year",
+    "구분 Classification",
+    "데이터셋 다운로드 건수 No. of Downloaded Data Sets",
+    "합계 Total",
+]
+# 연도와 구분이 각각 열로 있어, 한 구분만 남기면 그 열의 값이 하나로 좁혀지는 모양.
+LONG_CATEGORY_TABLE = {
+    **TABLE,
+    "title_ko": "공공데이터 민간활용 실적",
+    "unit": "누적 건",
+    "body": body(LONG_CATEGORY_COLUMNS, [
+        ["2023", "중앙행정기관 Central Government", "11,679,293", "15,334,703"],
+        ["2023", "지방자치단체 Local Government", "21,882,057", "22,451,089"],
+        ["2024", "중앙행정기관 Central Government", "13,839,843", "17,775,028"],
+        ["2024", "지방자치단체 Local Government", "27,277,404", "27,999,097"],
+        ["2025", "중앙행정기관 Central Government", "17,593,345", "21,972,130"],
+        ["2025", "지방자치단체 Local Government", "33,471,339", "34,369,546"],
+    ]),
+}
+FLAT_CATEGORY_COLUMNS = ["구분 Classification", "합계 Total"]
+# 남은 행을 가를 컬럼이 구분 하나뿐이라, 그 구분을 좁히면 축으로 쓸 컬럼이 남지 않는 모양.
+FLAT_CATEGORY_TABLE = {
+    **TABLE,
+    "title_ko": "기관별 활용 실적",
+    "unit": "건",
+    "body": body(FLAT_CATEGORY_COLUMNS, [
+        ["중앙행정기관 Central Government", "10"],
+        ["중앙행정기관 Central Government", "20"],
+        ["지방자치단체 Local Government", "30"],
+    ]),
+}
 GRADE_COLUMNS = [
     "구분 Classification 기관 Organization",
     "계 Total",
@@ -158,6 +190,86 @@ WIDE_METRIC_TABLE = {
         ["전 체 Total", "313,296", "315,205", "313,924"],
         ["여 성 Female", "157,935", "161,710", "163,328"],
         ["여성비율 Female Percent(%)", "50.4", "51.3", "52"],
+    ]),
+}
+SHORT_YEAR_COLUMNS = ["구 분", "'09", "'10", "'11", "'12", "'13", "'14", "'15", "'16"]
+# 주요통계집에서 가장 흔한 모양: 행이 지표, 열이 두 자리로 줄여 적은 연도.
+SHORT_YEAR_TABLE = {
+    **TABLE,
+    "title_ko": "전자정부서비스 이용실태조사 결과",
+    "unit": "%",
+    "body": body(SHORT_YEAR_COLUMNS, [
+        ["인지도", "92.5", "92.6", "92.4", "81.9", "80.0", "86.0", "89.0", "90.4"],
+        ["이용률", "60.2", "60.0", "63.5", "51.2", "56.9", "72.5", "76.7", "85.8"],
+        ["만족도", "67.9", "74.0", "82.6", "91.2", "83.7", "85.6", "93.5", "95.8"],
+    ]),
+}
+WRAPPED_YEAR_COLUMNS = ["구 분", "'17", "'18", "'19", "'20"]
+# 지면 폭에 안 맞아 뒷부분을 아래로 내려 붙이고 머리글을 한 번 더 적은 모양.
+WRAPPED_YEAR_TABLE = {
+    **TABLE,
+    "title_ko": "전자정부서비스 이용실태조사 결과",
+    "unit": "%",
+    "body": body(WRAPPED_YEAR_COLUMNS, [
+        ["인지도", "90.7", "92.5", "93.8", "95.7"],
+        ["이용률", "86.7", "87.5", "87.6", "88.9"],
+        ["구 분", "'13", "'14", "'15", "'16"],
+        ["인지도", "80.0", "86.0", "89.0", "90.4"],
+        ["이용률", "56.9", "72.5", "76.7", "85.8"],
+    ]),
+}
+# 첫 행이 머리글과 같은 표는 머리글을 덜 읽은 것이지 이어붙인 표가 아니다.
+UNCONSUMED_HEADER_TABLE = {
+    **TABLE,
+    "title_ko": "정부부문 채무",
+    "unit": "조원",
+    "body": body(["구 분", "'22년", "'23년"], [
+        ["구 분", "규모", "규모"],
+        ["국가채무", "1,067.4", "1,126.8"],
+        ["일반정부 부채", "1,157.2", "1,217.3"],
+    ]),
+}
+TWO_COLUMN_YEAR_COLUMNS = ["시도 Region", "'23", "'24"]
+# 연도가 둘뿐이라 지역끼리 견주는 편이 나은 모양.
+TWO_COLUMN_YEAR_TABLE = {
+    **TABLE,
+    "title_ko": "시도별 지방세",
+    "unit": "억원",
+    "body": body(TWO_COLUMN_YEAR_COLUMNS, [
+        ["서울", "2,410", "2,520"],
+        ["부산", "830", "870"],
+        ["대구", "610", "640"],
+    ]),
+}
+YEAR_METRIC_COLUMNS = [
+    "국가명 Country",
+    "'20_순위 Ranking",
+    "'20_지수 Index",
+    "'22_순위 Ranking",
+    "'22_지수 Index",
+    "'24_순위 Ranking",
+    "'24_지수 Index",
+]
+# 연도 아래에 지표가 되풀이되는 다단 헤더 모양.
+YEAR_METRIC_TABLE = {
+    **TABLE,
+    "title_ko": "전자정부 발전지수",
+    "unit": None,
+    "body": body(YEAR_METRIC_COLUMNS, [
+        ["대한민국", "2", "0.956", "3", "0.949", "1", "0.976"],
+        ["덴마크", "1", "0.975", "1", "0.977", "2", "0.974"],
+        ["일본", "14", "0.898", "14", "0.902", "13", "0.910"],
+    ]),
+}
+BUDGET_YEAR_COLUMNS = ["구 분", "'24년 본예산 (A)", "'25년 본예산 (B)", "증감 (B-A)"]
+# 열 이름이 연도로 시작하지만 실은 시점이 아니라 지표인 모양.
+BUDGET_YEAR_TABLE = {
+    **TABLE,
+    "title_ko": "지방자치단체 예산",
+    "unit": "억원",
+    "body": body(BUDGET_YEAR_COLUMNS, [
+        ["일반회계", "2,850", "2,970", "120"],
+        ["특별회계", "305", "304", "-1"],
     ]),
 }
 DELTA_COLUMNS = ["지역 Region", "전년 대비 증감 Change"]
@@ -642,6 +754,143 @@ class SubsetSelectionTests(unittest.TestCase):
             [record["x"] for record in spec["data"]["records"]], ["여성", "여성비율"],
         )
 
+    # 주요통계집은 연도를 "'09"처럼 두 자리로 줄여 적는다. 이 표기도 연도 축으로 읽어야 한다.
+    def test_short_year_columns_become_the_time_axis(self) -> None:
+        spec = build_plot_spec(
+            SHORT_YEAR_TABLE, "전자정부서비스 이용실태조사 결과를 연도별 추이로", "auto",
+            None, None, None, None, "auto",
+        )
+
+        self.assertEqual(spec["chart"]["type"], "line")
+        self.assertEqual(spec["chart"]["x"], "year")
+        self.assertEqual(spec["chart"]["group"], "구 분")
+        self.assertEqual(
+            sorted({record["x"] for record in spec["data"]["records"]}),
+            [2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016],
+        )
+        self.assertEqual(
+            sorted({record["series"] for record in spec["data"]["records"]}),
+            ["만족도", "이용률", "인지도"],
+        )
+
+    # 연도를 범례에 두면 시점 사이의 흐름이 사라진다. 행을 고르지 않아도 축을 펴야 한다.
+    def test_year_columns_never_become_the_legend(self) -> None:
+        spec = build_plot_spec(
+            SHORT_YEAR_TABLE, "전자정부서비스 이용실태조사 결과", "auto",
+            None, None, None, None, "auto",
+        )
+        vega_lite = build_vega_lite_spec(spec)
+
+        self.assertEqual(vega_lite["encoding"]["color"]["scale"]["domain"], ["인지도", "이용률", "만족도"])
+        self.assertEqual(
+            vega_lite["encoding"]["x"]["sort"],
+            [2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016],
+        )
+
+    # 클라이언트가 구분 컬럼을 x로 지정해 와도 연도가 열인 표에서는 구분이 범례가 되어야 한다.
+    def test_requested_category_x_moves_to_the_legend(self) -> None:
+        spec = build_plot_spec(
+            SHORT_YEAR_TABLE, "전자정부서비스 이용실태조사 결과 추이", "grouped_bar",
+            "구 분", None, None, None, "auto",
+        )
+
+        self.assertEqual(spec["chart"]["x"], "year")
+        self.assertEqual(spec["chart"]["group"], "구 분")
+
+    # 시점이 둘뿐인 표는 연도를 범례에 두고 지역끼리 견주는 편이 나아 그대로 둔다.
+    def test_two_year_columns_stay_a_category_comparison(self) -> None:
+        spec = build_plot_spec(
+            TWO_COLUMN_YEAR_TABLE, "시도별 지방세", "auto", None, None, None, None, "auto",
+        )
+
+        self.assertEqual(spec["chart"]["x"], "시도 Region")
+        self.assertEqual(
+            sorted({record["series"] for record in spec["data"]["records"]}), ["'23", "'24"],
+        )
+
+    # 시점이 둘뿐이어도 추이를 물으면 연도를 축으로 편다.
+    def test_two_year_columns_flip_when_a_trend_is_asked(self) -> None:
+        spec = build_plot_spec(
+            TWO_COLUMN_YEAR_TABLE, "시도별 지방세 연도별 추이", "auto",
+            None, None, None, None, "auto",
+        )
+
+        self.assertEqual(spec["chart"]["x"], "year")
+        self.assertEqual(
+            sorted({record["series"] for record in spec["data"]["records"]}), ["대구", "부산", "서울"],
+        )
+
+    # 합계 행을 다른 행과 같은 축에 두면 혼자 솟아 나머지 선을 바닥에 눌러 버린다.
+    def test_total_row_is_left_out_of_the_year_axis_series(self) -> None:
+        spec = build_plot_spec(
+            WIDE_YEAR_TABLE, "지역별 인구 연도별 추이", "auto", None, None, None, None, "auto",
+        )
+
+        self.assertEqual(spec["chart"]["x"], "year")
+        self.assertEqual(
+            sorted({record["series"] for record in spec["data"]["records"]}), ["대구", "부산", "서울"],
+        )
+
+    # 연도마다 같은 지표가 되풀이되는 다단 헤더는 지표 하나를 골라 연도 축을 세운다.
+    def test_year_keyed_column_families_pick_one_metric(self) -> None:
+        spec = build_plot_spec(
+            YEAR_METRIC_TABLE, "전자정부 발전지수 순위 연도별 추이", "auto",
+            None, None, None, None, "auto",
+        )
+
+        self.assertEqual(spec["chart"]["x"], "year")
+        self.assertEqual(sorted({record["x"] for record in spec["data"]["records"]}), [2020, 2022, 2024])
+        self.assertEqual(
+            sorted({record["series"] for record in spec["data"]["records"]}),
+            ["대한민국", "덴마크", "일본"],
+        )
+        # 어느 지표를 그렸는지 알려야 나머지 지표를 따로 물을 수 있다.
+        self.assertTrue(any("순위" in warning for warning in spec["warnings"]))
+
+    # 연도로 시작해도 뒤에 지표 이름이 붙은 열은 시점이 아니라 지표다.
+    def test_year_prefixed_metric_columns_are_not_a_time_axis(self) -> None:
+        spec = build_plot_spec(
+            BUDGET_YEAR_TABLE, "지방자치단체 예산 연도별 추이", "auto",
+            None, None, None, None, "auto",
+        )
+
+        self.assertEqual(spec["chart"]["x"], "구 분")
+        self.assertNotEqual(spec["chart"]["x"], "year")
+
+    # 내려 붙인 뒷부분을 그대로 읽으면 '13년 값이 '17년 자리에 찍혀 한 해에 점이 둘씩 생긴다.
+    def test_wrapped_table_blocks_are_folded_back_into_columns(self) -> None:
+        spec = build_plot_spec(
+            WRAPPED_YEAR_TABLE, "전자정부서비스 이용실태조사 결과 연도별 추이", "auto",
+            None, None, None, None, "auto",
+        )
+
+        self.assertEqual(spec["chart"]["x"], "year")
+        self.assertEqual(
+            sorted({record["x"] for record in spec["data"]["records"]}),
+            [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020],
+        )
+        # 계열마다 연도 하나에 점 하나여야 선이 톱니처럼 오르내리지 않는다.
+        awareness = [
+            (record["x"], record["value"])
+            for record in spec["data"]["records"] if record["series"] == "인지도"
+        ]
+        self.assertEqual(
+            awareness,
+            [(2013, 80.0), (2014, 86.0), (2015, 89.0), (2016, 90.4),
+             (2017, 90.7), (2018, 92.5), (2019, 93.8), (2020, 95.7)],
+        )
+
+    # 첫 행이 머리글과 같은 표는 열을 늘리지 말고 그대로 둬야 한다.
+    def test_unconsumed_header_row_is_not_folded(self) -> None:
+        spec = build_plot_spec(
+            UNCONSUMED_HEADER_TABLE, "정부부문 채무 연도별 추이", "auto",
+            None, None, None, None, "auto",
+        )
+
+        self.assertEqual(
+            sorted({record["x"] for record in spec["data"]["records"]}), [2022, 2023],
+        )
+
     # 상위 헤더 이름이 표에 없으면 전체 컬럼으로 대체하지 않아야 한다.
     def test_unknown_column_family_draws_nothing(self) -> None:
         spec = build_plot_spec(
@@ -744,6 +993,84 @@ class ValueLabelTests(unittest.TestCase):
         self.assertEqual(vega_lite["layer"][1]["encoding"]["text"]["field"], "value")
         largest = max(value["value"] for value in vega_lite["data"]["values"])
         self.assertGreater(vega_lite["encoding"]["x"]["scale"]["domainMax"], largest)
+
+
+# 필터로 값이 하나만 남은 컬럼을 x축에 두면 남은 행이 한 칸에 겹쳐 쌓여 합계 막대 하나가 된다.
+class CollapsedAxisTests(unittest.TestCase):
+    CENTRAL = {"column": "구분", "value": "중앙행정기관"}
+    YEARS = [2023, 2024, 2025]
+    TOTALS = [15334703.0, 17775028.0, 21972130.0]
+
+    # x로 지정한 구분 컬럼이 필터로 한 값만 남으면 연도 축으로 옮겨야 한다.
+    def test_filtered_column_given_as_x_moves_to_the_year_axis(self) -> None:
+        spec = build_plot_spec(
+            LONG_CATEGORY_TABLE, "중앙행정기관의 공공데이터 활용 건수 추이", "auto",
+            "구분 Classification", "합계 Total", None, None, "exclude",
+            filters=[self.CENTRAL],
+        )
+
+        records = spec["data"]["records"]
+        self.assertEqual(spec["chart"]["x"], "연도 Year")
+        self.assertEqual([record["x"] for record in records], self.YEARS)
+        self.assertEqual([record["value"] for record in records], self.TOTALS)
+        self.assertTrue(any(
+            "'구분 Classification'" in warning and "'연도 Year'" in warning
+            for warning in spec["warnings"]
+        ))
+
+    # metrics로 지표를 고른 선택 계획 경로도 같은 축 교정을 받아야 한다.
+    def test_selection_plan_moves_collapsed_x_to_the_year_axis(self) -> None:
+        spec = build_plot_spec(
+            LONG_CATEGORY_TABLE, "중앙행정기관의 공공데이터 활용 건수 추이", "auto",
+            "구분 Classification", None, None, None, "exclude",
+            filters=[self.CENTRAL],
+            metrics=[{"column": "합계 Total", "label": "합계"}],
+        )
+
+        records = spec["data"]["records"]
+        self.assertEqual(spec["chart"]["x"], "연도 Year")
+        self.assertEqual([record["x"] for record in records], self.YEARS)
+        self.assertEqual([record["value"] for record in records], self.TOTALS)
+
+    # 축을 지정하지 않아도 필터가 좁힌 컬럼이 축으로 뽑히면 안 된다.
+    def test_collapsed_column_is_not_picked_as_x_without_a_request(self) -> None:
+        spec = build_plot_spec(
+            LONG_CATEGORY_TABLE, "중앙행정기관 공공데이터 활용 추이", "auto",
+            None, "합계 Total", None, None, "exclude",
+            filters=[self.CENTRAL],
+        )
+
+        self.assertEqual([record["x"] for record in spec["data"]["records"]], self.YEARS)
+
+    # 옮길 컬럼이 없으면 조용히 쌓지 말고 왜 겹쳤는지 알려야 한다.
+    def test_collapsed_x_without_a_replacement_warns(self) -> None:
+        spec = build_plot_spec(
+            FLAT_CATEGORY_TABLE, "중앙행정기관 활용 실적", "auto",
+            "구분 Classification", None, None, None, "exclude",
+            filters=[self.CENTRAL],
+            metrics=[{"column": "합계 Total", "label": "합계"}],
+        )
+
+        self.assertEqual(spec["chart"]["x"], "구분 Classification")
+        self.assertTrue(any(
+            "'구분 Classification'" in warning and "겹쳐 쌓" in warning
+            for warning in spec["warnings"]
+        ))
+
+    # 값이 여럿 남은 컬럼은 축으로 멀쩡하므로 손대지 않아야 한다.
+    def test_category_column_with_many_values_stays_on_the_x_axis(self) -> None:
+        spec = build_plot_spec(
+            LONG_CATEGORY_TABLE, "2025년 기관별 공공데이터 활용 실적", "auto",
+            "구분 Classification", "합계 Total", None, None, "exclude", year=2025,
+        )
+
+        self.assertEqual(spec["chart"]["x"], "구분 Classification")
+        self.assertEqual(
+            [record["x"] for record in spec["data"]["records"]],
+            ["중앙행정기관", "지방자치단체"],
+        )
+        self.assertEqual(spec["warnings"], [])
+
 
 
 if __name__ == "__main__":

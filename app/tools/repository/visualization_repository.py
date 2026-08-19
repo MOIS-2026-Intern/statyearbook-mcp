@@ -6,16 +6,27 @@ from typing import Any
 from app.db import connect
 
 
+# 차트 아래 인용 줄에 발간물과 담당 부서를 적어야 해 표 행과 함께 읽는다.
 TABLE_SQL = """
     SELECT s.stat_id, s.ref_id,
            s.chapter_no, s.section_no, s.level3_no, s.level4_no,
            s.chapter, s.section, s.level3_title, s.level4_title,
            s.title_ko, s.title_en, s.unit, s.base_date, s.page_start,
            s.year AS publication_year,
+           p.publication_kind, p.period AS publication_period,
+           c.dept AS department,
            t.seq AS table_seq, t.caption, t.n_rows, t.n_cols,
            t.body, t.table_md
     FROM statistics s
+    JOIN publications p ON p.pub_id = s.pub_id
     JOIN stat_tables t ON t.stat_id = s.stat_id
+    LEFT JOIN LATERAL (
+        SELECT dept
+        FROM contacts
+        WHERE contacts.stat_id = s.stat_id AND NULLIF(TRIM(dept), '') IS NOT NULL
+        ORDER BY contact_id
+        LIMIT 1
+    ) c ON TRUE
     WHERE s.stat_id = %s
     ORDER BY t.seq
 """
