@@ -21,6 +21,7 @@ from utils.logging import normalize_log_level
 
 
 APP_DIR = Path(__file__).resolve().parent
+REPO_ROOT = APP_DIR.parent
 PROFILE = load_service_env(APP_DIR)
 
 
@@ -46,6 +47,14 @@ def _positive_int(name: str, default: str | None = None) -> int:
     return value
 
 
+# 상대 경로 모델은 실행 위치와 무관하도록 저장소 루트 기준으로 해석한다.
+def _local_model_path(value: str) -> str:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return str(path)
+    return str(REPO_ROOT / path)
+
+
 # provider에 따라 로컬 artifact 또는 Hugging Face API 설정을 구성한다.
 def embedding_settings_from_env() -> EmbeddingSettings:
     provider = os.environ.get(
@@ -55,7 +64,9 @@ def embedding_settings_from_env() -> EmbeddingSettings:
         model = os.environ.get("STATYEARBOOK_APP_HF_MODEL", BGE_M3_MODEL)
         api_token = os.environ.get("STATYEARBOOK_APP_HF_TOKEN")
     else:
-        model = os.environ.get("STATYEARBOOK_APP_EMBED_MODEL", "models/bge-m3")
+        model = _local_model_path(
+            os.environ.get("STATYEARBOOK_APP_EMBED_MODEL", "models/bge-m3")
+        )
         api_token = None
     return EmbeddingSettings(
         provider=provider,

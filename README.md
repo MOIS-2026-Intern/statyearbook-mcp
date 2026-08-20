@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/20630c68-0cc8-4a16-8c34-6256d2f9e189
 | 디렉터리 | 배포 단위 |
 |---|---|
 | `admin/` | 연보 파싱·적재·임베딩 관리자 |
-| `app/` | 통계 도구를 제공하는 HTTP MCP 서버 |
+| `app/` | 통계 도구를 제공하는 MCP 서버 |
 | `backend/` | 채팅 모델과 MCP를 연결하는 REST API |
 | `frontend/` | React 채팅 UI |
 | `db/` | pgvector PostgreSQL schema |
@@ -60,6 +60,57 @@ python -m app             # http://127.0.0.1:8001/mcp
 python -m backend         # http://127.0.0.1:8000
 python -m admin serve     # http://127.0.0.1:8100
 cd frontend && npm ci && npm run dev
+```
+
+## MCP 클라이언트에 직접 연결
+
+app은 backend·frontend 없이 MCP 클라이언트에 단독으로 붙일 수 있습니다. `--transport`
+(또는 `STATYEARBOOK_APP_TRANSPORT`)로 transport를 고르며 기본값은 backend가 사용하는
+`streamable-http`입니다.
+
+```bash
+python -m app                      # http://127.0.0.1:8001/mcp
+python -m app --transport stdio    # 클라이언트가 프로세스를 직접 실행
+```
+
+Claude Desktop처럼 서버 프로세스를 직접 띄우는 클라이언트는 `claude_desktop_config.json`
+(macOS: `~/Library/Application Support/Claude/`)에 stdio 실행 명령을 등록합니다.
+
+```json
+{
+  "mcpServers": {
+    "statyearbook": {
+      "command": "/절대경로/statyearbook-mcp/.venv/bin/python",
+      "args": ["-m", "app", "--transport", "stdio"],
+      "cwd": "/절대경로/statyearbook-mcp",
+      "env": { "PYTHONPATH": "/절대경로/statyearbook-mcp" }
+    }
+  }
+}
+```
+
+`PYTHONPATH`에 저장소 루트를 반드시 넣으세요. Claude Desktop은 `cwd`를 적용하지 않고
+클라이언트마다 작업 디렉터리가 다르므로, 이것이 없으면 `No module named app`으로 바로
+종료합니다. local 프로필의 `STATYEARBOOK_APP_EMBED_MODEL=models/bge-m3` 같은 상대 경로
+모델은 app이 저장소 루트 기준으로 해석하므로 작업 디렉터리와 무관합니다.
+
+DB와 임베딩 provider 준비는 transport와 무관하게 동일합니다. stdio에서는 stdout이
+JSON-RPC 채널이므로 배너와 서비스 로그는 stderr로만 나갑니다. 클라이언트가 서버를
+띄우지 못하면 그 로그부터 확인하세요(macOS Claude Desktop은
+`~/Library/Logs/Claude/mcp-server-<이름>.log`).
+
+이미 `streamable-http`로 떠 있는 서버에 붙이려면 클라이언트에서 stdio↔HTTP 프록시를
+쓰면 됩니다.
+
+```json
+{
+  "mcpServers": {
+    "statyearbook": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:8001/mcp", "--allow-http"]
+    }
+  }
+}
 ```
 
 ## 서비스 로그
